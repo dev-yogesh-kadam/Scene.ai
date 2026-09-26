@@ -1,2 +1,2 @@
 # Scene.ai
-scene.ai is a creative startup
+scene.ai is a creative project
