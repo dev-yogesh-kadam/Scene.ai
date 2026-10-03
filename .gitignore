@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local settings and data (users, sessions, generated media)
+config.json
+storage/
+
+# Media from the old command-line script
+legacy/h3_director_cli/outputs/
+legacy/h3_director_cli/inputs/
+
+# OS and editor
+.DS_Store
+Thumbs.db

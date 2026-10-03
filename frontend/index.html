@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scene.ai</title>
+  <link rel="icon" href="/assets/img/logo.svg" type="image/svg+xml">
+  <script>
+    // Apply the saved theme before the page paints.
+    try { var t = localStorage.getItem('scene.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+  <link rel="stylesheet" href="/assets/css/app.css">
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/assets/js/main.js"></script>
+</body>
+</html>

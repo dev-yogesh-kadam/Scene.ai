@@ -1,0 +1,90 @@
+Create a **maximum 5-second, vertical 9:16, highly photorealistic UGC skincare advertisement** using the provided reference image as the exact visual reference for the woman. Preserve her identity, facial features, hairstyle, skin tone, body proportions, clothing and overall appearance throughout the entire video.
+
+### SCENE
+
+The woman is casually walking outdoors in a bright, modern urban environment while holding a **facial cream/skincare product** in one hand.
+
+She is creating a casual skincare recommendation for social media. The scene should feel like authentic creator content recorded on a modern iPhone, not like a polished beauty commercial.
+
+She looks directly at the camera while walking and smiles naturally.
+
+### ACTION — 5 SECONDS
+
+**0–1.5 seconds:**  
+She walks toward the camera while holding the facial cream. She raises the product toward the camera so it is clearly visible.
+
+**1.5–3 seconds:**  
+She opens the cream and naturally applies a small amount to her cheek using her fingertips.
+
+**3–5 seconds:**  
+She looks directly into the camera, smiles confidently and lightly touches her cheek while delivering the dialogue.
+
+### EXACT HINDI DIALOGUE
+
+She says naturally in Hindi:
+
+**“इस क्रीम से मेरी स्किन एकदम फ्रेश और हाइड्रेटेड लगती है!”**
+
+The dialogue must fit naturally within the 5-second duration.
+
+Her delivery should sound like a genuine Indian creator recommendation — friendly, conversational and confident, **not like a scripted television commercial**.
+
+### CAMERA
+
+Shoot on a modern iPhone in **vertical 9:16**.
+
+The camera operator walks backward in front of her while maintaining a natural medium close-up.
+
+Use subtle handheld smartphone movement, realistic walking motion, natural autofocus, authentic smartphone exposure, realistic depth of field and natural motion blur.
+
+When she raises the cream toward the camera, briefly shift autofocus from her face to the product, then smoothly return focus to her face.
+
+### ENVIRONMENT
+
+A realistic modern Indian urban environment during daytime, with subtle pedestrians, cafés, storefronts and natural street activity in the background.
+
+Keep the background secondary to the woman and product.
+
+### LIGHTING
+
+Use soft natural daylight illuminating her face.
+
+Preserve realistic skin pores, fine facial texture, subtle imperfections, natural skin tone, realistic highlights and physically accurate reflections on the product.
+
+Avoid excessive beauty filters or artificial skin smoothing.
+
+### PRODUCT
+
+The facial cream must remain completely consistent throughout the entire video.
+
+Preserve the exact container shape, lid, color, label, branding, size and material.
+
+The product must not morph, disappear, duplicate or change appearance.
+
+### PERFORMANCE
+
+The woman should:
+
+- Walk naturally
+- Blink naturally
+- Smile subtly
+- Make realistic hand movements
+- Apply the cream gently
+- Maintain eye contact with the camera
+- Use natural facial expressions
+
+Her movement should feel spontaneous and human.
+
+### AUDIO
+
+Use a clear, natural female Hindi voice with subtle outdoor ambience.
+
+Include realistic background sounds such as distant traffic and pedestrians, while keeping the dialogue clearly audible.
+
+The Hindi dialogue must have **perfect lip synchronization** and natural Indian Hindi pronunciation.
+
+### NEGATIVE PROMPT
+
+Avoid CGI, 3D render, animation, plastic skin, waxy skin, excessive beauty filters, airbrushed skin, unrealistic skin, face morphing, identity changes, hairstyle changes, clothing changes, distorted hands, extra fingers, malformed fingers, product deformation, changing packaging, disappearing product, duplicated product, warped logo, unreadable text, unnatural cream application, robotic movement, stiff facial expressions, exaggerated acting, lip-sync errors, incorrect Hindi pronunciation, audio glitches, flickering, frame inconsistencies, temporal artifacts, excessive camera shake, artificial lighting, oversaturated colors, fake-looking environment, cinematic commercial aesthetic, or obvious AI-generated appearance.
+
+**TOTAL VIDEO DURATION: 5 SECONDS MAXIMUM.**
