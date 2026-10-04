@@ -5,6 +5,8 @@ import { el, icon } from './dom.js';
 import { store, subscribe, startLive, stopLive, refreshJobs } from './store.js';
 import { renderAuth } from './pages/auth.js';
 import * as create from './pages/create.js';
+import * as canvas from './pages/canvas.js';
+import * as timeline from './pages/timeline.js';
 import * as library from './pages/library.js';
 import * as assets from './pages/assets.js';
 import * as queue from './pages/queue.js';
@@ -13,7 +15,9 @@ import * as admin from './pages/admin.js';
 
 const root = document.getElementById('app');
 const PAGES = [
-  { path: '#/create', label: 'Create', icon: 'sparkles', page: create },
+  { path: '#/create', label: 'Create', icon: 'generate', page: create },
+  { path: '#/canvas', label: 'Canvas', icon: 'canvas', page: canvas },
+  { path: '#/timeline', label: 'Timeline', icon: 'timeline', page: timeline },
   { path: '#/library', label: 'Library', icon: 'grid', page: library },
   { path: '#/assets', label: 'Assets', icon: 'bookmark', page: assets },
   { path: '#/queue', label: 'Queue', icon: 'list', page: queue },
@@ -84,7 +88,7 @@ function showApp() {
     dot.className = 'dot ' + (store.online == null ? '' : store.online ? 'online' : 'offline');
     server.textContent = store.online == null ? 'Checking render server…' : store.online ? 'Render server online' : 'Render server offline';
   };
-  const drawCredits = () => credits.replaceChildren(el('b', {}, Number(store.user.credits ?? 0).toLocaleString()), 'credits');
+  const drawCredits = () => credits.replaceChildren(el('b', {}, Number(store.user.credits ?? 0).toLocaleString()), 'cr');
   const route = () => {
     const target = PAGES.find((p) => p.path === location.hash);
     if (!target) { location.hash = PAGES[0].path; return; }

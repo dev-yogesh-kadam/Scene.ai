@@ -30,7 +30,9 @@ export function render(view) {
   const refsBlock = el('div');
   const tips = el('details', { class: 'tips' });
   const error = el('p', { class: 'error notice' });
-  const generateButton = el('button', { class: 'btn primary', onclick: () => generate(false) }, 'Generate');
+  const generateLabel = el('span', {}, 'Generate');
+  const cost = el('span', { class: 'cost' });
+  const generateButton = el('button', { class: 'btn generate', onclick: () => generate(false) }, generateLabel, cost);
   const body = el('div', {}, fields, refsBlock, tips, error, el('div', { class: 'generate-bar' }, estimate, generateButton));
   const queue = el('div');
   const recent = el('div', { class: 'media-grid compact' });
@@ -336,8 +338,9 @@ export function render(view) {
         form.estimate = quote.text;
         form.cost = quote.credits;
         const short = quote.credits > quote.balance;
-        estimate.replaceChildren(el('b', {}, quote.text), ' · ', el('b', {}, quote.credits + ' credits'),
-          el('span', { class: short ? 'error' : '' }, short ? ` · you only have ${quote.balance}` : ` of your ${quote.balance}`));
+        cost.textContent = quote.credits + ' cr';
+        estimate.replaceChildren(el('b', {}, quote.text),
+          el('span', { class: short ? 'error' : '' }, short ? ` · this needs ${quote.credits} cr and you have ${quote.balance} cr` : ` · you have ${quote.balance} cr`));
       } catch (e) { estimate.textContent = e.message; }
     }, 150);
   }
@@ -366,7 +369,7 @@ export function render(view) {
       el('div', { class: 'dialog-buttons' },
         el('button', { class: 'btn', onclick: () => dialog.close() }, 'Cancel'),
         hits.filter((h) => h.alt).map((h) => el('button', { class: 'btn', onclick: () => { dialog.close(); applyAlternative(h.alt.set); } }, h.alt.label)),
-        el('button', { class: 'btn primary', onclick: () => { dialog.close(); generate(true); } }, 'Generate anyway')));
+        el('button', { class: 'btn generate', onclick: () => { dialog.close(); generate(true); } }, 'Generate anyway')));
     dialog.addEventListener('close', () => dialog.remove());
     document.body.append(dialog);
     dialog.showModal();
@@ -382,15 +385,14 @@ export function render(view) {
     const data = new FormData();
     data.append('settings', JSON.stringify(settings()));
     for (const [id, r] of Object.entries(form.refs)) if (r.file) data.append('ref:' + id, r.file, r.name);
-    const label = 'Generate';
     generateButton.disabled = true;
-    generateButton.textContent = 'Uploading…';
+    generateLabel.textContent = 'Uploading…';
     try {
       await api('/api/jobs', { method: 'POST', body: data });
       refreshJobs();
     } catch (e) { showError(e); }
     generateButton.disabled = false;
-    generateButton.textContent = label;
+    generateLabel.textContent = 'Generate';
     refreshEstimate();
   }
 

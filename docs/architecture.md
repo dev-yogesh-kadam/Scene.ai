@@ -12,18 +12,20 @@ Browser (frontend/)  ──HTTP + WebSocket──▶  Scene.ai server (backend/s
 |---|---|
 | `main.py` | Builds the app and wires the parts together. |
 | `config.py` | Settings from defaults, `config.json` and `SCENE_*` variables. |
-| `db.py` | SQLite tables: `users`, `sessions`, `jobs`, `generations`, `projects`, `assets`, `credit_events`, `settings`. New columns are added to older databases on start. |
+| `db.py` | SQLite tables: `users`, `sessions`, `jobs`, `generations`, `projects`, `boards`, `assets`, `credit_events`, `settings`. New columns are added to older databases on start. |
 | `security.py` | Password hashing (scrypt), session tokens, login throttle. |
 | `catalog.py` | Lists the files in `workflows/<kind>/` and loads them. |
 | `comfy/workflows.py` | Reads a workflow, works out its form, builds the graph for one job, estimates time. |
 | `comfy/client.py` | Calls ComfyUI: upload, queue, history, download, cancel. |
 | `jobs.py` | The queue. One job runs at a time, for all users, in the order they were added. Also runs chained long videos. |
-| `media.py` | ffmpeg helpers: last frame of a clip, joining clips, cutting audio. ffmpeg comes with the `imageio-ffmpeg` package. |
+| `media.py` | ffmpeg helpers: last frame of a clip, joining clips, cutting audio, joining a timeline of any clips. ffmpeg comes with the `imageio-ffmpeg` package. |
 | `credits.py` | What a job costs, charging and refunding. Every change is logged in `credit_events`. |
 | `references.py` | Uploading reference files to ComfyUI. |
 | `api/auth.py` | Register, sign in, sign out, change password. |
 | `api/studio.py` | Workflows, estimates, jobs, live events. |
 | `api/library.py` | A user's finished images and videos, search and projects. |
+| `agent.py` | The agent: asks a language model on an Ollama server (`ollama_url`, `agent_model`) for a plan, then checks every step against the real workflows. |
+| `api/workspace.py` | The saved canvas layout, timeline, brief and agent plans of each project (`boards`), exporting a timeline as one video, and pricing the agent's plans. Plans are never queued by the server; the browser queues them through `POST /api/jobs` after the user approves. |
 | `api/assets.py` | Saved characters, outfits, backgrounds and voices. |
 | `api/admin.py` | The admin console: overview, users, all jobs, credit log, workflow report, settings. |
 
@@ -68,9 +70,10 @@ Plain JavaScript modules, served as static files.
 |---|---|
 | `assets/js/main.js` | Sign-in gate, sidebar, routing between pages. |
 | `assets/js/store.js` | Shared state and the live connection. |
-| `assets/js/pages/` | `auth`, `create`, `library`, `assets`, `queue`, `settings`, `admin`. |
-| `assets/js/components/` | Queue rows, media cards, asset dialogs. |
+| `assets/js/pages/` | `auth`, `create`, `canvas`, `timeline`, `library`, `assets`, `queue`, `settings`, `admin`. |
+| `assets/js/components/` | Queue rows, media cards, asset dialogs, the canvas composer, the agent panel. |
 | `assets/css/app.css` | Design tokens and layout, dark and light. |
+| `assets/fonts/` | Archivo and Martian Mono (Latin), so the app needs no font server. |
 
 ## Known limits
 

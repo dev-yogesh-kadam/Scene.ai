@@ -13,7 +13,7 @@ export function render(view) {
     el('div', { class: 'narrow' },
       el('div', { class: 'card' },
         el('div', { class: 'card-head' }, el('h2', {}, 'Account')),
-        el('p', {}, store.user.name, el('span', { class: 'muted' }, ` · ${store.user.email} · ${store.user.role} · ${store.user.credits ?? 0} credits`)),
+        el('p', {}, store.user.name, el('span', { class: 'muted' }, ` · ${store.user.email} · ${store.user.role} · ${store.user.credits ?? 0} cr`)),
         el('form', { onsubmit: async (e) => {
           e.preventDefault();
           try {

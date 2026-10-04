@@ -43,6 +43,9 @@ Stop the app with `Ctrl+C`.
 - **Create** videos and images from any workflow in `workflows/`, with reference files.
 - **Long videos**: several clips made one after another, each starting on the last frame of the one
   before, joined into one file. A line containing only `---` in the prompt separates per-clip prompts.
+- **Canvas**: every finished item as a frame on a board, with a quick composer to make the next shot and an
+  **agent** that turns an instruction into a priced plan you approve before anything runs.
+- **Timeline**: put videos in order, trim them and export the cut as one video.
 - **Assets**: save characters, outfits, backgrounds and voices once and pick them in any reference box.
 - **Library**: search by name or prompt, group items in projects, re-run, or continue a video from its last frame.
 - **Credits**: every generation costs credits based on its estimated GPU time. A failed or cancelled
@@ -55,6 +58,8 @@ Stop the app with `Ctrl+C`.
 | Setting | Default | Meaning |
 |---|---|---|
 | `comfy_url` | `http://127.0.0.1:8188` | ComfyUI address. An admin can also change it in the admin console. |
+| `ollama_url` | `http://127.0.0.1:11434` | The Ollama server whose language model the agent uses. |
+| `agent_model` | first model on that server | The Ollama model name, for example `qwen3.5:9b`. |
 | `host`, `port` | `0.0.0.0`, `8080` | Where the app listens. Use `127.0.0.1` to keep it to this computer. |
 | `default_workflow` | none | Workflow selected for new users, for example `video/h3_director`. |
 | `allow_signup` | `true` | Whether visitors can create accounts. The first account can always be created. |

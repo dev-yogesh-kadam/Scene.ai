@@ -1,5 +1,7 @@
 {
   "comfy_url": "http://127.0.0.1:8188",
+  "ollama_url": "http://127.0.0.1:11434",
+  "agent_model": "",
   "host": "0.0.0.0",
   "port": 8080,
   "default_workflow": "video/h3_director",

@@ -11,27 +11,49 @@ export function el(tag, attrs = {}, ...children) {
   return node;
 }
 
-// Line icons (24px grid, drawn with the text colour). The markup is fixed text from this file, never user input.
+// Line icons (24px grid, drawn with the text colour): 1.6px stroke with rounded ends and corners.
+// The one solid square is the Cell from the Scene mark. The markup is fixed text from this file, never user input.
+const CELL = 'fill="currentColor" stroke="none"';
 const ICONS = {
-  sparkles: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>',
-  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  generate: `<path d="M15.5 4.5h-11V12M8.5 19.5h11V12"/><path ${CELL} d="M9.5 9.5h5v5h-5z"/>`,
+  canvas: '<path d="M15.5 4.5h-11V12M8.5 19.5h11V12"/><path d="M10 10h4v4h-4z"/>',
+  timeline: '<path d="M4 7h8M8 12h12M4 17h6"/><path d="M15.5 3.5v17"/>',
+  play: '<path d="M7.5 5v14l11-7z"/>',
+  pause: '<path d="M8 5v14M16 5v14"/>',
+  grid: '<path d="M3.5 3.5h7v7h-7zM13.5 3.5h7v7h-7zM3.5 13.5h7v7h-7zM13.5 13.5h7v7h-7z"/>',
   bookmark: '<path d="M6 4h12v17l-6-4-6 4z"/>',
-  list: '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
-  sliders: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
-  shield: '<path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.800-1-8-4.500-8-9V6z"/>',
-  logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 8l-4 4 4 4M6 12h10"/>',
-  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.500 1.500M17.500 17.500L19 19M5 19l1.500-1.500M17.500 6.500L19 5"/>',
-  moon: '<path d="M20 14.500A8 8 0 0 1 9.500 4 8 8 0 1 0 20 14.500z"/>',
-  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
-  check: '<path d="M5 12.500l4.500 4.500L19 7.500"/>',
+  list: `<path d="M8 6h13M8 12h13M8 18h13"/><path ${CELL} d="M3 5h2v2H3zM3 11h2v2H3zM3 17h2v2H3z"/>`,
+  sliders: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><path d="M13 4h4v4h-4zM7 10h4v4H7zM15 16h4v4h-4z"/>',
+  shield: '<path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/>',
+  logout: '<path d="M15 4h5v16h-5"/><path d="M10 8l-4 4 4 4M6 12h10"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5"/>',
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>',
+  monitor: '<path d="M3 4h18v12H3z"/><path d="M8 20h8M12 16v4"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
 };
 
 export function icon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.75',
+  for (const [k, v] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.6',
     'stroke-linecap': 'round', 'stroke-linejoin': 'round', class: 'icon', 'aria-hidden': 'true' })) svg.setAttribute(k, v);
   svg.innerHTML = ICONS[name] || '';
   return svg;
+}
+
+// The running Gate: two brackets circling a frame while it is being made.
+export function runningGate() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'run');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.innerHTML = '<rect width="100%" height="100%" pathLength="100"/>';
+  return svg;
+}
+
+// Seconds as HH:MM:SS:FF at 24 frames a second.
+export function timecode(seconds) {
+  const frames = Math.round(seconds * 24);
+  const two = (n) => String(n).padStart(2, '0');
+  return [Math.floor(frames / 86400), Math.floor(frames / 1440) % 60, Math.floor(frames / 24) % 60, frames % 24].map(two).join(':');
 }
 
 export function duration(seconds) {

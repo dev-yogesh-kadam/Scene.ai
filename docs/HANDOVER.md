@@ -1,243 +1,121 @@
 # Scene.ai handover
 
-Status on 3 October 2026. Read this first in a new session. It covers what Scene.ai is, what is
-built and tested, how the code works, the rules to follow, and what to build next.
+Status on 4 October 2026. Read this first in a new session. It covers where things stand, the rules,
+what was added most recently, what is and is not tested, and what to build next.
+
+For how to start the app and its settings, see the [README](../README.md). For how the code is
+organised, see [architecture.md](architecture.md). For adding workflows and presets files, see
+[workflows.md](workflows.md). This file does not repeat them.
 
 ## 1. What Scene.ai is
 
-Scene.ai is meant to become a startup product: a web studio where signed-in users create videos and
-images with AI. The owner is yogesh (yogesh.k@dashverse.ai).
+A web studio where signed-in users create videos and images with AI. It is meant to become a startup
+product. The owner is yogesh (yogesh.k@dashverse.ai).
 
-- The rendering is done by a ComfyUI server. Users never see ComfyUI.
+- Rendering is done by a ComfyUI server. Users never see ComfyUI.
 - Video workflows (MiniMax H3) exist today. yogesh will add image workflows later.
-- The app must run on macOS, Windows and Linux. Do not write code that only works on one of them.
-- Workflows must stay dynamic: yogesh drops ComfyUI workflow files into `workflows/` and they must
-  appear in the app with no code change.
+- The app must run on macOS, Windows and Linux.
+- Workflows stay dynamic: a ComfyUI workflow file dropped into `workflows/` appears in the app with no code change.
 
-## 2. Machines and addresses
+## 2. Machines, addresses and branches
 
 | Thing | Value |
 |---|---|
-| Repo | `/Volumes/Shanks/Scene.ai` on yogesh's MacBook (APFS, git repo, branch `main`) |
-| ComfyUI | `http://100.123.221.34:8188`, on a separate Windows PC reached over Tailscale |
-| ComfyUI PC | RTX 5090 (32 GB VRAM), 192 GB RAM, ComfyUI portable v0.38.0 at `C:\ComfyUi\ComfyUI_windows_portable` |
-| App | `http://localhost:8080` after starting it |
+| Repo | `/Volumes/Shanks/Scene.ai` on yogesh's MacBook |
+| Branch | **`founder`** holds the app. `main` holds only compiled `.pyc` files and local data committed by mistake; do not work there. |
+| ComfyUI | `http://100.123.221.34:8188`, a Windows PC reached over Tailscale. RTX 5090 (32 GB VRAM), 192 GB RAM, ComfyUI portable v0.38.0 at `C:\ComfyUi\ComfyUI_windows_portable` |
+| Ollama (the agent's model) | `http://100.71.159.106:11434` over Tailscale, model `qwen3.5:9b`. Set in `config.json` as `ollama_url` and `agent_model`. |
+| App | `http://localhost:8080` after `./scripts/start.sh` |
 | Python | 3.14 on the Mac, in the repo's `.venv` |
+| Design system | https://claude.ai/artifact/BxrhjyavFKAGFUtkNxZ88U (private to yogesh). See section 7. |
 
-ComfyUI is only reachable when yogesh has started it on the PC. If `/system_stats` does not answer,
-ask yogesh to start it.
+Both servers answer only when yogesh has them running. On 3 October the ComfyUI PC dropped off the
+network for about an hour and came back by itself. If `/system_stats` or `/api/tags` does not answer,
+wait or ask yogesh.
+
+`config.json` and `storage/` are ignored by git on `founder` but tracked on `main`. After switching
+from `main` to `founder`, put them back with
+`git restore --source=main --worktree -- config.json storage`.
 
 ## 3. Rules
 
 1. Never change the workflows saved inside ComfyUI, ComfyUI's Python (`python_embeded`), or its start flags.
 2. Never delete files on the ComfyUI PC without asking yogesh.
 3. Never test against the real database. `storage/scene.db` holds yogesh's real admin account and
-   library. Run tests with a separate storage folder (section 9).
-4. Workflow files in `workflows/` are never modified by the app. Settings are applied to the copy
-   sent for each job.
-5. Nothing has been committed to git yet. Do not commit or push unless yogesh asks.
-6. Keep it cross-platform: use `pathlib`, no shell-only tricks in app code, and keep both start scripts working.
+   library. Run a second copy of the app with its own storage (section 6).
+4. Workflow files in `workflows/` are never modified by the app. Settings are applied to the copy sent for each job.
+5. Do not commit or push unless yogesh asks. `founder` has one commit, pushed. Everything in section 4 is uncommitted.
+6. Keep it cross-platform: use `pathlib`, no shell-only tricks in app code, keep both start scripts working.
+7. The app starts empty for a new user. No sample projects, sample media or placeholder content.
 
-## 4. How to run it
+## 4. What was added on 3 October (uncommitted)
 
-| System | Command |
-|---|---|
-| macOS / Linux | `./scripts/start.sh` |
-| Windows | double-click `scripts\start.bat` |
+### New look
+- A design identity was made for Scene (see section 7) and the front end was restyled twice: first to
+  that identity, then softened at yogesh's request ("feels hard", take inspiration from Apple).
+- The current look, all in `frontend/assets/css/app.css`: lifted greys instead of near-black, rounded
+  shapes, filled buttons and fields without hard outlines, translucent blurred floating panels,
+  sentence-case labels. The system font is used where there is one (San Francisco on Apple devices),
+  the bundled Archivo elsewhere. Mono type is kept only for timecode and prices.
+- Three colour rules carry over from the identity and must stay: **amber** (`--brand`) is only for
+  Generate and work in progress; **blue** (`--agent`) is only for the agent; the everyday primary button
+  is the text colour.
+- The **Gate**: two opposing brackets mark whatever is selected (`.gate`), and the same two circle a
+  frame while it is being made (`runningGate()` in `dom.js`). Small waits use a stepping square instead of a spinner.
+- The logo (`frontend/assets/img/logo.svg`) is the Scene mark on an amber tile. Icons in `dom.js` were redrawn.
+- Fonts ship in `frontend/assets/fonts/` (Latin letters only), so the app needs no font server.
+- Credits are written `23 cr`.
 
-The start script creates `.venv`, installs `backend/requirements.txt`, copies `config.example.json`
-to `config.json` if it is missing, and runs `python -m scene` from `backend/`.
+### Canvas (`#/canvas`)
+- Every finished item is a frame on a board that pans and zooms. Frames can be moved; positions are
+  saved per project on the server.
+- A selected frame gets Open, Re-run, Add to timeline and Download.
+- A job in progress shows as a frame with the running Gate and elapsed time, and its result lands in that spot.
+- A **composer** is docked at the bottom: prompt, a strip of the main settings, and Generate with the
+  cost in the button. With one frame selected it offers to continue from it. Everything else uses the
+  workflow's defaults; the Create page still has the full form.
+- Keys: `1` fit, `0` 100%, Esc deselect, Enter open, Ctrl/⌘+J agent.
 
-Run the tests:
+### Timeline (`#/timeline`)
+- Put videos in order, trim in and out, reorder by dragging, play the cut, export it as one video.
+- Export joins clips of any size into the frame of the first one, adds silence where a clip has no
+  sound, files the result in the library under the workflow id `edit/timeline`, and costs no credits.
+  Items with an `edit/` workflow have no Re-run.
 
-```bash
-.venv/bin/python -m pip install -r backend/requirements-dev.txt
-cd backend && ../.venv/bin/python -m pytest
-```
+### Agent (panel on the Canvas)
+- The user types an instruction; the agent returns a plan: one step per shot with a written prompt,
+  the workflow and settings, and the cost. **Nothing is queued or charged until Approve is pressed.**
+- The model only proposes. `backend/scene/agent.py` checks each step against the real workflows and
+  drops anything they can't take; the browser then queues approved steps through the normal `POST /api/jobs`.
+- The **Brief** is a per-project note (style, characters, rules) that is sent with every instruction.
+- Past plans are kept per project. Jobs the agent started are drawn in blue on the canvas.
+- Limits: steps cannot use each other's results (a longer continuous video is one step with chained
+  clips); it only offers workflows that need no reference files, apart from a first frame taken from
+  the canvas selection; the model is small and sometimes needs the plan corrected, so the cost is always shown first.
 
-32 tests pass. They need no ComfyUI.
+### Backend pieces behind these
+- `backend/scene/api/workspace.py`: `/api/boards/{canvas|timeline|brief|agent}` (one saved JSON
+  document per user, project and kind, in the new `boards` table), `/api/timeline/export`,
+  `/api/agent/status`, `/api/agent/plan`.
+- `backend/scene/agent.py`: the Ollama call, the rules given to the model, and the step checker.
+- `media.py`: `sequence()` for timeline export; `probe()` now also returns the frame size.
+- `config.py`: `ollama_url`, `agent_model`.
 
-## 5. Folder layout
+### Also in the repo
+- `design/logo/`: the mark as SVG (four inks, two app icons, a 16 px favicon).
+- `design/previews/`: screenshots. `design/previews/studio/soft-*.png` show the current look; the
+  others are from earlier stages and can be deleted.
 
-| Path | Contents |
-|---|---|
-| `backend/scene/` | The server (FastAPI). See section 7. |
-| `backend/tests/` | `test_workflows.py`, `test_api.py`, `conftest.py` |
-| `backend/requirements.txt` | fastapi, uvicorn, python-multipart, httpx, websockets, imageio-ffmpeg |
-| `frontend/` | Plain HTML, CSS and JavaScript modules. No build step, no framework. |
-| `workflows/video/` | Eight video workflows, three with a `.studio.json` presets file |
-| `workflows/image/` | Empty. Image workflows go here. |
-| `workflows/archive/` | Three backup workflows. Not shown in the app. Two are used by a test. |
-| `scripts/` | `start.sh`, `start.bat` |
-| `docs/` | `architecture.md`, `workflows.md`, this file |
-| `config.json` | Local settings (not in git). `config.example.json` is the template. |
-| `storage/` | Created at run time, not in git: `scene.db`, `outputs/<user id>/`, `assets/<user id>/`, `tmp/` |
-| `legacy/` | The old command-line script (`h3_director_cli/`) and `Test.py`. Not used by the app. |
+## 5. What the app already did before this
 
-## 6. What is built
+Unchanged and still working: accounts (first account is admin, scrypt passwords, login throttle);
+the Create page with a form built from the workflow, reference boxes, live estimate and warnings;
+long videos as chained clips; Assets; the Library with viewer, search and projects; the Queue with
+live progress; credits charged on queue and refunded on failure; and the nine-tab admin console
+(overview, users, jobs, library, credits, workflows, system, audit log, settings, with CSV export).
 
-Everything below works and was tested unless section 10 says otherwise.
+Three presets files exist: `h3_director`, `video_minimax_h3_i2v` and `video_minimax_h3_r2v`.
 
-### Accounts
-- Register, sign in, sign out, change password.
-- The first account becomes the admin. Admins can close sign-ups and change user roles.
-- Passwords are hashed with scrypt. Sessions are random tokens in an HttpOnly cookie, stored as a hash.
-- Five wrong passwords block that email and address for a minute.
-- Each user sees only their own jobs, library, assets and projects.
-
-### Create page
-- Video and Image tabs, and a workflow dropdown filled from `workflows/<kind>/`.
-- The form is built from the workflow itself (section 8).
-- Reference boxes with drag and drop, one per loader node.
-- Live time estimate and credit cost.
-- Warnings that need a click (High quality, 15 s clips), with an alternative button.
-- Project field, so the result lands in a project.
-
-### Long videos (chained clips)
-- "Long video (number of clips)" makes 2, 3, 4 or 6 clips (the server allows up to 8).
-- Each clip starts on the last frame of the one before. The clips are joined into one file.
-- One prompt is used for every clip, or per-clip prompts are separated by a line containing only `---`.
-- A voice track is cut into one piece per clip.
-- A user's last-frame image applies only to the final clip.
-
-### Assets
-- An Assets page keeps characters, outfits, backgrounds, props and voices (image, video or audio files).
-- Each reference box has a "Saved" button to pick an asset, and "Save" to keep a dropped file.
-- A library image can be saved as an asset.
-
-### Library
-- Viewer with a details panel: prompt (with Copy), workflow, options, resolution, length, seed, other
-  settings, references, project, date, time, render time, credits, file, generation id and job id.
-  `detailsOf()` in `components/media.js` builds the list. Jobs store `prompt`, `details` and
-  `workflow_title` in their settings at creation; older items fall back to what can be worked out.
-- Download, Re-run (refills the Create form), Delete.
-- "Use as first frame" for images and "Continue" for videos (uses the video's last frame).
-- Search by name, workflow and prompt text. Filter by kind and project.
-- Projects: create, rename, delete, move items between them.
-
-### Queue
-- One job at a time across all users, in the order they were added.
-- Live progress over WebSocket: clip number, step, current node, time left, queue position.
-- Cancel for waiting and running jobs. Waiting jobs survive an app restart.
-
-### Credits
-- A job costs its estimated GPU minutes times `credits_per_minute` (default 10), rounded up.
-- A workflow with no estimate costs `credits_unknown` (default 20) per clip.
-- Charged when the job is queued. Refunded when it fails or is cancelled.
-- New accounts get `signup_credits` (default 500).
-- Admins add or remove credits per user and change both rates on the Settings page.
-- Every change is logged in the `credit_events` table.
-- There is no payment system. Admins are charged like everyone else.
-
-### Settings page
-- Change password. Admins also get a link to the admin console.
-
-### Admin console (`#/admin`, admins only)
-Nine tabs. Code: `frontend/assets/js/pages/admin.js` (shell), `pages/admin/overview.js`, `pages/admin/sections.js`,
-`pages/admin/shared.js`, `components/charts.js`, and `backend/scene/api/admin.py`.
-
-- **Overview:** a period switch (7, 30, 90 days); a "needs attention" list (server offline, failed jobs, users out of
-  credits, unreadable workflows, low disk, jobs waiting over an hour); five headline numbers with a trend line and the
-  change against the period before; the live queue; recent activity; four daily charts (items, jobs by result, GPU
-  minutes, credits) with hover values and a table view; most active users; workflows used; why jobs failed.
-- **Users:** search and filters; select a user for a side panel with their numbers, latest items, jobs and credit
-  history. Actions: add or remove credits, set a password, make admin or user, disable or enable.
-- **Jobs:** every user's jobs with status filters, search and pages of 50; select a job for its prompt, options,
-  references, error, wait and render time, and result. Cancel any active job.
-- **Library:** every user's items as a table (no thumbnails), filtered by type, user, project and search.
-  Selecting a row opens the viewer with the details panel; an admin can delete the item there.
-- **Credits:** totals (held, spent, given at sign-up, given by admins) and the change log with filters.
-- **Workflows:** each file, whether it can be read, presets, jobs, success rate, average time.
-- **System:** render server (versions, GPU memory, system memory, ComfyUI queue), the app, storage and disk, record counts.
-- **Audit log:** sign-ins, failed sign-ins, new accounts and every admin action, with who, what, on whom, details and address.
-- **Settings:** ComfyUI address, sign-up switch, credits for a new account, credits per GPU minute.
-- **Give or take credits:** a dialog (user, give or take, amount, optional note, new balance) opened from the Users
-  table, a user's side panel, or the Credits tab. A balance never goes below zero. The note is stored in
-  `credit_events.note` and shown in the credit log and audit log.
-- Users, jobs, credits and the audit log can be exported as CSV.
-- A disabled account is signed out everywhere and can't sign in.
-- Chart colours are the `--series-*` and `--status-*` tokens in `app.css`; they were checked for colour-blind separation.
-
-### Look and feel
-- One stylesheet, `frontend/assets/css/app.css`: calm and near-monochrome (in the style of Linear and Vercel).
-  Hierarchy comes from spacing and type; colour is kept for status. Primary buttons are solid text-colour.
-- Dark and light themes. The theme follows the system unless the user picks one with the button next to their
-  name in the sidebar (stored in `localStorage` as `scene.theme`, applied as `data-theme` on `<html>`).
-- Icons are inline SVG from `icon()` in `dom.js`.
-- On Create, rarely used settings sit under "More settings", and the estimate, cost and Generate button are in a bar
-  that stays at the bottom of the form.
-
-## 7. Backend modules (`backend/scene/`)
-
-| Module | Job |
-|---|---|
-| `main.py` | `create_app()`. Builds everything and puts it on `app.state` (`db`, `comfy`, `catalog`, `credits`, `jobs`, `hub`, `notify`, `live_message`, `output_dir`, `assets_dir`). |
-| `__main__.py` | `python -m scene` runs uvicorn. |
-| `config.py` | `Settings` dataclass. Order: defaults, `config.json`, `SCENE_*` environment variables. |
-| `db.py` | SQLite. Tables: `users`, `sessions`, `jobs`, `generations`, `projects`, `assets`, `credit_events`, `audit_log`, `settings`. The `COLUMNS` list adds new columns to older databases on start. |
-| `security.py` | scrypt hashing, session tokens, login throttle. |
-| `catalog.py` | Lists `workflows/<kind>/*.json` and loads them. Fetches ComfyUI's `/object_info` when a file alone is not enough. |
-| `comfy/workflows.py` | The core. Reads UI-format and API-format workflows, finds controls and reference slots (`describe`), builds the job graph (`build_prompt`), estimates time (`estimate`). |
-| `comfy/client.py` | ComfyUI HTTP calls: upload, queue, history, view, cancel. |
-| `jobs.py` | `JobManager`: the queue worker, single renders and chains, progress, downloads. |
-| `media.py` | ffmpeg helpers: `probe`, `last_frame`, `cut_audio`, `join`. ffmpeg comes from `imageio-ffmpeg`. |
-| `credits.py` | `Credits`: cost, charge, add, balance. |
-| `references.py` | Uploading reference files to ComfyUI with a `scene_<hash>_` name. |
-| `api/auth.py` | `/api/auth/*` |
-| `api/studio.py` | `/api/status`, `/api/workflows`, `/api/estimate`, `/api/jobs`, `/api/ref-preview`, WebSocket `/api/events` |
-| `api/library.py` | `/api/library`, `/api/projects` |
-| `api/assets.py` | `/api/assets` |
-| `api/admin.py` | `/api/admin/overview`, `users`, `jobs`, `library`, `credits`, `workflows`, `system`, `audit`, `settings`, `export/<name>.csv` |
-| `audit.py` | `record()` writes one row to `audit_log`. |
-| `api/deps.py` | `current_user`, `admin_user` |
-
-### Front end (`frontend/assets/js/`)
-
-| File | Job |
-|---|---|
-| `main.js` | Sign-in gate, sidebar, hash routing (`#/create`, `#/library`, `#/assets`, `#/queue`, `#/settings`, and `#/admin` for admins). |
-| `store.js` | Shared state (`user`, `jobs`, `online`, `rerun`, `prefill`) and the live connection. |
-| `api.js`, `dom.js` | Fetch wrapper; `el()`, `segmented()`, `field()` and formatters. |
-| `pages/create.js` | The largest file: workflow picker, form, references, estimate, warnings, generate. |
-| `pages/library.js`, `assets.js`, `queue.js`, `settings.js`, `admin.js`, `auth.js` | One per page. Each exports `render(view)` and may return a cleanup function. |
-| `components/jobs.js`, `media.js`, `assets.js` | Queue rows, media cards and viewer, asset dialogs. |
-
-## 8. How the important parts work
-
-### Workflows become forms
-`comfy/workflows.py` reads a workflow and returns a schema.
-
-- **Formats:** a normal ComfyUI save (UI format) is converted to API format in `_from_ui`. Widget
-  values are mapped to input names from the file's own metadata, or from ComfyUI's `/object_info` if
-  the file lacks it. The catalog keeps a copy of `/object_info` in `storage/cache/node_definitions.json`.
-- **Subgraphs** are unpacked in `_add_graph`: a node inside instance 105 gets the id `105:<inner id>`,
-  values set on the subgraph node are pushed into the inner nodes, and links to its outputs are redirected.
-- **Controls:** primitive nodes become fields labelled with the node title. The title gives the
-  role: PROMPT, SEED, DURATION or "seconds", RESOLUTION, and titles starting with WIDTH or HEIGHT.
-  `prompt`, `width`, `height`, `steps`, `cfg` and `seed` typed straight into a node also become fields.
-- **Reference slots:** nodes whose class matches `(Load|Optional)(Image|Video|Audio)`. A bypassed
-  loader is an optional slot and is switched on only when a file is given (`finalize`).
-- **Special slots:** loader titles containing "first frame", "last frame" or "voice track".
-  A workflow can be chained when it has a prompt, a duration and a first-frame slot.
-- **Ids:** a control or slot id is `"<node id>:<input>"`, for example `100:value` or `201:image`.
-  A workflow id is `"<kind>/<file name>"`, for example `video/h3_director`.
-
-### Presets (`<workflow>.studio.json`)
-Optional file next to a workflow. Keys: `title`, `description`, `options`, `rules`, `hide`,
-`controls`, `confirm`, `estimate`, `hints`, `slots`. `docs/workflows.md` explains them.
-More keys were added for the ComfyUI template workflows: `labels`, `defaults`, `optional_refs`,
-  `required_refs`, `extra_refs`, and `primary` / `choices` on `controls`.
-There are three presets files: `h3_director`, `video_minimax_h3_i2v` (H3 Image to Video, a subgraph
-template; chain-capable) and `video_minimax_h3_r2v` (H3 Reference to Video). Both templates get an
-aspect ratio, a size in megapixels and a Standard / Turbo speed option.
-`workflows/video/h3_director.studio.json` defines:
-
-- Mode: fast (sparse attention) or normal.
-- Quality: low (4 steps, turbo LoRA), medium (20 steps), high (40 steps).
-- Rules that set nodes 108, 109, 105 and 113, and add a `BlockSparseAttention` node (id 400) for fast medium/high.
-- The measured timing table for the RTX 5090 at 768p.
-
-### Job settings
 What the browser sends to `POST /api/jobs` (multipart, field `settings` as JSON, plus files named `ref:<slot id>`):
 
 ```json
@@ -255,116 +133,100 @@ What the browser sends to `POST /api/jobs` (multipart, field `settings` as JSON,
 }
 ```
 
-A `refs` entry is `{"asset_id": n}` or `{"comfy_name": "scene_..."}`. Uploaded files are added by the server.
+A control or slot id is `"<node id>:<input>"`. A `refs` entry is `{"asset_id": n}` or
+`{"comfy_name": "scene_..."}`; uploaded files are added by the server.
 
-### A chained job (`JobManager._run_chain`)
-1. Split the prompt on `---` lines. Pick one seed and use `seed + clip index` per clip.
-2. For each clip: set the prompt, the first frame (from the previous clip) and the voice piece, render, download the clip to `storage/tmp/`.
-3. Save the clip's last frame with ffmpeg and upload it as `scene_chain_<job>_<n>.png`.
-4. Join the clips with ffmpeg (libx264, CRF 16, AAC), dropping the one frame each pair shares.
-5. Record one row in `generations`.
-
-### Live updates
-`app.state.notify(user_id)` pushes `{jobs, credits, library_changed}` to that user's open pages over `/api/events`.
-
-## 9. How to test safely
+## 6. How to test safely
 
 Run a second copy of the app with its own storage and port, so the real database is untouched:
 
 ```bash
 cd backend
-SCENE_STORAGE_DIR=/path/to/scratch SCENE_PORT=8082 SCENE_HOST=127.0.0.1 ../.venv/bin/python -m scene
+SCENE_STORAGE_DIR=/path/to/scratch SCENE_PORT=8099 SCENE_HOST=127.0.0.1 ../.venv/bin/python -m scene
 ```
 
-Then register a throwaway account and drive the API with a small `httpx` script.
+Add `SCENE_COMFY_URL=http://127.0.0.1:9` to keep it away from the render PC. Then register a throwaway account.
 
-Notes from earlier sessions:
+What worked for browser checks in the last session:
 
-- In Claude Code on this Mac, commands that reach ComfyUI or localhost servers need the sandbox disabled.
-- The shell is zsh. It does not split unquoted variables, so do not put curl options in a variable.
-- Browser checks were done with headless Chrome through its remote debugging port and the
-  `websockets` package (sign in, click, screenshot, collect script errors). Chrome is at
-  `/Applications/Google Chrome.app`. There is no `node`-based test setup.
-- One "401 on /api/auth/me" in the browser console on first load is expected.
-- A fast/low 5 s clip takes about 1 minute on the real server. Use it for end-to-end checks.
+- A temporary page in `frontend/` that signs in with `fetch`, sets `location.hash`, then imports
+  `/assets/js/main.js`; screenshot it with headless Chrome
+  (`--headless=new --screenshot=... --virtual-time-budget=25000`). Delete the page afterwards.
+- Give each Chrome run its own `--user-data-dir` and a time limit; a shared profile hangs.
+- Stop the test server by port: `lsof -ti :8099 | xargs kill`. `pkill -f "python -m scene"` misses it on macOS.
+- Do not use a bare `wait` in a shell that also started the server; it waits for the server too.
+- Video thumbnails sometimes come out black in headless screenshots. They render in a normal browser.
+- The shell is zsh: it does not split unquoted variables, and a bare `=====` in a command is an error.
+- One "401 on /api/auth/me" in the console on first load is expected.
 
-## 10. What was tested, and what was not
+## 7. The design system and where it stands
+
+The artifact in section 2 holds the brand book, tokens, logo files and 16 component previews.
+
+**It is out of date.** It still describes the first, harder version: sharp 2 px media corners,
+uppercase mono labels, wide titles, no translucent panels. The app now follows the softer direction in
+section 4. yogesh has been asked whether to update the page and has not answered. Until then, treat
+`app.css` as the truth for look, and the artifact as the source for the idea, the logo, the colour
+rules and the vocabulary (takes, the Brief, `cr`).
+
+## 8. What was tested, and what was not
 
 | Tested | Result |
 |---|---|
-| Automated tests | 32 pass |
-| Single clip on real ComfyUI (fast/low, 5 s, one character image) | Video returned in 66 s, 8.2 MB |
-| Chained 2-clip video on real ComfyUI (asset reference, two prompts, project) | 10.3 s video in 102 s, smooth join, 18 credits |
-| All six video workflows load with ComfyUI online | Yes |
-| Database upgrade on a copy of the real database | User, 2 items and 3 jobs kept; 500 credits granted |
-| Pages in headless Chrome | No script errors |
+| Automated tests | 37 pass, no ComfyUI or Ollama needed |
+| Agent plan, approve, real render (fast/medium, 480p, 5 s) | Video in the library in 46 s, 6 credits charged, step shown as Done |
+| Agent plans against the real model | Portrait, a 15 s shot as 3 chained clips, and an unclear request answered with a question |
+| Timeline export of three real clips of different sizes | 9.2 s video, with sound |
+| Canvas with a job in progress, selection, composer | Rendered correctly (job simulated) |
+| Create, Canvas, Timeline, Admin in headless Chrome, dark and light | No script errors |
+| Earlier: single clip and a 2-clip chain on real ComfyUI; database upgrade on a copy of the real one | Passed |
 
 Not tested:
 
-- Windows and Linux.
-- Chains with a voice track, and chains longer than 2 clips.
-- Cancelling a running job on the real ComfyUI.
+- Dragging frames, panning and zooming the canvas with a real mouse or trackpad.
+- Timeline playback and drag-to-reorder.
+- Generating from the canvas composer, and "continue from the selected frame" (composer or agent).
+- An agent plan with more than one step run for real.
+- The softened look on the Library, Assets, Queue, Settings and sign-in pages (captured, not reviewed).
+- Windows and Linux; the system-font fallback to Archivo there.
+- Chains with a voice track or more than 2 clips; cancelling a running job on real ComfyUI.
 - Any workflow other than H3 Director end to end.
-- Drag and drop with a real mouse.
-- The library and Create pages after the last two display fixes (the project bar and the clip buttons).
 
-## 11. Known issues and gaps
+## 9. Known issues and gaps
 
 - **No image workflows.** `workflows/image/` is empty. The code path exists but has never run.
+- **Canvas positions for "All work" and for each project are separate.** An item moved in one view is not moved in the other.
+- **Timeline is one video track.** No audio tracks, transitions, images or titles. Export runs inside the request, so a long cut blocks it until done.
+- **The agent cannot chain steps or upload references** (see section 4).
 - **Assets are single files.** A character is one image, not a bundle of face, outfit and voice.
-- **Chains do not carry a voice.** Each clip gets the same references; without a voice sample or
-  voice track the voice can change between clips.
-- **Chain quality loss.** Each next clip starts from a frame decoded from an encoded video (CRF 16),
-  so very long chains may drift.
-- **One GPU, one job at a time.**
-- **SQLite and local files.** Fine for one machine only.
-- **No email.** No verification, no password reset, no "video ready" message.
-- **No payments.** Credits come only from an admin.
-- **No https.** `secure_cookies` exists but nothing terminates TLS.
+- **Chains do not carry a voice**, and long chains may drift because each clip starts from a decoded frame.
+- **One GPU, one job at a time. SQLite and local files.** Fine for one machine only.
+- **No email, no payments, no https.** Credits come only from an admin.
 - **No upload limits** on reference files, except 200 MB on assets.
-- **Test files on the ComfyUI PC.** Earlier test runs left `scene_*` and `studio_*` files in
-  ComfyUI's input folder and test videos in its output folder. Ask yogesh before deleting them.
-- **Legacy script is broken.** `legacy/h3_director_cli/h3_director.py` has a stray path pasted on
-  line 1 and expects `h3_director_draft_api.json` next to it. The app does not use it.
-- **Old media in `legacy/`.** Five sample videos and one input image, ignored by git.
+- **`main` is a mess** (section 2). It should be reset to match `founder` once yogesh agrees.
+- **Test files on the ComfyUI PC.** Test runs left `scene_*` files in its input folder and test videos in its output folder, including "Robot on Bridge" from 3 October. Ask yogesh before deleting them.
+- **`legacy/`** holds a broken command-line script and old sample media. The app does not use it.
 
-## 12. Next plan
-
-In the order yogesh and Claude last discussed. Items 1 to 5 of the earlier list are done except image workflows.
+## 10. Next plan
 
 ### Next up
-1. **Image workflows.** Blocked on yogesh adding files to `workflows/image/`. When they arrive:
-   check that the form is detected, run one end to end, add a `.studio.json` if presets are wanted,
-   and test "Use as first frame" from an image.
-2. **Character bundles.** A named character with several files (face, other angle, outfit, voice)
-   that fills the matching slots in one click.
-3. **Variations.** "Make 4 versions" at low quality with different seeds, then "Finalise" one at
-   high quality with the same seed.
-4. **Prompt library and prompt helper.** Saved prompts and templates, and a button that rewrites a
-   short idea into the action / camera / sound format H3 wants.
-5. **Workflow cards.** Show workflows as cards with a preview and description, and collapse advanced settings.
-6. **Finish testing.** The "not tested" list in section 10, starting with a voice-track chain and cancel.
+1. **Try the new pages by hand** and fix what the "not tested" list turns up.
+2. **Commit** the work in section 4 when yogesh asks, and tidy `main`.
+3. **Update the design system page** to the softer look, if yogesh wants it.
+4. **Image workflows.** Blocked on yogesh adding files to `workflows/image/`. Then check the form, run
+   one end to end, and test "Use as first frame" from an image.
+5. **Agent: steps that build on each other** (shot 2 starts from shot 1), and picking saved assets as references.
+6. **Character bundles.** A named character with several files that fills the matching slots in one click.
+7. **Variations.** Several low-quality versions with different seeds, then finalise one at high quality.
 
 ### Before outside users
-7. **Payments.** Buying credits with Stripe, and plans with a monthly allowance.
-8. **Email.** Verification, password reset, "your video is ready".
-9. **Https and a domain**, then set `secure_cookies`.
-10. **Limits and moderation.** Upload size limits, rate limits, content rules.
-11. **Landing page** with examples and pricing.
+8. Payments, email (verification, reset, "your video is ready"), https and a domain, upload and rate limits, a landing page.
 
 ### Scaling
-12. **More than one GPU.** A worker per ComfyUI server, so the queue spreads across machines.
-13. **Postgres and object storage.** Replace `db.py` and the file paths in `jobs.py`,
-    `api/library.py` and `api/assets.py`.
-14. **Docker, CI, error tracking, backups.**
-15. **React front end**, only once the UI outgrows plain modules.
+9. More than one GPU, Postgres and object storage, Docker, CI, error tracking, backups.
+10. A React front end, only once the UI outgrows plain modules.
 
-### Housekeeping
-- Make the first git commit when yogesh asks.
-- Fix or remove the legacy script, if yogesh wants it kept working.
-- Time other resolutions and fast/high to replace the estimated numbers in `h3_director.studio.json`.
-
-## 13. Measured timings (RTX 5090, 768p, one clip)
+## 11. Measured timings (RTX 5090, 768p, one clip)
 
 | Mode | Quality | 5 s | 10 s | 15 s |
 |---|---|---|---|---|
@@ -375,9 +237,10 @@ In the order yogesh and Claude last discussed. Items 1 to 5 of the earlier list 
 | normal | medium | 4.3 min | 13.8 min | ~1.5 h (est.) |
 | normal | high | 8.3 min | 27.0 min | ~3 h (est.) |
 
-A single 15 s clip overflows 32 GB of VRAM, which is why chaining 5 s clips is the recommended way to make long videos.
+A single 15 s clip overflows 32 GB of VRAM, which is why chaining 5 s clips is the way to make long
+videos. At 480p, fast/medium, a 5 s clip took 46 s.
 
-## 14. Quality lessons for H3 (shown as Tips in the app)
+## 12. Quality lessons for H3 (shown as Tips in the app)
 
 - Low quality is a draft: smudges, soft backgrounds, frozen mouths. Use medium or high for finals.
 - Lip sync needs a voice track, with one speaker per clip.

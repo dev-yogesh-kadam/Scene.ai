@@ -99,10 +99,11 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
       onChanged();
     } catch (err) { alert(err.message); }
   };
+  const edited = item.workflow.startsWith('edit/');   // a timeline export: there is no form to re-run
   const view = () => openViewer(item, { actions: [
-    { label: 'Re-run', run: (dialog) => { dialog.close(); rerun(); } },
+    !edited && { label: 'Re-run', run: (dialog) => { dialog.close(); rerun(); } },
     { label: next, run: async (dialog) => { if (await useAsFirstFrame(item)) dialog.close(); } },
-  ] });
+  ].filter(Boolean) });
   return el('div', { class: 'media' },
     el('div', { class: 'thumb', onclick: view }, thumb, el('span', { class: 'kind' }, item.kind)),
     el('div', { class: 'meta' },
@@ -110,7 +111,7 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
       el('div', { class: 'sub' }, [item.summary, item.seconds && 'took ' + duration(item.seconds)].filter(Boolean).join(' · ') || when(item.created)),
       el('div', { class: 'row' },
         el('a', { class: 'btn small', href: fileUrl + '?download=true', download: item.filename }, 'Download'),
-        el('button', { class: 'btn small', onclick: rerun, title: 'Open Create with the same settings' }, 'Re-run'),
+        !edited && el('button', { class: 'btn small', onclick: rerun, title: 'Open Create with the same settings' }, 'Re-run'),
         el('button', { class: 'btn small', onclick: (e) => useAsFirstFrame(item, e.currentTarget),
           title: item.kind === 'video' ? 'Start a new video on the last frame of this one' : 'Start a video on this image' }, next)),
       manage && el('div', { class: 'row' },

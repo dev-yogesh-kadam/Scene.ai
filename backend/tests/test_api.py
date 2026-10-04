@@ -244,3 +244,75 @@ def test_admin_gives_and_takes_credits_with_a_note(client):
     assert [(e["amount"], e["note"]) for e in events] == [(-650, ""), (-100, "Correction"), (250, "Launch bonus")]
     audit = [(e["action"], e["detail"]) for e in client.get("/api/admin/audit?q=credits").json()["entries"]]
     assert ("Took credits", "-650") in audit and ("Gave credits", "+250 · Launch bonus") in audit
+
+
+def test_canvas_and_timeline_boards_are_saved_per_project_and_private(client):
+    register(client)
+    project = client.post("/api/projects", json={"name": "Skincare ad"}).json()
+    assert client.get("/api/boards/canvas").json() == {"data": {}}
+    client.put("/api/boards/canvas", json={"data": {"items": {"7": {"x": 40, "y": 80}}}})
+    client.put("/api/boards/canvas", json={"project": project["id"], "data": {"items": {}}})
+    client.put("/api/boards/timeline", json={"data": {"clips": [{"id": 7, "start": 0, "end": 2}]}})
+    assert client.get("/api/boards/canvas").json()["data"]["items"]["7"] == {"x": 40, "y": 80}
+    assert client.get("/api/boards/canvas?project=%d" % project["id"]).json() == {"data": {"items": {}}}
+    assert client.get("/api/boards/timeline").json()["data"]["clips"][0]["end"] == 2
+    assert client.get("/api/boards/notes").status_code == 404
+    client.post("/api/auth/logout")
+    client.post("/api/auth/register", json={"email": "bob@example.com", "password": "another one"})
+    assert client.get("/api/boards/canvas").json() == {"data": {}}
+    assert client.get("/api/boards/canvas?project=%d" % project["id"]).status_code == 404
+
+
+def test_timeline_export_joins_clips_into_a_new_library_video(client):
+    import asyncio
+    from scene import media
+
+    me = register(client)
+    folder = client.app.state.output_dir / str(me["id"])
+    folder.mkdir(parents=True)
+    for i, (colour, size) in enumerate((("red", "64x64"), ("blue", "96x64"))):   # different sizes, the second one silent
+        sound = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-shortest"] if i == 0 else []
+        asyncio.run(media._ffmpeg("-loglevel", "error", "-f", "lavfi", "-i", "color={}:s={}:r=24:d=1".format(colour, size),
+                                  *sound, "-pix_fmt", "yuv420p", folder / "clip{}.mp4".format(i)))
+        client.app.state.db.run(
+            "INSERT INTO generations (user_id, workflow, kind, name, filename, settings, context, created) "
+            "VALUES (?, 'video/h3_director', 'video', ?, ?, '{}', '{}', 1)", (me["id"], "clip%d" % i, "clip%d.mp4" % i))
+    first, second = sorted(i["id"] for i in client.get("/api/library").json()["items"])
+    assert client.post("/api/timeline/export", json={"clips": []}).status_code == 400
+    assert client.post("/api/timeline/export", json={"clips": [{"id": 999}]}).status_code == 404
+    made = client.post("/api/timeline/export", json={"name": "Cut 1", "clips": [{"id": first}, {"id": second, "start": 0.25, "end": 0.75}]}).json()
+    assert 1.45 < made["seconds"] < 1.55
+    item = next(i for i in client.get("/api/library").json()["items"] if i["id"] == made["id"])
+    assert (item["name"], item["workflow"], item["context"]["width"]) == ("Cut 1", "edit/timeline", 64)
+    joined = asyncio.run(media.probe(folder / item["filename"]))
+    assert joined["audio"] and 1.4 < joined["seconds"] < 1.6
+
+
+def test_agent_plans_are_checked_and_priced_and_nothing_is_queued(client, monkeypatch):
+    register(client)
+    client.put("/api/boards/brief", json={"data": {"text": "Warm evening light. The main character wears a red coat."}})
+    asked = {}
+
+    async def fake_ask(system, message, workflow_ids):
+        asked.update(message=message, ids=workflow_ids)
+        return {"reply": "Two shots.", "steps": [
+            {"workflow": "video/h3_director", "name": "Street walk", "prompt": "She walks down a wet street.", "duration": 99, "resolution": 123},
+            {"workflow": "video/does_not_exist", "name": "Bad", "prompt": "x"},
+            {"workflow": "video/h3_director", "name": "No prompt", "prompt": "  "}]}
+
+    monkeypatch.setattr(client.app.state.agent, "ask", fake_ask)
+    assert client.post("/api/agent/plan", json={"instruction": " "}).status_code == 400
+    plan = client.post("/api/agent/plan", json={"instruction": "Make a street shot"}).json()
+    assert "red coat" in asked["message"] and "video/h3_director" in asked["ids"]
+    assert [s["name"] for s in plan["steps"]] == ["Street walk"]      # the unknown workflow and the empty prompt are dropped
+    step = plan["steps"][0]
+    assert step["credits"] > 0 and plan["total"] == step["credits"] and plan["balance"] == 500
+    assert 15 in step["settings"]["values"].values() and step["settings"]["resolution"] != 123   # clamped, and a made-up size is ignored
+    assert client.get("/api/jobs").json()["jobs"] == [] and client.get("/api/auth/me").json()["credits"] == 500
+
+
+def test_agent_says_so_when_its_model_server_is_down(client):
+    register(client)
+    assert client.get("/api/agent/status").json()["online"] is False
+    refused = client.post("/api/agent/plan", json={"instruction": "Make a street shot"})
+    assert refused.status_code == 400 and "Ollama" in refused.json()["detail"]

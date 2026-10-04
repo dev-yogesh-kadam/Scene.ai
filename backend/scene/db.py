@@ -1,4 +1,4 @@
-"""SQLite storage: users, sessions, jobs, finished generations, projects, assets, credits and settings."""
+"""SQLite storage: users, sessions, jobs, finished generations, projects, boards, assets, credits and settings."""
 
 import sqlite3
 import threading
@@ -58,6 +58,14 @@ CREATE TABLE IF NOT EXISTS projects (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     created REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS boards (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project_id INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated REAL NOT NULL,
+    PRIMARY KEY (user_id, project_id, kind)
 );
 CREATE TABLE IF NOT EXISTS assets (
     id INTEGER PRIMARY KEY,

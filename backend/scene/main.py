@@ -11,7 +11,8 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import media
-from .api import admin, assets, auth, library, studio
+from .agent import Agent, AgentError
+from .api import admin, assets, auth, library, studio, workspace
 from .catalog import Catalog
 from .comfy import workflows
 from .comfy.client import Comfy, ComfyError
@@ -52,6 +53,7 @@ def create_app(settings=None):
     comfy = Comfy(lambda: db.setting("comfy_url", settings.comfy_url))
     catalog = Catalog(settings.path("workflows_dir"), comfy, storage / "cache" / "node_definitions.json")
     credits = Credits(db, settings)
+    agent = Agent(settings.ollama_url, settings.agent_model)
     hub = Hub()
 
     def live_message(user_id, library_changed=False):
@@ -69,6 +71,7 @@ def create_app(settings=None):
         yield
         worker.cancel()
         await comfy.http.aclose()
+        await agent.http.aclose()
 
     app = FastAPI(title="Scene.ai", lifespan=lifespan)
     app.state.settings = settings
@@ -77,6 +80,7 @@ def create_app(settings=None):
     app.state.catalog = catalog
     app.state.hub = hub
     app.state.credits = credits
+    app.state.agent = agent
     app.state.notify = notify
     app.state.live_message = live_message
     app.state.assets_dir = storage / "assets"
@@ -86,6 +90,7 @@ def create_app(settings=None):
 
     @app.exception_handler(workflows.WorkflowError)
     @app.exception_handler(media.MediaError)
+    @app.exception_handler(AgentError)
     @app.exception_handler(ComfyError)
     async def known_error(request, exc):
         return JSONResponse({"detail": str(exc)}, status_code=400)
@@ -94,7 +99,7 @@ def create_app(settings=None):
     async def comfy_unreachable(request, exc):
         return JSONResponse({"detail": "The render server (ComfyUI) can't be reached right now."}, status_code=502)
 
-    for module in (auth, studio, library, assets, admin):
+    for module in (auth, studio, library, workspace, assets, admin):
         app.include_router(module.router)
     app.mount("/", StaticFiles(directory=settings.path("frontend_dir"), html=True), name="frontend")
     return app

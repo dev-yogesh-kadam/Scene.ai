@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[2]
 @dataclass
 class Settings:
     comfy_url: str = "http://127.0.0.1:8188"
+    ollama_url: str = "http://127.0.0.1:11434"  # the language model server the agent uses
+    agent_model: str = ""         # an Ollama model name; empty = the first one that server has
     host: str = "0.0.0.0"
     port: int = 8080
     workflows_dir: str = "workflows"

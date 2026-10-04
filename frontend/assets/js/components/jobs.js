@@ -18,7 +18,7 @@ export function jobList(jobs, { limit } = {}) {
     } else if (job.status === 'queued') {
       detail = [`Position ${job.position} in the queue`, job.est_seconds && `estimated ${duration(job.est_seconds)}`].filter(Boolean).join(' · ');
     } else if (job.status === 'done') {
-      detail = `Finished in ${duration(job.finished - job.started)}` + (job.cost ? ` · ${job.cost} credits` : '');
+      detail = `Finished in ${duration(job.finished - job.started)}` + (job.cost ? ` · ${job.cost} cr` : '');
     }
     const remove = () => api('/api/jobs/' + job.id, { method: 'DELETE' }).then(refreshJobs).catch((e) => alert(e.message));
     return el('div', { class: 'job' },
