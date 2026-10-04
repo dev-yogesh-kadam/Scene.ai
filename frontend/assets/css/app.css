@@ -1,55 +1,57 @@
 /* Scene.ai styles.
+   Colours are the Scene design system's: a warm near-black room, warm white text, Tungsten amber and Daylight blue.
+   Amber (--brand) is only for Generate, selection and work in progress; blue (--agent) is only for the agent;
+   the everyday primary button is the text colour on the page colour. The canvas has no hue, so it never tints a picture.
    Soft and quiet: rounded shapes, filled controls without hard outlines, floating panels as translucent
-   material, labels in plain sentence case. Hierarchy comes from spacing and weight more than from lines.
-   Amber (--brand) is only for Generate and for work in progress; blue (--agent) is only for the agent;
-   the everyday primary button is ink on paper. Mono type is kept for timecode and prices.
+   material, labels in plain sentence case. Mono type is kept for timecode and prices.
    Dark and light themes; the theme follows the system unless the user picks one (data-theme on <html>). */
 
 :root {
-  --bg: #1c1c1e; --surface: #242426; --raised: #2c2c2e; --field: rgba(120, 120, 128, .16); --hover: rgba(120, 120, 128, .2); --active: rgba(120, 120, 128, .32);
-  --line: rgba(255, 255, 255, .08); --line-strong: rgba(255, 255, 255, .14); --control: rgba(255, 255, 255, .26);
-  --text: #f5f5f7; --muted: #a1a1a6; --faint: #98989d;
-  --brand: #ffa51f; --brand-hover: #ffb340; --brand-active: #f09000; --on-brand: #1a1203;
-  --accent: #ffa51f; --accent-soft: rgba(255, 165, 31, .16);
-  --primary: #f5f5f7; --on-primary: #1c1c1e; --focus: #f5f5f7; --media-ground: #000000; --canvas: #141415;
-  --agent: #64b5ff; --agent-soft: rgba(100, 181, 255, .16); --thumb: #636366; --material: rgba(44, 44, 46, .74);
-  --ok: #30d158; --bad: #ff6961; --warn: #ffd60a;
-  --ok-soft: rgba(48, 209, 88, .16); --bad-soft: rgba(255, 105, 97, .16); --warn-soft: rgba(255, 214, 10, .14);
+  --bg: #100f0e; --surface: #181716; --raised: #201f1d; --field: #121110; --hover: #292725; --active: #33312e;
+  --line: #2e2c29; --line-strong: #47443f; --control: #6e6a63;
+  --text: #f2efea; --muted: #948f87; --faint: #8a857d;
+  --brand: #ffa51f; --brand-hover: #ffb84d; --brand-active: #e8920f; --on-brand: #1a1203;
+  /* --accent is amber used as a line or as text. It darkens in the light theme, where plain amber is too pale to read. */
+  --accent: #ffa51f; --accent-soft: #2b2112;
+  --primary: #f2efea; --on-primary: #100f0e; --focus: #f2efea; --media-ground: #000000; --canvas: #0a0a0a;
+  --agent: #8ccbff; --agent-soft: #14222e; --thumb: #47443f; --material: rgba(32, 31, 29, .9);
+  --ok: #4cc38a; --bad: #ff6b5e; --warn: #f2d94b;
+  --ok-soft: rgba(76, 195, 138, .13); --bad-soft: rgba(255, 107, 94, .13); --warn-soft: rgba(242, 217, 75, .13);
   --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --chart-neutral: #5d5d68;
   --status-good: #0ca30c; --status-warning: #fab219; --status-serious: #ec835a; --status-critical: #e66767;
   --radius: 16px; --radius-s: 10px; --radius-media: 10px;
   /* The system typeface where there is one (San Francisco on Apple devices), the bundled Archivo elsewhere. */
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", Archivo, "Segoe UI", sans-serif; --mono: ui-monospace, "SF Mono", "Martian Mono", Menlo, Consolas, monospace;
-  --shadow: 0 12px 40px rgba(0, 0, 0, .45); --shadow-s: 0 1px 3px rgba(0, 0, 0, .3); --scrim: rgba(0, 0, 0, .5);
+  --shadow: 0 8px 24px rgba(0, 0, 0, .5); --shadow-s: 0 1px 3px rgba(0, 0, 0, .35); --scrim: rgba(0, 0, 0, .6);
   --blur: blur(24px) saturate(180%); --ease: cubic-bezier(.25, .1, .25, 1);
   color-scheme: dark;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
-    --bg: #f5f5f7; --surface: #ffffff; --raised: #ffffff; --field: rgba(120, 120, 128, .1); --hover: rgba(120, 120, 128, .12); --active: rgba(120, 120, 128, .2);
-    --line: rgba(0, 0, 0, .08); --line-strong: rgba(0, 0, 0, .14); --control: rgba(0, 0, 0, .22);
-    --text: #1d1d1f; --muted: #6e6e73; --faint: #6e6e73;
-    --brand-hover: #ff9500; --brand-active: #f08a00; --accent: #b25e00; --accent-soft: rgba(255, 165, 31, .18);
-    --primary: #1d1d1f; --on-primary: #ffffff; --focus: #1d1d1f; --media-ground: #1c1c1e; --canvas: #ececee;
-    --agent: #0071e3; --agent-soft: rgba(0, 113, 227, .1); --thumb: #ffffff; --material: rgba(255, 255, 255, .76);
-    --ok: #248a3d; --bad: #d70015; --warn: #946200;
-    --ok-soft: rgba(36, 138, 61, .12); --bad-soft: rgba(215, 0, 21, .1); --warn-soft: rgba(148, 98, 0, .12);
+    --bg: #f4f4f2; --surface: #ffffff; --raised: #ffffff; --field: #ffffff; --hover: #eeedea; --active: #e4e2de;
+    --line: #dddad5; --line-strong: #b8b4ad; --control: #8c8882;
+    --text: #171614; --muted: #66625c; --faint: #66625c;
+    --brand-hover: #f5970a; --brand-active: #e0860a; --accent: #9a5a00; --accent-soft: #fff1d6;
+    --primary: #171614; --on-primary: #f4f4f2; --focus: #171614; --media-ground: #1c1b1a; --canvas: #ededeb;
+    --agent: #0b6bb8; --agent-soft: #e1f0fc; --thumb: #ffffff; --material: rgba(255, 255, 255, .86);
+    --ok: #1f7a4d; --bad: #c2362b; --warn: #8a6a00;
+    --ok-soft: rgba(31, 122, 77, .1); --bad-soft: rgba(194, 54, 43, .09); --warn-soft: rgba(138, 106, 0, .1);
     --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --chart-neutral: #a8a8b2; --status-critical: #d03b3b;
-    --shadow: 0 12px 40px rgba(0, 0, 0, .12); --shadow-s: 0 1px 3px rgba(0, 0, 0, .12); --scrim: rgba(0, 0, 0, .3);
+    --shadow: 0 8px 24px rgba(23, 22, 20, .12); --shadow-s: 0 1px 3px rgba(23, 22, 20, .12); --scrim: rgba(23, 22, 20, .4);
     color-scheme: light;
   }
 }
 :root[data-theme="light"] {
-  --bg: #f5f5f7; --surface: #ffffff; --raised: #ffffff; --field: rgba(120, 120, 128, .1); --hover: rgba(120, 120, 128, .12); --active: rgba(120, 120, 128, .2);
-  --line: rgba(0, 0, 0, .08); --line-strong: rgba(0, 0, 0, .14); --control: rgba(0, 0, 0, .22);
-  --text: #1d1d1f; --muted: #6e6e73; --faint: #6e6e73;
-  --brand-hover: #ff9500; --brand-active: #f08a00; --accent: #b25e00; --accent-soft: rgba(255, 165, 31, .18);
-  --primary: #1d1d1f; --on-primary: #ffffff; --focus: #1d1d1f; --media-ground: #1c1c1e; --canvas: #ececee;
-  --agent: #0071e3; --agent-soft: rgba(0, 113, 227, .1); --thumb: #ffffff; --material: rgba(255, 255, 255, .76);
-  --ok: #248a3d; --bad: #d70015; --warn: #946200;
-  --ok-soft: rgba(36, 138, 61, .12); --bad-soft: rgba(215, 0, 21, .1); --warn-soft: rgba(148, 98, 0, .12);
+  --bg: #f4f4f2; --surface: #ffffff; --raised: #ffffff; --field: #ffffff; --hover: #eeedea; --active: #e4e2de;
+  --line: #dddad5; --line-strong: #b8b4ad; --control: #8c8882;
+  --text: #171614; --muted: #66625c; --faint: #66625c;
+  --brand-hover: #f5970a; --brand-active: #e0860a; --accent: #9a5a00; --accent-soft: #fff1d6;
+  --primary: #171614; --on-primary: #f4f4f2; --focus: #171614; --media-ground: #1c1b1a; --canvas: #ededeb;
+  --agent: #0b6bb8; --agent-soft: #e1f0fc; --thumb: #ffffff; --material: rgba(255, 255, 255, .86);
+  --ok: #1f7a4d; --bad: #c2362b; --warn: #8a6a00;
+  --ok-soft: rgba(31, 122, 77, .1); --bad-soft: rgba(194, 54, 43, .09); --warn-soft: rgba(138, 106, 0, .1);
   --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --chart-neutral: #a8a8b2; --status-critical: #d03b3b;
-  --shadow: 0 12px 40px rgba(0, 0, 0, .12); --shadow-s: 0 1px 3px rgba(0, 0, 0, .12); --scrim: rgba(0, 0, 0, .3);
+  --shadow: 0 8px 24px rgba(23, 22, 20, .12); --shadow-s: 0 1px 3px rgba(23, 22, 20, .12); --scrim: rgba(23, 22, 20, .4);
   color-scheme: light;
 }
 
@@ -151,14 +153,24 @@ select.small { width: auto; height: 28px; padding: 0 8px; font-size: 12px; max-w
 .sidebar .spacer { flex: 1; }
 .credits { display: flex; align-items: baseline; gap: 6px; margin: 0 2px 6px; padding: 10px 12px; border-radius: 12px; background: var(--hover); font: 400 12px/16px var(--sans); color: var(--muted); }
 .credits b { color: var(--text); font-size: 15px; font-weight: 600; }
+.working { display: flex; align-items: center; gap: 8px; margin: 0 2px 6px; padding: 8px 12px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 500; text-decoration: none; }
+.working .cell-mark.stepping::before { background: var(--accent); }
 .server { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); padding: 6px 12px 10px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
 .dot.online { background: var(--ok); }
 .dot.offline { background: var(--bad); }
-.account { border-top: 1px solid var(--line); padding: 12px 6px 0; display: flex; align-items: center; gap: 10px; }
+.account-wrap { position: relative; border-top: 1px solid var(--line); padding-top: 8px; }
+.account { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px; border: 0; border-radius: var(--radius-s); background: none; text-align: left; cursor: pointer; color: var(--muted); transition: background .2s var(--ease); }
+.account:hover, .account.on, .account[aria-expanded=true] { background: var(--hover); }
+.float.account-menu { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 10; flex-direction: column; align-items: stretch; gap: 2px; padding: 6px; border-radius: 14px; }
+.account-menu a, .account-menu button[role=menuitem] { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border: 0; border-radius: 8px; background: none; color: var(--text); font-size: 14px; text-decoration: none; cursor: pointer; }
+.account-menu a:hover, .account-menu button[role=menuitem]:hover { background: var(--hover); }
+.menu-row { display: grid; gap: 6px; padding: 8px 10px 10px; margin: 4px 0; color: var(--muted); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 12px; }
+.menu-row .seg { display: flex; }
+.menu-row .seg button { flex: 1; }
 .account .avatar { width: 30px; height: 30px; font-size: 12px; }
 .account .who { flex: 1; min-width: 0; font-size: 12px; line-height: 1.35; }
-.account .who b { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account .who b { display: block; color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account .who span { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .icon-btn { cursor: pointer; width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: var(--radius-s); background: transparent; color: var(--muted); flex: none; }
 .icon-btn:hover { background: var(--hover); color: var(--text); }
@@ -186,7 +198,9 @@ select.small { width: auto; height: 28px; padding: 0 8px; font-size: 12px; max-w
   .nav { display: flex; flex-wrap: wrap; }
   .nav-label, .server, .account .who, .sidebar .spacer { display: none; }
   .credits { margin: 0; padding: 5px 10px; }
-  .account { border: 0; padding: 0; margin-left: auto; }
+  .account-wrap { border: 0; padding: 0; margin-left: auto; }
+  .account { width: auto; }
+  .float.account-menu { left: auto; right: 0; top: calc(100% + 6px); bottom: auto; width: 240px; }
   .view { padding: 20px 16px 48px; }
   .view.full { height: calc(100dvh - 58px); }
   .grid2 { grid-template-columns: 1fr; }
@@ -533,3 +547,50 @@ svg.run rect { fill: none; rx: 12px; stroke: var(--accent); stroke-width: 2; str
 .frame.by-agent .shot { color: var(--agent); }
 .frame.by-agent svg.run rect { stroke: var(--agent); }
 @media (prefers-reduced-motion: reduce) { .cell-mark::before { animation: none !important; } }
+
+/* ---------------------------------------------------------------- home */
+.home-hero { padding: 6vh 0 24px; text-align: center; }
+.home-hero h1 { font-size: 40px; font-weight: 600; letter-spacing: -.03em; }
+/* The generate bar stays in reach while the page scrolls under it. */
+.home-bar { position: sticky; top: 16px; z-index: 5; width: min(820px, 100%); margin: 0 auto 8px; }
+.home-note { text-align: center; }
+.home-section { margin-top: 48px; }
+.section-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.section-head h2 { flex: 1; font-size: 20px; letter-spacing: -.01em; }
+.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 18px; }
+.project { display: grid; gap: 4px; padding: 0; border: 0; background: none; color: inherit; text-align: left; min-width: 0; }
+button.project, button.project-cover { cursor: pointer; }
+button.project-cover { display: block; width: 100%; padding: 0; border: 0; }
+/* A project with nothing in it yet shows its initials on a quiet outlined field. */
+.project-cover { display: grid; place-items: center; aspect-ratio: 4 / 3; margin-bottom: 6px; background: var(--field); border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); font-size: 26px; font-weight: 600; letter-spacing: .06em; overflow: hidden; transition: transform .2s var(--ease), border-color .2s var(--ease); }
+.project:hover .project-cover { border-color: var(--line-strong); }
+.project:hover .project-cover { transform: scale(1.02); }
+.project-cover img, .project-cover video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.project b { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Finished work at its own proportions, packed in columns. */
+.made-grid { columns: 5 220px; column-gap: 16px; }
+.made { position: relative; display: block; width: 100%; margin: 0 0 16px; padding: 0; border: 0; background: var(--media-ground); border-radius: var(--radius); overflow: hidden; cursor: pointer; break-inside: avoid; }
+.made img, .made video { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .3s var(--ease); }
+.made:hover img, .made:hover video { transform: scale(1.03); }
+.made span { position: absolute; left: 0; right: 0; bottom: 0; padding: 24px 12px 10px; background: linear-gradient(transparent, rgba(0, 0, 0, .6)); color: #fff; font-size: 12px; font-weight: 600; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0; transition: opacity .2s var(--ease); }
+.made:hover span, .made:focus-visible span { opacity: 1; }
+
+/* ---------------------------------------------------------------- all projects */
+.pcard-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 24px; }
+.pcard { position: relative; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; cursor: pointer; transition: transform .2s var(--ease), border-color .2s var(--ease); }
+.pcard:hover { transform: translateY(-2px); border-color: var(--line-strong); }
+.pcard-cover { display: grid; place-items: center; aspect-ratio: 4 / 3; background: var(--field); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 34px; font-weight: 600; letter-spacing: .06em; overflow: hidden; }
+.pcard-cover img, .pcard-cover video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pcard-info { display: grid; gap: 3px; padding: 16px 18px 18px; font-size: 13px; }
+.pcard-info b { font-size: 18px; font-weight: 600; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcard-actions { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; opacity: 0; transition: opacity .2s var(--ease); }
+.pcard:hover .pcard-actions, .pcard:focus-within .pcard-actions { opacity: 1; }
+.pcard-actions .icon-btn { width: 32px; height: 32px; border-radius: 50%; background: var(--material); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); color: var(--text); }
+/* The very first visit: one invitation in the middle of the page. */
+.empty.first { align-items: center; text-align: center; padding: 12vh 16px; }
+.empty.first::before { width: 164px; height: 102px; margin-bottom: 8px; }
+.empty.first h2 { font-size: 20px; color: var(--text); }
+.empty.first p { max-width: 40ch; margin-top: -8px; }
+.project-dialog { width: min(92vw, 480px); }
+.project-dialog h2 { font-size: 20px; letter-spacing: -.01em; }
+.project-dialog textarea { min-height: 0; }

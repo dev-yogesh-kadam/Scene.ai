@@ -99,6 +99,17 @@ def create_app(settings=None):
     async def comfy_unreachable(request, exc):
         return JSONResponse({"detail": "The render server (ComfyUI) can't be reached right now."}, status_code=502)
 
+    @app.middleware("http")
+    async def always_current_pages(request, call_next):
+        """Make the browser check for a newer page file every time, so an update shows without clearing its cache.
+
+        Unchanged files are still answered with "not modified", so this costs almost nothing.
+        """
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     for module in (auth, studio, library, workspace, assets, admin):
         app.include_router(module.router)
     app.mount("/", StaticFiles(directory=settings.path("frontend_dir"), html=True), name="frontend")

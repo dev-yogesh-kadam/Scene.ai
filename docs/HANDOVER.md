@@ -1,11 +1,12 @@
 # Scene.ai handover
 
 Status on 4 October 2026. Read this first in a new session. It covers where things stand, the rules,
-what was added most recently, what is and is not tested, and what to build next.
+what the app has, what is and is not tested, and what to build next.
 
 For how to start the app and its settings, see the [README](../README.md). For how the code is
 organised, see [architecture.md](architecture.md). For adding workflows and presets files, see
-[workflows.md](workflows.md). This file does not repeat them.
+[workflows.md](workflows.md). For the bugs, risks and clean-up found in the code review of 4 October,
+see [code-review.md](code-review.md). This file does not repeat them.
 
 ## 1. What Scene.ai is
 
@@ -29,13 +30,16 @@ product. The owner is yogesh (yogesh.k@dashverse.ai).
 | Python | 3.14 on the Mac, in the repo's `.venv` |
 | Design system | https://claude.ai/artifact/BxrhjyavFKAGFUtkNxZ88U (private to yogesh). See section 7. |
 
-Both servers answer only when yogesh has them running. On 3 October the ComfyUI PC dropped off the
-network for about an hour and came back by itself. If `/system_stats` or `/api/tags` does not answer,
-wait or ask yogesh.
+Both servers answer only when yogesh has them running, and he often has them off. If `/system_stats`
+or `/api/tags` does not answer, say so and carry on with what can be done offline; do not wait.
 
 `config.json` and `storage/` are ignored by git on `founder` but tracked on `main`. After switching
 from `main` to `founder`, put them back with
 `git restore --source=main --worktree -- config.json storage`.
+
+**Git state.** `founder` has two commits: the first version, and `version -- 1.0.1` (the work of
+3 October: new look, Canvas, Timeline, agent). Everything marked "4 October" below is staged by
+yogesh but not committed.
 
 ## 3. Rules
 
@@ -43,28 +47,66 @@ from `main` to `founder`, put them back with
 2. Never delete files on the ComfyUI PC without asking yogesh.
 3. Never test against the real database. `storage/scene.db` holds yogesh's real admin account and
    library. Run a second copy of the app with its own storage (section 6).
-4. Workflow files in `workflows/` are never modified by the app. Settings are applied to the copy sent for each job.
-5. Do not commit or push unless yogesh asks. `founder` has one commit, pushed. Everything in section 4 is uncommitted.
-6. Keep it cross-platform: use `pathlib`, no shell-only tricks in app code, keep both start scripts working.
-7. The app starts empty for a new user. No sample projects, sample media or placeholder content.
+4. Do not restart or stop yogesh's running app on port 8080. Tell him when a change needs a restart.
+5. Workflow files in `workflows/` are never modified by the app. Settings are applied to the copy sent for each job.
+6. Do not commit or push unless yogesh asks.
+7. Keep it cross-platform: use `pathlib`, no shell-only tricks in app code, keep both start scripts working.
+8. The app starts empty for a new user. No sample projects, sample media or placeholder content.
+9. Do exactly what is asked and no more. When yogesh says "only the colours" or "don't do anything
+   else", that includes not starting test servers or taking screenshots. He twice stopped a command
+   that went on to do that.
+10. Reference screenshots from other products (he uses Frameo) show structure he wants, not something
+    to copy. Do not reuse their colours, logo, names, wording or his content in them.
 
-## 4. What was added on 3 October (uncommitted)
+## 4. What the app has
 
-### New look
-- A design identity was made for Scene (see section 7) and the front end was restyled twice: first to
-  that identity, then softened at yogesh's request ("feels hard", take inspiration from Apple).
-- The current look, all in `frontend/assets/css/app.css`: lifted greys instead of near-black, rounded
-  shapes, filled buttons and fields without hard outlines, translucent blurred floating panels,
-  sentence-case labels. The system font is used where there is one (San Francisco on Apple devices),
-  the bundled Archivo elsewhere. Mono type is kept only for timecode and prices.
-- Three colour rules carry over from the identity and must stay: **amber** (`--brand`) is only for
-  Generate and work in progress; **blue** (`--agent`) is only for the agent; the everyday primary button
-  is the text colour.
+### Look
+- One stylesheet, `frontend/assets/css/app.css`. Soft and quiet: rounded shapes, filled buttons and
+  fields without hard outlines, translucent blurred floating panels, sentence-case labels. The system
+  font is used where there is one (San Francisco on Apple devices), the bundled Archivo elsewhere
+  (`frontend/assets/fonts/`, Latin letters only). Mono type is kept only for timecode and prices.
+- **Palette:** the design system's colours (section 7). Dark: page `#100f0e`, panels `#181716`, text
+  `#f2efea`. Light: page `#f4f4f2`, white panels, text `#171614`. Tungsten amber `#ffa51f` and
+  Daylight blue `#8ccbff` (`#0b6bb8` in light). The canvas is neutral `#0a0a0a`.
+- **Colour rules that must stay:** amber (`--brand`) is only for Generate, selection and work in
+  progress; blue (`--agent`) is only for the agent; the everyday primary button is the text colour.
+  Amber as text or a line is `--accent`, which darkens in the light theme.
+- **Tried and dropped on 4 October, do not bring back unasked:** an ink `#031211` / ivory `#E8E4D3` /
+  teal `#00AEBB` palette (yogesh: "looking worst"), a refinement of it, and a pure black background.
+  He then asked to return to the design system's colours, changing colours only.
 - The **Gate**: two opposing brackets mark whatever is selected (`.gate`), and the same two circle a
-  frame while it is being made (`runningGate()` in `dom.js`). Small waits use a stepping square instead of a spinner.
-- The logo (`frontend/assets/img/logo.svg`) is the Scene mark on an amber tile. Icons in `dom.js` were redrawn.
-- Fonts ship in `frontend/assets/fonts/` (Latin letters only), so the app needs no font server.
+  frame while it is being made (`runningGate()` in `dom.js`). Small waits use a stepping square, not a spinner.
+- The logo (`frontend/assets/img/logo.svg`) is the Scene mark on an amber tile. Icons are inline SVG
+  from `icon()` in `dom.js`, with rounded line ends.
+- Theme: Light, Dark or Auto (follow the computer), stored in `localStorage` as `scene.theme`.
 - Credits are written `23 cr`.
+
+### Sidebar and navigation (4 October)
+- The sidebar is short on purpose: **Home**, then **Workspace** with **All projects** and **Library**.
+  yogesh removed everything else from it himself; do not add entries back.
+- Clicking the user's name at the bottom opens a menu: Settings, Admin console (admins only), Theme, Sign out.
+- The other pages have no sidebar entry. In `main.js`, a page with `under` is reached from the page it
+  names, and a page with `menu` is listed in the name menu:
+  Canvas and Timeline are reached from a project and link to each other; the full Create form is
+  behind "All settings" in the generate bar; Assets and Queue are buttons on the Library page.
+- While jobs are active, a "N jobs in the queue" line appears in the sidebar and opens the Queue.
+- Signing in always lands on Home. A reload keeps the page the user was on.
+
+### Home (`#/home`, 4 October)
+- A generate bar (the quick composer) that stays pinned while the page scrolls; then **Recent
+  projects**, left out completely until a project exists; then **Created on Scene.ai**, the user's
+  finished work at its true proportions with an All / Videos / Images switch.
+- "Created on Scene.ai" shows only the signed-in user's own work. yogesh's reference shows a public
+  showcase; that would need a way to mark items as public, which does not exist. He has been told and
+  has not decided.
+
+### All projects (`#/projects`, 4 October)
+- With no projects: a centred "Create your first project" invitation.
+- With projects: cards with the newest item as thumbnail (initials if empty), name, item count and
+  "3d ago"; search by name; Rename and Delete appear on hover. A card opens the project on the Canvas.
+- New project and Rename use a project window (`components/projects.js`). A new project can be given
+  its Brief there and opens straight away on its empty Canvas.
+- `/api/projects` returns each project's newest item (`cover_id`, `cover_kind`) and `updated`.
 
 ### Canvas (`#/canvas`)
 - Every finished item is a frame on a board that pans and zooms. Frames can be moved; positions are
@@ -73,7 +115,7 @@ from `main` to `founder`, put them back with
 - A job in progress shows as a frame with the running Gate and elapsed time, and its result lands in that spot.
 - A **composer** is docked at the bottom: prompt, a strip of the main settings, and Generate with the
   cost in the button. With one frame selected it offers to continue from it. Everything else uses the
-  workflow's defaults; the Create page still has the full form.
+  workflow's defaults.
 - Keys: `1` fit, `0` 100%, Esc deselect, Enter open, Ctrl/⌘+J agent.
 
 ### Timeline (`#/timeline`)
@@ -87,34 +129,30 @@ from `main` to `founder`, put them back with
   the workflow and settings, and the cost. **Nothing is queued or charged until Approve is pressed.**
 - The model only proposes. `backend/scene/agent.py` checks each step against the real workflows and
   drops anything they can't take; the browser then queues approved steps through the normal `POST /api/jobs`.
-- The **Brief** is a per-project note (style, characters, rules) that is sent with every instruction.
+- The **Brief** is a per-project note (style, characters, rules) sent with every instruction.
 - Past plans are kept per project. Jobs the agent started are drawn in blue on the canvas.
 - Limits: steps cannot use each other's results (a longer continuous video is one step with chained
   clips); it only offers workflows that need no reference files, apart from a first frame taken from
   the canvas selection; the model is small and sometimes needs the plan corrected, so the cost is always shown first.
 
-### Backend pieces behind these
-- `backend/scene/api/workspace.py`: `/api/boards/{canvas|timeline|brief|agent}` (one saved JSON
-  document per user, project and kind, in the new `boards` table), `/api/timeline/export`,
-  `/api/agent/status`, `/api/agent/plan`.
-- `backend/scene/agent.py`: the Ollama call, the rules given to the model, and the step checker.
-- `media.py`: `sequence()` for timeline export; `probe()` now also returns the frame size.
-- `config.py`: `ollama_url`, `agent_model`.
-
-### Also in the repo
-- `design/logo/`: the mark as SVG (four inks, two app icons, a 16 px favicon).
-- `design/previews/`: screenshots. `design/previews/studio/soft-*.png` show the current look; the
-  others are from earlier stages and can be deleted.
-
-## 5. What the app already did before this
-
-Unchanged and still working: accounts (first account is admin, scrypt passwords, login throttle);
-the Create page with a form built from the workflow, reference boxes, live estimate and warnings;
-long videos as chained clips; Assets; the Library with viewer, search and projects; the Queue with
-live progress; credits charged on queue and refunded on failure; and the nine-tab admin console
-(overview, users, jobs, library, credits, workflows, system, audit log, settings, with CSV export).
+### From before, unchanged and working
+Accounts (first account is admin, scrypt passwords, login throttle); the Create page with a form
+built from the workflow, reference boxes, live estimate and warnings; long videos as chained clips;
+Assets; the Library with viewer, search and projects; the Queue with live progress; credits charged
+on queue and refunded on failure; and the nine-tab admin console (overview, users, jobs, library,
+credits, workflows, system, audit log, settings, with CSV export).
 
 Three presets files exist: `h3_director`, `video_minimax_h3_i2v` and `video_minimax_h3_r2v`.
+
+### Backend pieces worth knowing
+- `api/workspace.py`: `/api/boards/{canvas|timeline|brief|agent}` (one saved JSON document per user,
+  project and kind, in the `boards` table), `/api/timeline/export`, `/api/agent/status`, `/api/agent/plan`.
+- `agent.py`: the Ollama call, the rules given to the model, and the step checker.
+- `media.py`: `sequence()` for timeline export; `probe()` also returns the frame size.
+- `main.py`: every page file is served with `Cache-Control: no-cache`, so the browser always checks
+  for a newer file (added 4 October; needs one restart of the app to take effect).
+
+## 5. Job settings
 
 What the browser sends to `POST /api/jobs` (multipart, field `settings` as JSON, plus files named `ref:<slot id>`):
 
@@ -142,59 +180,86 @@ Run a second copy of the app with its own storage and port, so the real database
 
 ```bash
 cd backend
-SCENE_STORAGE_DIR=/path/to/scratch SCENE_PORT=8099 SCENE_HOST=127.0.0.1 ../.venv/bin/python -m scene
+SCENE_STORAGE_DIR=/path/to/scratch SCENE_PORT=8099 SCENE_HOST=127.0.0.1 \
+  SCENE_COMFY_URL=http://127.0.0.1:9 SCENE_OLLAMA_URL=http://127.0.0.1:9 ../.venv/bin/python -m scene
 ```
 
-Add `SCENE_COMFY_URL=http://127.0.0.1:9` to keep it away from the render PC. Then register a throwaway account.
+The two `:9` addresses keep it away from the render PC and the model server; leave them out only for
+a deliberate real run. Then register a throwaway account. To have something to look at, copy a few
+files from `storage/outputs/` into the scratch storage and insert `generations` rows for them.
 
-What worked for browser checks in the last session:
+What worked for browser checks:
 
 - A temporary page in `frontend/` that signs in with `fetch`, sets `location.hash`, then imports
   `/assets/js/main.js`; screenshot it with headless Chrome
-  (`--headless=new --screenshot=... --virtual-time-budget=25000`). Delete the page afterwards.
+  (`--headless=new --screenshot=... --virtual-time-budget=20000`). **Delete the page afterwards**; if a
+  command is interrupted, check that it is gone.
 - Give each Chrome run its own `--user-data-dir` and a time limit; a shared profile hangs.
 - Stop the test server by port: `lsof -ti :8099 | xargs kill`. `pkill -f "python -m scene"` misses it on macOS.
 - Do not use a bare `wait` in a shell that also started the server; it waits for the server too.
-- Video thumbnails sometimes come out black in headless screenshots. They render in a normal browser.
+- Videos do not decode in headless Chrome, so video thumbnails come out blank or black. Still images
+  render. They are fine in a normal browser.
+- The server marks a job left as `running` as failed when it starts, so a simulated running job has to
+  be inserted after the server is up.
 - The shell is zsh: it does not split unquoted variables, and a bare `=====` in a command is an error.
 - One "401 on /api/auth/me" in the console on first load is expected.
 
+When yogesh reports that a change "is not there", check his screenshot for the old layout first: until
+he restarts the app once (see `main.py` above), his browser can show cached page files, and a hard
+reload (Cmd + Shift + R) fixes it.
+
 ## 7. The design system and where it stands
 
-The artifact in section 2 holds the brand book, tokens, logo files and 16 component previews.
+The artifact in section 2 holds the brand book, tokens, logo files and 16 component previews. The
+logo files are also in `design/logo/`.
 
-**It is out of date.** It still describes the first, harder version: sharp 2 px media corners,
-uppercase mono labels, wide titles, no translucent panels. The app now follows the softer direction in
-section 4. yogesh has been asked whether to update the page and has not answered. Until then, treat
-`app.css` as the truth for look, and the artifact as the source for the idea, the logo, the colour
-rules and the vocabulary (takes, the Brief, `cr`).
+**The app follows it for colours and ideas, not for shapes.** The page describes the first, harder
+version: sharp 2 px media corners, uppercase mono labels, wide titles, no translucent panels. yogesh
+then asked for a softer look, and that is what the app has. Treat `app.css` as the truth for shapes
+and type, and the artifact as the source for the palette, the logo, the colour rules and the
+vocabulary (takes, the Brief, `cr`). yogesh has been asked whether to update the page to the softer
+look and has not answered.
+
+`design/previews/` holds screenshots from every stage. Only these show the current app:
+`studio/home-dark.png`, `home-empty.png`, `projects-first.png`, `account-menu.png`, `dialog-first.png`
+(layout; the last two were shot in the dropped teal palette) and `studio/soft-*.png` (colours). The
+`teal-*`, `v2-*` and the unprefixed component shots are from dropped or earlier stages and can be deleted.
 
 ## 8. What was tested, and what was not
 
 | Tested | Result |
 |---|---|
-| Automated tests | 37 pass, no ComfyUI or Ollama needed |
+| Automated tests | 38 pass, no ComfyUI or Ollama needed |
 | Agent plan, approve, real render (fast/medium, 480p, 5 s) | Video in the library in 46 s, 6 credits charged, step shown as Done |
 | Agent plans against the real model | Portrait, a 15 s shot as 3 chained clips, and an unclear request answered with a question |
 | Timeline export of three real clips of different sizes | 9.2 s video, with sound |
 | Canvas with a job in progress, selection, composer | Rendered correctly (job simulated) |
-| Create, Canvas, Timeline, Admin in headless Chrome, dark and light | No script errors |
+| Home, All projects (empty and filled), account menu, project window | Rendered correctly on an offline copy; a project and its Brief were created through the window |
 | Earlier: single clip and a 2-clip chain on real ComfyUI; database upgrade on a copy of the real one | Passed |
 
 Not tested:
 
+- **The current colours on screen.** After the return to the design system's palette nothing was
+  rendered, at yogesh's request. The stylesheet was checked for leftover teal values only.
+- Generating from the Home bar and from the canvas composer, and "continue from the selected frame"
+  (composer or agent). Both servers were off when the Home bar was built.
 - Dragging frames, panning and zooming the canvas with a real mouse or trackpad.
 - Timeline playback and drag-to-reorder.
-- Generating from the canvas composer, and "continue from the selected frame" (composer or agent).
+- Hover actions, rename, delete and search on All projects; the account menu on a narrow window.
 - An agent plan with more than one step run for real.
-- The softened look on the Library, Assets, Queue, Settings and sign-in pages (captured, not reviewed).
+- The Library, Assets, Queue, Settings and sign-in pages in the soft look (captured, not reviewed).
 - Windows and Linux; the system-font fallback to Archivo there.
 - Chains with a voice track or more than 2 clips; cancelling a running job on real ComfyUI.
 - Any workflow other than H3 Director end to end.
 
 ## 9. Known issues and gaps
 
+- **`video_minimax_h3_i2v` fails on the real server** with "SaveVideo.execute() missing 1 required
+  positional argument: 'format'" (seen twice in yogesh's queue on 4 October). The job graph does not
+  fill the save node's `format` input. Not investigated; needs ComfyUI running.
 - **No image workflows.** `workflows/image/` is empty. The code path exists but has never run.
+- **Plain browser prompts remain** for "New project…" on the Create and Library pages, and for
+  project rename on the Library page. All projects uses the project window.
 - **Canvas positions for "All work" and for each project are separate.** An item moved in one view is not moved in the other.
 - **Timeline is one video track.** No audio tracks, transitions, images or titles. Export runs inside the request, so a long cut blocks it until done.
 - **The agent cannot chain steps or upload references** (see section 4).
@@ -209,22 +274,29 @@ Not tested:
 
 ## 10. Next plan
 
+### Waiting on yogesh
+- Whether "Created on Scene.ai" should become a showcase shared between users.
+- Whether to update the design system page to the softer look.
+- Committing the 4 October work, and tidying `main`.
+
 ### Next up
-1. **Try the new pages by hand** and fix what the "not tested" list turns up.
-2. **Commit** the work in section 4 when yogesh asks, and tidy `main`.
-3. **Update the design system page** to the softer look, if yogesh wants it.
-4. **Image workflows.** Blocked on yogesh adding files to `workflows/image/`. Then check the form, run
+0. **Work through [code-review.md](code-review.md)**, starting with its six front-end bugs.
+1. **Look at the current colours on every page** once yogesh allows a render, and fix what is off.
+2. **Try the new pages by hand** and fix what the "not tested" list turns up.
+3. **Fix the `video_minimax_h3_i2v` save error** when ComfyUI is on.
+4. **Use the project window everywhere** a project is created or renamed.
+5. **Image workflows.** Blocked on yogesh adding files to `workflows/image/`. Then check the form, run
    one end to end, and test "Use as first frame" from an image.
-5. **Agent: steps that build on each other** (shot 2 starts from shot 1), and picking saved assets as references.
-6. **Character bundles.** A named character with several files that fills the matching slots in one click.
-7. **Variations.** Several low-quality versions with different seeds, then finalise one at high quality.
+6. **Agent: steps that build on each other** (shot 2 starts from shot 1), and picking saved assets as references.
+7. **Character bundles.** A named character with several files that fills the matching slots in one click.
+8. **Variations.** Several low-quality versions with different seeds, then finalise one at high quality.
 
 ### Before outside users
-8. Payments, email (verification, reset, "your video is ready"), https and a domain, upload and rate limits, a landing page.
+9. Payments, email (verification, reset, "your video is ready"), https and a domain, upload and rate limits, a landing page.
 
 ### Scaling
-9. More than one GPU, Postgres and object storage, Docker, CI, error tracking, backups.
-10. A React front end, only once the UI outgrows plain modules.
+10. More than one GPU, Postgres and object storage, Docker, CI, error tracking, backups.
+11. A React front end, only once the UI outgrows plain modules.
 
 ## 11. Measured timings (RTX 5090, 768p, one clip)
 

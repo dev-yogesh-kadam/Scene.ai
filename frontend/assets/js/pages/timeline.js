@@ -42,7 +42,7 @@ export function render(view) {
   const body = el('div');
 
   view.replaceChildren(
-    el('div', { class: 'page-head' }, el('h1', {}, 'Timeline'), picker, name, exportButton),
+    el('div', { class: 'page-head' }, el('h1', {}, 'Timeline'), el('a', { class: 'btn quiet', href: '#/canvas' }, 'Canvas'), picker, name, exportButton),
     notice, body);
 
   const span = (c) => c.end - c.start;

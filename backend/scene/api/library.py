@@ -114,7 +114,11 @@ async def as_reference(item_id: int, request: Request, user: dict = Depends(curr
 @router.get("/projects")
 async def list_projects(request: Request, user: dict = Depends(current_user)):
     return {"projects": request.app.state.db.all(
-        "SELECT p.id, p.name, p.created, (SELECT COUNT(*) FROM generations g WHERE g.project_id = p.id) AS items "
+        "SELECT p.id, p.name, p.created, (SELECT COUNT(*) FROM generations g WHERE g.project_id = p.id) AS items, "
+        # The newest item of a project is its cover on the Home page, and tells when it was last worked on.
+        "(SELECT g.id FROM generations g WHERE g.project_id = p.id ORDER BY g.created DESC LIMIT 1) AS cover_id, "
+        "(SELECT g.kind FROM generations g WHERE g.project_id = p.id ORDER BY g.created DESC LIMIT 1) AS cover_kind, "
+        "(SELECT MAX(g.created) FROM generations g WHERE g.project_id = p.id) AS updated "
         "FROM projects p WHERE p.user_id = ? ORDER BY p.name COLLATE NOCASE", (user["id"],))}
 
 

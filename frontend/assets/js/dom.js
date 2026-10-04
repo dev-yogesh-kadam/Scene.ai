@@ -16,6 +16,8 @@ export function el(tag, attrs = {}, ...children) {
 const CELL = 'fill="currentColor" stroke="none"';
 const ICONS = {
   generate: `<path d="M15.5 4.5h-11V12M8.5 19.5h11V12"/><path ${CELL} d="M9.5 9.5h5v5h-5z"/>`,
+  home: '<path d="M4 10.5 12 4l8 6.5V20H4z"/><path d="M9.5 20v-6h5v6"/>',
+  folder: '<path d="M3.5 5.5h6l2 2.5h9v10.5h-17z"/>',
   canvas: '<path d="M15.5 4.5h-11V12M8.5 19.5h11V12"/><path d="M10 10h4v4h-4z"/>',
   timeline: '<path d="M4 7h8M8 12h12M4 17h6"/><path d="M15.5 3.5v17"/>',
   play: '<path d="M7.5 5v14l11-7z"/>',
@@ -30,6 +32,9 @@ const ICONS = {
   moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>',
   monitor: '<path d="M3 4h18v12H3z"/><path d="M8 20h8M12 16v4"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  chevron: '<path d="M8 10l4-4 4 4M8 14l4 4 4-4"/>',
+  pencil: '<path d="M14.5 5.5l4 4L8 20H4v-4z"/>',
+  trash: '<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l.8 13h9.4l.8-13"/>',
 };
 
 export function icon(name) {
@@ -61,6 +66,19 @@ export function duration(seconds) {
   if (seconds < 90) return `${Math.round(seconds)} s`;
   if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
   return `${Math.floor(seconds / 3600)} h ${Math.round((seconds % 3600) / 60)} min`;
+}
+
+// The first letters of a name's first two words, for a project that has no picture yet.
+export const initials = (name) => name.trim().split(/\s+/).slice(0, 2).map((word) => word[0]).join('').toUpperCase();
+
+// How long ago, in a few characters: "just now", "8h ago", "3d ago"; a date once it is over a month.
+export function ago(timestamp) {
+  const seconds = Date.now() / 1000 - timestamp;
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+  if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+  if (seconds < 30 * 86400) return Math.floor(seconds / 86400) + 'd ago';
+  return new Date(timestamp * 1000).toLocaleDateString([], { dateStyle: 'medium' });
 }
 
 export function when(timestamp) {

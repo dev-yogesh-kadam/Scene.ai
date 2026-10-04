@@ -6,6 +6,11 @@ def test_everything_needs_a_sign_in(client):
         assert client.get(path).status_code == 401
 
 
+def test_page_files_are_never_served_stale(client):
+    assert client.get("/assets/js/main.js").headers["cache-control"] == "no-cache"
+    assert "cache-control" not in client.get("/api/auth/state").headers
+
+
 def test_first_account_is_admin_and_later_ones_are_users(client):
     assert client.get("/api/auth/state").json() == {"first_run": True, "signup_open": True}
     assert client.post("/api/auth/register", json=ADMIN).json()["role"] == "admin"
@@ -128,6 +133,8 @@ def test_projects_and_search(client):
     assert sorted(names("")) == ["cafe", "street"]
     assert names("?q=sunny+waves") == ["street"] and names("?q=coffee") == ["cafe"] and names("?q=nothing") == []
     assert names("?project=%d" % project["id"]) == ["street"] and names("?project=none") == ["cafe"]
+    listed = client.get("/api/projects").json()["projects"][0]   # its newest item is the cover
+    assert (listed["cover_kind"], listed["updated"]) == ("video", 1) and listed["cover_id"] == client.get("/api/library?q=sunny").json()["items"][0]["id"]
     cafe = client.get("/api/library?q=coffee").json()["items"][0]["id"]
     client.put("/api/library/%d" % cafe, json={"project_id": project["id"]})
     assert client.get("/api/projects").json()["projects"][0]["items"] == 2

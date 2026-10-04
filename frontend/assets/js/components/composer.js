@@ -8,8 +8,8 @@ import { subscribe, refreshJobs } from '../store.js';
 const KIND_LABEL = { video: 'Video', image: 'Image' };
 
 // startFrom(): the library item a new video should start on (the canvas selection), or null.
-// projectId(): the project new work is filed under, or null.
-export function composer({ startFrom = () => null, projectId = () => null } = {}) {
+// projectId(): the project new work is filed under, or null. onQueued(): a job was added to the queue.
+export function composer({ startFrom = () => null, projectId = () => null, onQueued = () => {} } = {}) {
   const form = { catalog: [], wf: null, values: {}, options: {}, resolution: null, orientation: null, useStart: true };
   const start = el('div', { class: 'composer-start' });
   const prompt = el('textarea', { rows: 2, 'aria-label': 'Prompt', placeholder: 'Describe the shot',
@@ -135,6 +135,7 @@ export function composer({ startFrom = () => null, projectId = () => null } = {}
       data.append('settings', JSON.stringify(settings(refs)));
       await api('/api/jobs', { method: 'POST', body: data });
       refreshJobs();
+      onQueued();
     } catch (e) { showError(e); }
     button.disabled = false;
     label.textContent = 'Generate';

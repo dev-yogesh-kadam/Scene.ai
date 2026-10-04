@@ -73,7 +73,7 @@ export function render(view) {
   }
 
   view.replaceChildren(stage,
-    el('div', { class: 'float canvas-bar' }, picker, count),
+    el('div', { class: 'float canvas-bar' }, picker, count, el('a', { class: 'btn small quiet', href: '#/timeline', title: 'Put this project\'s videos in order' }, 'Timeline')),
     context,
     el('div', { class: 'float canvas-view' },
       el('button', { class: 'btn small quiet', title: 'Fit everything (1)', onclick: () => fit() }, 'Fit'),

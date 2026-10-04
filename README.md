@@ -34,7 +34,7 @@ Stop the app with `Ctrl+C`.
 | `frontend/` | The web app: plain HTML, CSS and JavaScript modules, no build step. |
 | `workflows/video/`, `workflows/image/` | The ComfyUI workflows users can run. `workflows/archive/` is not shown in the app. |
 | `scripts/` | Start scripts for each system. |
-| `docs/` | [Architecture](docs/architecture.md) and [how to add workflows](docs/workflows.md). |
+| `docs/` | [Architecture](docs/architecture.md), [how to add workflows](docs/workflows.md), the [handover](docs/HANDOVER.md) and the latest [code review](docs/code-review.md). |
 | `storage/` | Created at run time: the database and every user's files. Not in git. |
 | `legacy/` | The earlier command-line script, kept for reference. |
 

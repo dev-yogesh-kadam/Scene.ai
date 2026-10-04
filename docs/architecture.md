@@ -70,7 +70,7 @@ Plain JavaScript modules, served as static files.
 |---|---|
 | `assets/js/main.js` | Sign-in gate, sidebar, routing between pages. |
 | `assets/js/store.js` | Shared state and the live connection. |
-| `assets/js/pages/` | `auth`, `create`, `canvas`, `timeline`, `library`, `assets`, `queue`, `settings`, `admin`. |
+| `assets/js/pages/` | `auth`, `home`, `projects`, `create`, `canvas`, `timeline`, `library`, `assets`, `queue`, `settings`, `admin`. |
 | `assets/js/components/` | Queue rows, media cards, asset dialogs, the canvas composer, the agent panel. |
 | `assets/css/app.css` | Design tokens and layout, dark and light. |
 | `assets/fonts/` | Archivo and Martian Mono (Latin), so the app needs no font server. |

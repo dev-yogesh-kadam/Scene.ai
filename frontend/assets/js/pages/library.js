@@ -14,7 +14,9 @@ export function render(view) {
   let searchTimer;
   const search = el('input', { type: 'text', placeholder: 'Search names and prompts', style: 'max-width:260px',
     oninput: (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { filters.q = e.target.value; drawItems(); }, 250); } });
-  view.replaceChildren(el('div', { class: 'page-head' }, el('h1', {}, 'Library'), search, kinds), projectBar, grid);
+  view.replaceChildren(el('div', { class: 'page-head' }, el('h1', {}, 'Library'),
+    el('a', { class: 'btn quiet', href: '#/assets', title: 'Saved characters, outfits, backgrounds and voices' }, 'Assets'),
+    el('a', { class: 'btn quiet', href: '#/queue' }, 'Queue'), search, kinds), projectBar, grid);
 
   const run = (action) => action().then(draw).catch((e) => alert(e.message));
 
