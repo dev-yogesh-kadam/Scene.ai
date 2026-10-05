@@ -36,6 +36,14 @@ def token_hash(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def client_address(request):
+    """The visitor's address. Through the Cloudflare Tunnel every request arrives from this machine and the
+    visitor's own address is in a header; the header is believed only then, since anyone else could write it."""
+    host = request.client.host if request.client else ""
+    forwarded = request.headers.get("cf-connecting-ip", "").strip()[:64]
+    return forwarded if forwarded and host in ("127.0.0.1", "::1") else host
+
+
 class LoginThrottle:
     """Blocks a key (email + address) for a minute after five wrong passwords."""
 
@@ -43,12 +51,21 @@ class LoginThrottle:
         self.failures = {}
 
     def blocked(self, key):
-        recent = [t for t in self.failures.get(key, []) if time.time() - t < LOCK_SECONDS]
-        self.failures[key] = recent
-        return len(recent) >= MAX_FAILURES
+        return len(self._recent(key)) >= MAX_FAILURES
 
     def fail(self, key):
-        self.failures.setdefault(key, []).append(time.time())
+        # Forget every key whose failures are all over a minute old, so the table does not grow for ever.
+        for old in [k for k in self.failures if k != key]:
+            self._recent(old)
+        self.failures[key] = self._recent(key) + [time.time()]
+
+    def _recent(self, key):
+        recent = [t for t in self.failures.get(key, []) if time.time() - t < LOCK_SECONDS]
+        if recent:
+            self.failures[key] = recent
+        else:
+            self.failures.pop(key, None)
+        return recent
 
     def clear(self, key):
         self.failures.pop(key, None)

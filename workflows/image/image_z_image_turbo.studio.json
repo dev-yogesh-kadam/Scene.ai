@@ -1,0 +1,17 @@
+{
+  "title": "Z-Image Turbo",
+  "description": "Text to image. Fast: 8 steps, a few seconds per image.",
+  "labels": {
+    "57:27:text": "Describe the image: subject, setting, light and style."
+  },
+  "defaults": {
+    "57:27:text": ""
+  },
+  "hide": ["57:3:steps", "57:3:cfg"],
+  "hints": [
+    "Write the prompt as a full description: who or what, where, the light, the camera and the style.",
+    "This model has no negative prompt. Say what you want to see, not what to avoid.",
+    "Text in the picture works best when the exact words are put in quotes.",
+    "Steps and CFG are fixed at 8 and 1, the values this turbo model is made for."
+  ]
+}

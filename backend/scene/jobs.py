@@ -23,6 +23,7 @@ from .comfy.client import ComfyError
 
 VIDEO_TYPES = {".mp4", ".webm", ".mov", ".mkv", ".gif"}
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
+AUDIO_TYPES = {".mp3", ".flac", ".wav", ".opus", ".ogg", ".m4a"}
 CLIP_BREAK = re.compile(r"^\s*-{3,}\s*$", re.M)  # a line of dashes separates per-clip prompts
 
 
@@ -31,12 +32,13 @@ class Cancelled(Exception):
 
 
 class JobManager:
-    def __init__(self, db, comfy, catalog, credits, output_dir, notify):
+    def __init__(self, db, comfy, catalog, credits, outputs, notify, tmp_dir):
         self.db = db
         self.comfy = comfy
         self.catalog = catalog
         self.credits = credits
-        self.output_dir = Path(output_dir)
+        self.outputs = outputs          # where each user's finished work goes
+        self.tmp_dir = Path(tmp_dir)    # working files of chained videos
         self.notify = notify      # notify(user_id, library_changed=False)
         self.live = {}            # job id -> progress of the running job (not stored)
         self.wake = asyncio.Event()
@@ -44,7 +46,7 @@ class JobManager:
         for job in db.all("SELECT id, user_id, cost FROM jobs WHERE status = 'running'"):
             db.run("UPDATE jobs SET status = 'failed', error = ?, finished = ? WHERE id = ?",
                    ("The app was restarted before this job finished.", time.time(), job["id"]))
-            credits.add(job["user_id"], job["cost"], "refund", job["id"])
+            self._refund(job)
 
     # ------------------------------------------------------------ public
 
@@ -64,25 +66,28 @@ class JobManager:
             jobs.append(row)
         return jobs
 
-    def add(self, user_id, name, workflow_id, settings, summary, est_seconds, cost=0, project_id=None):
+    def add(self, user_id, name, workflow_id, settings, summary, est_seconds, cost=0, project_id=None, seconds=None):
+        """`cost` has already been taken from the user: it is held for the job until it finishes or is refunded.
+        `seconds` is the length of the result that was asked for, which is what the price is based on."""
         job_id = uuid.uuid4().hex[:12]
         self.db.run(
             "INSERT INTO jobs (id, user_id, name, workflow, kind, settings, summary, status, est_seconds, cost, "
-            "project_id, created) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)",
+            "credits_required, credits_reserved, seconds_requested, project_id, created) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)",
             (job_id, user_id, name, workflow_id, workflow_id.split("/", 1)[0], json.dumps(settings), summary,
-             est_seconds, cost, project_id, time.time()))
+             est_seconds, cost, cost, cost, seconds, project_id, time.time()))
         self.wake.set()
         self.notify(user_id)
         return job_id
 
     def remove(self, user_id, job_id):
         """Cancel a waiting or running job, or take a finished one off the list."""
-        job = self.db.one("SELECT id, status, cost FROM jobs WHERE id = ? AND user_id = ?", (job_id, user_id))
+        job = self.db.one("SELECT id, user_id, status, cost FROM jobs WHERE id = ? AND user_id = ?", (job_id, user_id))
         if job is None:
             return False
         if job["status"] == "queued":
             self.db.run("UPDATE jobs SET status = 'cancelled', finished = ? WHERE id = ?", (time.time(), job_id))
-            self.credits.add(user_id, job["cost"], "refund", job_id)
+            self._refund(job)
         elif job["status"] == "running":
             self.live.setdefault(job_id, {})["cancel"] = True  # the worker interrupts ComfyUI on its next check
         else:
@@ -100,7 +105,9 @@ class JobManager:
             job["settings"] = json.loads(job["settings"])
             job["started"] = time.time()
             self.live[job["id"]] = {"step": 0, "steps": 0, "titles": {}}
-            self.db.run("UPDATE jobs SET status = 'running', started = ? WHERE id = ?", (job["started"], job["id"]))
+            server = self.db.one("SELECT name FROM servers WHERE renders = 1 AND active = 1 ORDER BY id LIMIT 1")
+            self.db.run("UPDATE jobs SET status = 'running', started = ?, server = ? WHERE id = ?",
+                        (job["started"], server["name"] if server else "", job["id"]))
             self._notify_all_waiting(job["user_id"])
             status, error = "done", None
             try:
@@ -116,10 +123,18 @@ class JobManager:
             self.live.pop(job["id"], None)
             self.db.run("UPDATE jobs SET status = ?, error = ?, finished = ? WHERE id = ?",
                         (status, error, time.time(), job["id"]))
-            if status != "done":
-                self.credits.add(job["user_id"], job["cost"], "refund", job["id"])
+            if status == "done":
+                self.db.run("UPDATE jobs SET credits_reserved = 0, credits_consumed = cost, output_size = "
+                            "(SELECT SUM(size) FROM generations WHERE job_id = jobs.id) WHERE id = ?", (job["id"],))
+            else:
+                self._refund(job)
             self.notify(job["user_id"], library_changed=status == "done")
             self._notify_all_waiting(None)
+
+    def _refund(self, job):
+        """Give back what was held for a job that did not finish."""
+        self.credits.add(job["user_id"], job["cost"], "refund", job["id"])
+        self.db.run("UPDATE jobs SET credits_reserved = 0, credits_refunded = cost WHERE id = ?", (job["id"],))
 
     # ------------------------------------------------------------ one job
 
@@ -143,10 +158,17 @@ class JobManager:
         for item, kind, suffix in _outputs(entry):
             target = folder / "{}{}{}".format(stem, "_{}".format(saved + 1) if saved else "", suffix)
             await self._fetch(item, target)
+            # What the form did not say about the result is read from the file: the frame of a picture
+            # (the canvas draws it at its true proportions) and the length of a sound.
+            found = await media.probe(target)
+            if kind == "audio":
+                ctx = dict(ctx, duration=round(found["seconds"], 1))
+            elif found["width"] and not ctx.get("width"):
+                ctx = dict(ctx, width=found["width"], height=found["height"])
             self._record(job, kind, target, ctx)
             saved += 1
         if not saved:
-            raise ComfyError("ComfyUI finished but saved no image or video. Does the workflow have a Save node?")
+            raise ComfyError("ComfyUI finished but saved no image, video or sound. Does the workflow have a Save node?")
 
     async def _run_chain(self, job, live, wf, schema, clips, client_id):
         settings, slots = job["settings"], schema["slots"]
@@ -161,9 +183,8 @@ class JobManager:
                 (settings.get("values") or {}).get(roles["seed"]["id"], roles["seed"]["default"])))
             full_ctx["seed"] = seed
 
-        tmp_root = self.output_dir.parent / "tmp"
-        tmp_root.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=tmp_root) as tmp:
+        self.tmp_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=self.tmp_dir) as tmp:
             tmp = Path(tmp)
             voice, voice_start = None, 0.0
             if slots.get("voice_track") in refs:
@@ -271,7 +292,7 @@ class JobManager:
     # ------------------------------------------------------------ files
 
     def _target(self, job):
-        folder = self.output_dir / str(job["user_id"])
+        folder = self.outputs.folder(job["user_id"])
         folder.mkdir(parents=True, exist_ok=True)
         stem = "{}_{}".format(re.sub(r"[^\w.-]+", "_", job["name"]).strip("._") or "scene",
                               time.strftime("%Y%m%d_%H%M%S"))
@@ -324,7 +345,7 @@ class JobManager:
 
 
 def _outputs(entry):
-    """The images and videos a finished ComfyUI run saved: (item, kind, file suffix)."""
+    """The images, videos and sounds a finished ComfyUI run saved: (item, kind, file suffix)."""
     for node_output in (entry.get("outputs") or {}).values():
         for items in node_output.values():
             if not isinstance(items, list):
@@ -333,7 +354,7 @@ def _outputs(entry):
                 if not isinstance(item, dict) or item.get("type") != "output" or not item.get("filename"):
                     continue
                 suffix = Path(item["filename"]).suffix.lower()
-                kind = "video" if suffix in VIDEO_TYPES else "image" if suffix in IMAGE_TYPES else None
+                kind = "video" if suffix in VIDEO_TYPES else "image" if suffix in IMAGE_TYPES else "audio" if suffix in AUDIO_TYPES else None
                 if kind:
                     yield item, kind, suffix
 

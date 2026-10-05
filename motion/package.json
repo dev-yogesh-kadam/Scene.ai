@@ -1,0 +1,10 @@
+{
+  "name": "scene-motion",
+  "private": true,
+  "description": "HyperFrames, which Scene.ai uses to render motion graphics (HTML compositions) to video.",
+  "dependencies": {
+    "ffprobe-static": "^3.1.0",
+    "gsap": "^3.14.2",
+    "hyperframes": "0.8.119"
+  }
+}

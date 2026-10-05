@@ -8,7 +8,10 @@ import httpx
 
 from .comfy import workflows
 
-KINDS = ("video", "image")
+KINDS = ("video", "image", "audio")
+# The folders of workflows/. An upscaler makes nothing from a prompt: it takes a video the user has and returns it
+# larger, so it is its own action in the studio and is left out of the Create page and the agent's workflows.
+FOLDERS = (*KINDS, "upscaler")
 
 
 class Catalog:
@@ -30,7 +33,7 @@ class Catalog:
     def files(self):
         """Workflow id ("video/h3_director") -> path."""
         found = {}
-        for kind in KINDS:
+        for kind in FOLDERS:
             folder = self.directory / kind
             if not folder.is_dir():
                 continue

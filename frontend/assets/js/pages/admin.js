@@ -4,6 +4,8 @@ import { el } from '../dom.js';
 import { store } from '../store.js';
 import { overview } from './admin/overview.js';
 import { users, jobs, library, credits, workflows, system, audit, settings } from './admin/sections.js';
+import { pricing } from './admin/pricing.js';
+import { economics } from './admin/economics.js';
 
 const TABS = [
   { id: 'overview', label: 'Overview', draw: overview, live: 15000 },
@@ -11,6 +13,8 @@ const TABS = [
   { id: 'jobs', label: 'Jobs', draw: jobs, live: 5000 },
   { id: 'library', label: 'Library', draw: library },
   { id: 'credits', label: 'Credits', draw: credits },
+  { id: 'pricing', label: 'Pricing', draw: pricing },
+  { id: 'economics', label: 'Economics', draw: economics },
   { id: 'workflows', label: 'Workflows', draw: workflows },
   { id: 'system', label: 'System', draw: system, live: 10000 },
   { id: 'audit', label: 'Audit log', draw: audit },

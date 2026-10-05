@@ -1,0 +1,47 @@
+{
+  "title": "SeedVR2 Upscale",
+  "description": "Makes a video larger and sharper, restoring detail. Its length, motion and sound stay as they are.",
+  "labels": {
+    "73:file": "Video to upscale",
+    "66:105:value": "Work in chunks (for a long video: slower, needs less memory)"
+  },
+  "required_refs": [
+    "73:file"
+  ],
+  "hide": [
+    "66:54"
+  ],
+  "controls": [
+    {
+      "node": "66:57",
+      "input": "resize_type.multiplier",
+      "type": "float",
+      "choices": [
+        1.5,
+        2,
+        3,
+        4
+      ],
+      "label": "Scale",
+      "primary": true
+    },
+    {
+      "node": "66:59",
+      "input": "color_correction_method",
+      "type": "choice",
+      "choices": [
+        "none",
+        "lab",
+        "wavelet",
+        "adain"
+      ],
+      "label": "Colour match"
+    }
+  ],
+  "hints": [
+    "Scale multiplies the size: a 480p video at 2 comes out at 960p.",
+    "A larger scale and a longer video both take more time and memory. Start with 2.",
+    "For a long video, switch on working in chunks.",
+    "If the colours shift, set Colour match to lab, which follows the original most closely."
+  ]
+}

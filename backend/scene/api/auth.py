@@ -6,8 +6,8 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from .. import audit
-from ..security import hash_password, new_token, token_hash, verify_password
-from .deps import COOKIE, current_user
+from ..security import client_address, hash_password, new_token, token_hash, verify_password
+from .deps import COOKIE, current_user, may_use_agent
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -52,12 +52,20 @@ async def register(body: dict, request: Request, response: Response):
         raise HTTPException(400, "The password needs at least {} characters.".format(MIN_PASSWORD))
     if state.db.one("SELECT 1 FROM users WHERE email = ?", (email,)):
         raise HTTPException(409, "There is already an account with this email.")
+    # Every new account is given credits, so one visitor may not make account after account.
+    limit = state.settings.signups_per_day
+    made = state.db.one("SELECT COUNT(*) n FROM audit_log WHERE action = 'Created account' AND ip = ? AND created > ?",
+                        (client_address(request), time.time() - 86400))["n"]
+    if not first_run and limit and made >= limit:
+        audit.record(request, None, "Refused a new account", email, "too many from this address today")
+        raise HTTPException(429, "Too many new accounts were made from here today. Try again tomorrow, or ask an admin.")
     # The first account owns the installation.
     user_id = state.db.run("INSERT INTO users (email, name, password_hash, role, created) VALUES (?, ?, ?, ?, ?)",
                            (email, name, hash_password(password), "admin" if first_run else "user", time.time()))
     state.credits.add(user_id, state.credits.signup, "welcome")
     start_session(request, response, user_id)
-    user = state.db.one("SELECT id, email, name, role, credits FROM users WHERE id = ?", (user_id,))
+    user = state.db.one("SELECT id, email, name, role, credits, agent FROM users WHERE id = ?", (user_id,))
+    user["agent"] = may_use_agent(user)
     audit.record(request, user, "Created account", email)
     return user
 
@@ -66,7 +74,7 @@ async def register(body: dict, request: Request, response: Response):
 async def login(body: dict, request: Request, response: Response):
     state = request.app.state
     email = str(body.get("email", "")).strip().lower()
-    key = "{}|{}".format(email, request.client.host if request.client else "")
+    key = "{}|{}".format(email, client_address(request))
     if state.throttle.blocked(key):
         raise HTTPException(429, "Too many wrong passwords. Wait a minute and try again.")
     user = state.db.one("SELECT * FROM users WHERE email = ?", (email,))
@@ -79,7 +87,7 @@ async def login(body: dict, request: Request, response: Response):
         raise HTTPException(403, "This account is disabled. Ask an admin for access.")
     start_session(request, response, user["id"])
     audit.record(request, user, "Signed in", email)
-    return {k: user[k] for k in ("id", "email", "name", "role", "credits")}
+    return {**{k: user[k] for k in ("id", "email", "name", "role", "credits")}, "agent": may_use_agent(user)}
 
 
 @router.post("/logout")

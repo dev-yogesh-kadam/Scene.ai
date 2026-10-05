@@ -1,0 +1,11 @@
+{
+  "title": "Title over video",
+  "description": "Large words over a video, with the picture dimmed behind them while they show. The video and its sound stay as they are.",
+  "needs": "video",
+  "fields": [
+    {"id": "title", "label": "Title", "type": "text", "max": 60, "required": true, "placeholder": "The harbour"},
+    {"id": "subtitle", "label": "Line under it (optional)", "type": "text", "max": 90, "placeholder": "Six in the morning"},
+    {"id": "place", "label": "Where", "type": "choice", "choices": ["centre", "top", "bottom"], "default": "centre"},
+    {"id": "hold", "label": "Stays for", "type": "choice", "choices": [2, 3, 4, 0], "default": 3, "unit": " s", "names": {"0": "The whole video"}}
+  ]
+}

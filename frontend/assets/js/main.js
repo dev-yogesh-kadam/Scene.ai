@@ -31,6 +31,7 @@ const PAGES = [
   { path: '#/settings', label: 'Settings', icon: 'sliders', page: settings, menu: true },
   { path: '#/admin', label: 'Admin console', icon: 'shield', page: admin, menu: true, adminOnly: true },
 ];
+const LANDING = '#/projects';   // where signing in, or opening the site with no page in the address, leads
 const THEMES = [{ id: 'light', label: 'Light' }, { id: 'dark', label: 'Dark' }, { id: 'system', label: 'Auto', hint: 'Same as this computer' }];
 let leavePage = null;
 let leaveShell = null;
@@ -47,7 +48,8 @@ function showAuth() {
   leavePage = leaveShell = null;
   stopLive();
   store.user = null;
-  renderAuth(root, (user) => { store.user = user; location.hash = PAGES[0].path; showApp(); });   // signing in always lands on Home
+  // Signing in always lands on All projects. replaceState does not fire hashchange, so the page is routed once, by showApp.
+  renderAuth(root, (user) => { store.user = user; history.replaceState(null, '', LANDING); showApp(); });
 }
 
 function showApp() {
@@ -84,7 +86,8 @@ function showApp() {
       el('div', { class: 'spacer' }),
       working,
       credits,
-      el('div', { class: 'server' }, dot, server),
+      // Whether the render server answers is the admin's business; other users are not shown it.
+      store.user.role === 'admin' && el('div', { class: 'server' }, dot, server),
       el('div', { class: 'account-wrap' }, menu, account)),
     view));
 
@@ -108,7 +111,7 @@ function showApp() {
   const drawCredits = () => credits.replaceChildren(el('b', {}, Number(store.user.credits ?? 0).toLocaleString()), 'cr');
   const route = () => {
     const target = PAGES.find((p) => p.path === location.hash);
-    if (!target) { location.hash = PAGES[0].path; return; }
+    if (!target) { location.hash = LANDING; return; }
     if (leavePage) leavePage();
     leavePage = target.page.render(view) || null;
     drawNav();

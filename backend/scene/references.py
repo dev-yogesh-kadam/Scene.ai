@@ -5,7 +5,10 @@ import mimetypes
 import re
 from pathlib import Path
 
+from fastapi import HTTPException
+
 UPLOAD_PREFIX = "scene_"
+MAX_BYTES = 200 * 1024 * 1024
 KINDS = {
     "image": {".png", ".jpg", ".jpeg", ".webp"},
     "video": {".mp4", ".webm", ".mov", ".mkv"},
@@ -20,6 +23,16 @@ def media_kind(filename):
 
 def safe_name(filename):
     return re.sub(r"[^\w.-]+", "_", Path(filename or "file").name) or "file"
+
+
+async def read_upload(upload):
+    """The bytes of an uploaded file. One that is too large is refused before it is read into memory."""
+    if (upload.size or 0) > MAX_BYTES:
+        raise HTTPException(413, "{} is larger than 200 MB.".format(upload.filename or "The file"))
+    data = await upload.read()
+    if len(data) > MAX_BYTES:
+        raise HTTPException(413, "{} is larger than 200 MB.".format(upload.filename or "The file"))
+    return data
 
 
 async def upload_reference(comfy, filename, data, mime=None):

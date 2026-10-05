@@ -1,7 +1,7 @@
 // The All projects page: every project as a card with its newest item as the thumbnail. Opening one goes to its Canvas.
 
 import { api } from '../api.js';
-import { el, icon, ago, initials } from '../dom.js';
+import { still, el, icon, ago, initials } from '../dom.js';
 import { subscribe } from '../store.js';
 import { projectDialog } from '../components/projects.js';
 
@@ -32,9 +32,7 @@ export function render(view) {
   const act = (fn) => (e) => { e.stopPropagation(); fn(); };   // a button on a card must not also open the card
 
   // The newest item is the thumbnail. A project with nothing in it yet shows its initials.
-  const cover = (p) => (!p.cover_id ? initials(p.name)
-    : p.cover_kind === 'video' ? el('video', { src: `/api/library/${p.cover_id}/file#t=0.1`, preload: 'metadata', muted: true })
-      : el('img', { src: `/api/library/${p.cover_id}/file`, alt: '', loading: 'lazy' }));
+  const cover = (p) => (p.cover_id ? still(`/api/library/${p.cover_id}/file`, p.cover_kind, p.name) : initials(p.name));
 
   const card = (p) => el('div', { class: 'pcard', role: 'button', tabindex: '0', 'aria-label': 'Open ' + p.name,
     onclick: () => open(p.id), onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) open(p.id); } },

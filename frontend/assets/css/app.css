@@ -294,6 +294,7 @@ dialog h2 { font-size: 16px; margin-bottom: 6px; }
 dialog.viewer { width: min(1280px, 95vw); max-width: none; padding: 0; overflow: hidden; }
 .viewer-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: min(760px, 88vh); }
 .viewer-media { background: var(--media-ground); display: grid; place-items: center; min-width: 0; min-height: 0; }
+.viewer-media audio { width: min(520px, 90%); }
 .viewer-media video, .viewer-media img { max-width: 100%; max-height: min(760px, 88vh); display: block; }
 .viewer-panel { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); }
 .viewer-title { display: flex; align-items: center; gap: 10px; padding: 16px 14px 14px 20px; border-bottom: 1px solid var(--line); }
@@ -448,6 +449,10 @@ svg.run rect { fill: none; rx: 12px; stroke: var(--accent); stroke-width: 2; str
 .frame { position: absolute; width: 240px; cursor: grab; user-select: none; }
 .frame .shot { background: var(--media-ground); border-radius: var(--radius-media); }
 .frame .shot img, .frame .shot video { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; border-radius: var(--radius-media); }
+/* A sound has no picture: a mark and its name stand in for one. */
+.sound { width: 100%; height: 100%; display: grid; place-content: center; justify-items: center; gap: 6px; padding: 8px; color: var(--muted); font: 500 12px/16px var(--sans); text-align: center; overflow: hidden; }
+.sound svg.icon { width: 28px; height: 28px; }
+.sound span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .frame.selected .shot { box-shadow: 0 0 0 calc(1px * var(--inv, 1)) var(--accent); }
 .frame .slate { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; font: 400 12px/16px var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden; }
 .frame .slate b { font-weight: 600; text-transform: capitalize; color: var(--text); }
@@ -455,6 +460,10 @@ svg.run rect { fill: none; rx: 12px; stroke: var(--accent); stroke-width: 2; str
 .frame.developing { cursor: default; }
 .frame.developing .shot { position: relative; display: grid; place-items: center; background: var(--hover); color: var(--accent); font: 400 12px/16px var(--sans); }
 .canvas-stage.far .slate { visibility: hidden; }
+/* The name of a shot, left of its row of frames. --inv is 1 / zoom, so the names stay readable when zoomed out. */
+.shot-label { position: absolute; display: flex; align-items: center; justify-content: flex-end; padding: 0 8px; border: 0; border-radius: var(--radius-s); background: none; color: var(--muted); font: 500 calc(13px * min(var(--inv, 1), 2.4))/1.3 var(--sans); text-align: right; white-space: nowrap; cursor: text; overflow: hidden; }
+.shot-label:hover { color: var(--text); }
+.shot-label .shot-name { width: 100%; height: auto; padding: 2px 6px; font: inherit; text-align: right; }
 .canvas-bar { position: absolute; left: 12px; top: 12px; gap: 12px; padding: 4px 12px 4px 4px; }
 .canvas-bar select { width: auto; max-width: 220px; height: 28px; padding: 0 8px; font-size: 12px; }
 .canvas-context { position: absolute; z-index: 2; }
@@ -464,8 +473,8 @@ svg.run rect { fill: none; rx: 12px; stroke: var(--accent); stroke-width: 2; str
 .minimap i { background: var(--control); }
 .minimap i.on { background: var(--brand); }
 .minimap b { border: 1px solid var(--text); }
-.canvas-dock { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); width: min(760px, calc(100% - 32px)); z-index: 3; }
-.canvas-hint { margin-bottom: 12px; text-align: center; }
+.canvas-hint { position: absolute; left: 16px; right: 16px; top: 50%; margin: 0; text-align: center; pointer-events: none; }
+.with-panel .canvas-hint { right: calc(var(--panel-w, 380px) + 28px); }
 
 /* ---------------------------------------------------------------- composer */
 .composer { background: var(--material); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border: 1px solid var(--line-strong); border-radius: 20px; box-shadow: var(--shadow); }
@@ -510,14 +519,76 @@ svg.run rect { fill: none; rx: 12px; stroke: var(--accent); stroke-width: 2; str
 .btn.agent { color: var(--agent); background: var(--agent-soft); }
 .btn.agent:hover, .btn.on { background: var(--agent-soft); }
 .btn.on { color: var(--agent); }
-.agent-panel { position: absolute; right: 12px; top: 60px; bottom: 16px; width: 380px; max-width: calc(100% - 24px); z-index: 4; display: none; flex-direction: column; background: var(--material); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border: 1px solid var(--line-strong); border-radius: 20px; box-shadow: var(--shadow); }
-.with-agent .agent-panel { display: flex; }
-.with-agent .minimap { display: none; }
-.with-agent .canvas-dock { left: calc((100% - 392px) / 2); width: min(760px, calc(100% - 424px)); }
-@media (max-width: 1100px) { .with-agent .canvas-dock { display: none; } }
+/* The panel on the right of the canvas: Quick action and the Agent, one at a time. */
+.side-panel { position: absolute; right: 12px; top: 60px; bottom: 16px; width: var(--panel-w, 380px); max-width: calc(100% - 24px); z-index: 4; display: none; flex-direction: column; background: var(--material); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border: 1px solid var(--line-strong); border-radius: 20px; box-shadow: var(--shadow); }
+.with-panel .side-panel { display: flex; }
+.with-panel .minimap { right: calc(var(--panel-w, 380px) + 24px); }
+/* The left edge of the panel, to drag it wider or narrower. */
+.panel-grip { position: absolute; left: -5px; top: 20px; bottom: 20px; width: 10px; z-index: 1; cursor: ew-resize; touch-action: none; }
+.panel-grip::after { content: ""; position: absolute; left: 4px; top: calc(50% - 20px); width: 3px; height: 40px; border-radius: 2px; background: var(--control); opacity: 0; transition: opacity .2s var(--ease); }
+.panel-grip:hover::after, .resizing .panel-grip::after { opacity: 1; }
+.resizing { cursor: ew-resize; user-select: none; }
+.resizing .canvas-stage { pointer-events: none; }
+@media (max-width: 900px) { .with-panel .minimap, .with-panel .canvas-hint { display: none; } }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border-bottom: 1px solid var(--line); }
+.agent-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.panel-head { padding-left: 14px; }
+/* The cast: the references pinned to a project, one row per role. */
+.cast-count:not(:empty) { margin-left: 2px; padding: 0 5px; border-radius: 8px; background: var(--hover); color: var(--text); font: 600 11px/16px var(--sans); }
+.cast-box { display: grid; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); max-height: 60%; overflow-y: auto; }
+.cast-row { display: flex; align-items: center; gap: 10px; }
+.cast-row .attach-thumb { width: 36px; height: 36px; border-radius: 8px; }
+.cast-words { flex: 1; min-width: 0; display: grid; }
+.cast-words b { font-size: 13px; font-weight: 600; }
+.cast-words .slate-text { overflow: hidden; text-overflow: ellipsis; }
+.panel-title { font: 600 14px/20px var(--sans); }
+.panel-head .seg button { padding: 0 9px; display: grid; place-items: center; }
+/* Quick actions: a list of things to make, then a short form for the one that was picked. */
+.panel-quick, .quick { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.quick-head { display: flex; align-items: center; gap: 6px; padding: 8px 8px 0; font-size: 14px; }
+.quick-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; }
+.quick-body > .field:first-child { margin-top: 0; }
+.quick-body textarea { min-height: 0; resize: none; font-size: 14px; }
+.quick-body .notice:empty { display: none; }
+.quick-body .field > .label .btn.small { height: 24px; }
+.btn .cell-mark { margin-top: 0; }
+.quick-body .composer-start:not(:empty) { padding: 14px 0 0; }
+.quick-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; margin-top: 12px; }
+.quick-action { cursor: pointer; display: grid; gap: 6px; align-content: start; min-height: 96px; padding: 12px; border: 0; border-radius: 12px; background: var(--hover); color: var(--text); text-align: left; transition: background .2s var(--ease); }
+.quick-action b { font-size: 13px; font-weight: 600; line-height: 17px; }
+.quick-action .slate-text { white-space: normal; }
+.quick-action:hover { background: var(--active); }
+.quick-action:disabled { cursor: default; background: var(--hover); color: var(--muted); opacity: .6; }
+.slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.slot { display: grid; gap: 4px; justify-items: start; min-width: 0; }
+.slot-label { max-width: 100%; font: 500 11px/16px var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slot-box { cursor: pointer; width: 100%; aspect-ratio: 1; display: grid; place-items: center; padding: 0; overflow: hidden; border: 1px dashed var(--line-strong); border-radius: var(--radius-s); background: none; color: var(--muted); transition: border-color .2s var(--ease), background .2s var(--ease); }
+.slot-box:hover, .slot-box.over { border-color: var(--control); background: var(--hover); color: var(--text); }
+.slot-box.filled { border-style: solid; }
+.slot-box.cast { border-color: var(--accent); }
+.slot-box img, .slot-box video { width: 100%; height: 100%; object-fit: cover; }
+.slot .btn.small { height: 22px; padding: 0 6px; font-size: 11px; }
+.quick-source { margin-top: 14px; padding: 10px 12px; border-radius: var(--radius-s); background: var(--hover); font-size: 13px; }
+.quick-source.missing { color: var(--muted); }
+.scene-card { display: grid; gap: 6px; margin-top: 10px; padding: 8px 10px 10px; border-radius: 12px; background: var(--hover); }
+.scene-top { display: flex; align-items: center; gap: 6px; }
+.scene-top .slate-text { min-width: 14px; }
+.scene-top .icon-btn:disabled { cursor: default; opacity: .35; }
+.quick-foot { display: grid; gap: 10px; padding: 12px; border-top: 1px solid var(--line); }
+.quick-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+select.opt, a.opt { width: auto; max-width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 14px; background: var(--hover); color: var(--text); font: 500 12px/28px var(--sans); text-decoration: none; }
+select.opt:hover, a.opt:hover { background: var(--active); }
+a.opt { color: var(--muted); display: inline-block; }
+.quick-foot .btn.generate { height: 44px; width: 100%; }
+select.agent-model { max-width: 190px; height: 26px; color: var(--muted); }
+.agent-panel.soon { align-items: center; justify-content: center; padding: 24px; }
+.soon-box { display: grid; justify-items: center; gap: 10px; width: 100%; max-width: 300px; padding: 28px 24px; text-align: center; border: 1px solid var(--line); border-radius: 16px; background: var(--hover); }
+.soon-box svg.icon { width: 30px; height: 30px; padding: 12px; box-sizing: content-box; border-radius: 50%; background: var(--agent-soft); color: var(--agent); }
+.soon-box b { font-size: 15px; font-weight: 600; }
+.soon-box p { margin: 0; line-height: 1.5; }
+.soon-tag { padding: 2px 10px; border-radius: 10px; background: var(--agent-soft); color: var(--agent); font: 600 11px/18px var(--sans); letter-spacing: .02em; }
 .agent-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--line); }
 .agent-name, h3.agent-label { color: var(--agent); }
-.agent-name { font: 500 12px/16px var(--sans); }
 .agent-brief { padding: 12px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
 .agent-brief textarea { min-height: 0; font-size: 13px; }
 .agent-context { padding: 10px 14px 0; gap: 6px; }
@@ -531,7 +602,7 @@ svg.run rect { fill: none; rx: 12px; stroke: var(--accent); stroke-width: 2; str
 .agent-step-body { display: grid; gap: 2px; min-width: 0; }
 .agent-step-body b { font-size: 13px; font-weight: 600; }
 .agent-step-body .slate-text { white-space: normal; }
-.agent-step.running, .agent-step.queued { background: var(--agent-soft); }
+.agent-step.running, .agent-step.queued, .agent-step.waiting { background: var(--agent-soft); }
 .agent-step.running > .slate-text, .agent-step.queued > .slate-text { color: var(--agent); }
 .agent-step.failed > .slate-text { color: var(--bad); }
 /* The Cell as a status mark: empty = not started, filled = done, stepping = working. */
@@ -542,6 +613,20 @@ svg.run rect { fill: none; rx: 12px; stroke: var(--accent); stroke-width: 2; str
 .agent-step.running .cell-mark::before, .cell-mark.stepping::before { content: ""; position: absolute; left: 2px; top: 2px; width: 4px; height: 4px; background: var(--agent); animation: cell-step 667ms steps(1) infinite; }
 .cell-mark.stepping { margin: 0 2px 0 0; }
 .agent-approve { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 12px; background: var(--raised); border-top: 1px solid var(--line-strong); border-radius: 0 0 12px 12px; }
+/* The message box: typed text with chips in it, one per attached item (a small picture and its name). */
+.agent-input { flex: 1; min-width: 0; min-height: 60px; max-height: 220px; overflow-y: auto; padding: 8px 12px; background: var(--field); border: 1px solid var(--line); border-radius: var(--radius-s); font-size: 13px; line-height: 28px; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; transition: border-color .2s var(--ease); }
+.agent-input:hover { border-color: var(--muted); }
+.agent-input:focus { outline: 3px solid color-mix(in srgb, var(--focus) 45%, transparent); outline-offset: 1px; }
+.agent-input:empty::before { content: attr(data-placeholder); color: var(--muted); line-height: 20px; display: block; padding: 4px 0; }
+.attach { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 24px; margin: 0 1px; padding: 0 2px; vertical-align: middle; border-radius: 7px; background: var(--agent-soft); color: var(--agent); font: 500 12px/16px var(--sans); white-space: nowrap; user-select: none; cursor: default; }
+.attach-thumb { width: 20px; height: 20px; flex: none; border-radius: 5px; overflow: hidden; background: var(--media-ground); }
+.attach-thumb img, .attach-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-thumb .sound { padding: 0; }
+.attach-thumb .sound span { display: none; }
+.attach-thumb .sound svg.icon { width: 12px; height: 12px; }
+.attach-name { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+.attach-drop { width: 16px; height: 20px; padding: 0; border: 0; background: none; color: inherit; opacity: .7; cursor: pointer; font-size: 13px; line-height: 1; }
+.attach-drop:hover { opacity: 1; }
 .agent-foot { display: flex; align-items: flex-end; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
 .agent-foot textarea { min-height: 0; resize: none; font-size: 13px; }
 .frame.by-agent .shot { color: var(--agent); }

@@ -1,7 +1,7 @@
 // Cards for finished images and videos, and the viewer with its details panel.
 
 import { api } from '../api.js';
-import { el, duration, when } from '../dom.js';
+import { still, el, duration, when } from '../dom.js';
 import { store } from '../store.js';
 import { saveAssetDialog } from './assets.js';
 
@@ -45,7 +45,9 @@ export function detailsOf(item, { owner } = {}) {
 // base: where the file is served from. owner: show who made it (admin). actions: extra buttons.
 export function openViewer(item, { base = '/api/library', owner = false, actions = [] } = {}) {
   const url = `${base}/${item.id}/file`;
-  const media = item.kind === 'video' ? el('video', { src: url, controls: true, autoplay: true, loop: true }) : el('img', { src: url, alt: item.name });
+  const media = item.kind === 'video' ? el('video', { src: url, controls: true, autoplay: true, loop: true })
+    : item.kind === 'audio' ? el('audio', { src: url, controls: true, autoplay: true })
+      : el('img', { src: url, alt: item.name });
   const promptText = promptOf(item);
   const copy = el('button', { class: 'btn small quiet', onclick: async () => {
     try { await navigator.clipboard.writeText(promptText); copy.textContent = 'Copied'; } catch (e) { copy.textContent = 'Copy failed'; }
@@ -75,7 +77,7 @@ async function useAsFirstFrame(item, button) {
   if (button) button.disabled = true;
   try {
     const ref = await api(`/api/library/${item.id}/reference`, { method: 'POST' });
-    store.prefill = { slot: 'first_frame', ref };
+    store.prefill = { slot: 'first_frame', ref, parent: item.id };
     location.hash = '#/create';
     return true;
   } catch (e) { alert(e.message); if (button) button.disabled = false; return false; }
@@ -84,9 +86,8 @@ async function useAsFirstFrame(item, button) {
 // `manage` adds the library-only actions: move to a project, save as asset, delete.
 export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
   const fileUrl = `/api/library/${item.id}/file`;
-  const thumb = item.kind === 'video'
-    ? el('video', { src: fileUrl + '#t=0.1', preload: 'metadata', muted: true })
-    : el('img', { src: fileUrl, alt: item.name, loading: 'lazy' });
+  const thumb = still(fileUrl, item.kind, item.name);
+  const sound = item.kind === 'audio';   // a sound can't be the first frame of a video
   const rerun = () => { store.rerun = item; location.hash = '#/create'; };
   const next = item.kind === 'video' ? 'Continue' : 'Use as first frame';
   const remove = async () => {
@@ -102,7 +103,7 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
   const edited = item.workflow.startsWith('edit/');   // a timeline export: there is no form to re-run
   const view = () => openViewer(item, { actions: [
     !edited && { label: 'Re-run', run: (dialog) => { dialog.close(); rerun(); } },
-    { label: next, run: async (dialog) => { if (await useAsFirstFrame(item)) dialog.close(); } },
+    !sound && { label: next, run: async (dialog) => { if (await useAsFirstFrame(item)) dialog.close(); } },
   ].filter(Boolean) });
   return el('div', { class: 'media' },
     el('div', { class: 'thumb', onclick: view }, thumb, el('span', { class: 'kind' }, item.kind)),
@@ -112,7 +113,7 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
       el('div', { class: 'row' },
         el('a', { class: 'btn small', href: fileUrl + '?download=true', download: item.filename }, 'Download'),
         !edited && el('button', { class: 'btn small', onclick: rerun, title: 'Open Create with the same settings' }, 'Re-run'),
-        el('button', { class: 'btn small', onclick: (e) => useAsFirstFrame(item, e.currentTarget),
+        !sound && el('button', { class: 'btn small', onclick: (e) => useAsFirstFrame(item, e.currentTarget),
           title: item.kind === 'video' ? 'Start a new video on the last frame of this one' : 'Start a video on this image' }, next)),
       manage && el('div', { class: 'row' },
         el('select', { class: 'small', title: 'Project', onchange: move },

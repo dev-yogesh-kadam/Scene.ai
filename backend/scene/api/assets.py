@@ -7,12 +7,11 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from ..references import media_kind, safe_name
+from ..references import media_kind, read_upload, safe_name
 from .deps import current_user
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 TAGS = ("character", "outfit", "background", "prop", "voice", "other")
-MAX_BYTES = 200 * 1024 * 1024
 
 
 def _folder(request, user):
@@ -52,7 +51,7 @@ async def create_asset(request: Request, user: dict = Depends(current_user)):
         body = await request.json()
         item = request.app.state.db.one("SELECT * FROM generations WHERE id = ? AND user_id = ?",
                                         (body.get("generation_id"), user["id"]))
-        source = item and request.app.state.output_dir / str(user["id"]) / item["filename"]
+        source = item and request.app.state.outputs.folder(user["id"]) / item["filename"]
         if not item or not source.is_file():
             raise HTTPException(404, "No such library item.")
         filename = "{}_{}".format(int(time.time()), source.name)
@@ -67,9 +66,7 @@ async def create_asset(request: Request, user: dict = Depends(current_user)):
     kind = media_kind(upload.filename)
     if kind is None:
         raise HTTPException(400, "Use an image, video or audio file.")
-    data = await upload.read()
-    if len(data) > MAX_BYTES:
-        raise HTTPException(400, "The file is larger than 200 MB.")
+    data = await read_upload(upload)
     filename = "{}_{}".format(hashlib.sha1(data).hexdigest()[:10], safe_name(upload.filename))
     (_folder(request, user) / filename).write_bytes(data)
     return _insert(request, user, str(form.get("name") or upload.filename.rsplit(".", 1)[0]),

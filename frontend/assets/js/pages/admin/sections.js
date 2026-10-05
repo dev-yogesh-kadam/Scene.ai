@@ -1,7 +1,7 @@
 // The admin console's list sections: users, jobs, library, credits, workflows, system, audit log, settings.
 
 import { api } from '../../api.js';
-import { el, field, segmented } from '../../dom.js';
+import { still, el, field, segmented } from '../../dom.js';
 import { store, refreshStatus } from '../../store.js';
 import { meter } from '../../components/charts.js';
 import { openViewer } from '../../components/media.js';
@@ -10,9 +10,7 @@ import { number, bytes, span, ago, stamp, person, pill, tile, table, searchBox, 
 const REASON = { welcome: 'Sign-up credits', generation: 'Generation', refund: 'Refund', 'admin grant': 'Changed by an admin' };
 const act = (ctx, request) => request.then(ctx.draw).catch((e) => alert(e.message));
 const itemUrl = (id) => `/api/admin/library/${id}/file`;
-const thumb = (item) => item.kind === 'video'
-  ? el('video', { src: itemUrl(item.id) + '#t=0.1', preload: 'metadata', muted: true })
-  : el('img', { src: itemUrl(item.id), alt: item.name, loading: 'lazy' });
+const thumb = (item) => still(itemUrl(item.id), item.kind, item.name);
 
 // ---------------------------------------------------------------- give or take credits
 
@@ -82,6 +80,8 @@ function userActions(ctx, u, after) {
     !self && el('button', { class: 'btn small', onclick: () => {
       if (confirm(`Make ${u.name} ${u.role === 'admin' ? 'a normal user' : 'an admin'}?`)) put({ role: u.role === 'admin' ? 'user' : 'admin' });
     } }, u.role === 'admin' ? 'Make user' : 'Make admin'),
+    u.role !== 'admin' && el('button', { class: 'btn small', title: 'The agent is "coming soon" for users who have not been given it. Admins always have it.',
+      onclick: () => put({ agent: !u.agent }) }, u.agent ? 'Take agent away' : 'Give agent access'),
     !self && el('button', { class: 'btn small quiet danger', onclick: () => {
       if (u.disabled || confirm(`Disable ${u.name}? They are signed out and can't sign in until you enable them again.`)) put({ disabled: !u.disabled });
     } }, u.disabled ? 'Enable account' : 'Disable account'));
@@ -96,6 +96,7 @@ async function openUser(ctx, id) {
       el('div', { class: 'drawer-title' }, el('div', { class: 'avatar' }, (u.name[0] || '?').toUpperCase()),
         el('div', {}, el('b', {}, u.name), el('div', { class: 'muted' }, u.email)),
         el('span', { class: 'pill ' + (u.role === 'admin' ? 'running' : 'queued') }, u.role),
+        u.role !== 'admin' && u.agent ? el('span', { class: 'pill done' }, 'Agent') : null,
         u.disabled ? el('span', { class: 'pill failed' }, 'Disabled') : null),
       el('div', { class: 'tiles small-tiles' },
         tile('Credits', number(u.credits), `${number(u.spent)} spent`),
@@ -156,7 +157,9 @@ async function openJob(ctx, id) {
         }
       } }, 'Cancel this job'),
       section('Details', facts([
-        ['Workflow', j.workflow], ['Settings', j.summary], ['Credits', String(j.cost) + (j.status === 'done' || active ? '' : ' (refunded)')],
+        ['Workflow', j.workflow], ['Settings', j.summary],
+        ['Credits', String(j.cost) + (j.credits_reserved ? ' (held)' : j.credits_consumed ? ' (used)' : j.status === 'done' || active ? '' : ' (refunded)')],
+        ['Length asked for', j.seconds_requested ? span(j.seconds_requested) : null], ['Server', j.server], ['Output size', j.output_size ? bytes(j.output_size) : null],
         ['Added', stamp(j.created)], ['Waited in queue', j.started ? span(j.started - j.created) : 'Not started'],
         ['Render time', j.finished && j.started ? span(j.finished - j.started) : null], ['Estimated', j.est_seconds ? span(j.est_seconds) : 'No estimate'],
         ['Job id', j.id]])),
@@ -216,7 +219,7 @@ export async function library(ctx) {
   const page = Math.floor(s.offset / 50) + 1;
   return [
     el('div', { class: 'toolbar' },
-      segmented([{ id: '', label: 'All' }, { id: 'video', label: 'Videos' }, { id: 'image', label: 'Images' }], s.kind, (v) => { s.kind = v; s.offset = 0; ctx.draw(); }),
+      segmented([{ id: '', label: 'All' }, { id: 'video', label: 'Videos' }, { id: 'image', label: 'Images' }, { id: 'audio', label: 'Audio' }], s.kind, (v) => { s.kind = v; s.offset = 0; ctx.draw(); }),
       el('select', { class: 'filter', 'aria-label': 'User', onchange: change('owner') },
         el('option', { value: '' }, 'All users'),
         data.owners.map((u) => el('option', { value: u.id, selected: String(u.id) === s.owner }, `${u.name} (${u.items})`))),
@@ -229,7 +232,7 @@ export async function library(ctx) {
     el('div', { class: 'card' }, table(
       ['Name', 'Type', 'User', 'Project', 'Workflow', 'Settings', 'Size', 'Made'],
       data.items.map((item) => [
-        el('b', {}, item.name), item.kind === 'video' ? 'Video' : 'Image', person(item.user_name, item.user_email),
+        el('b', {}, item.name), { video: 'Video', image: 'Image', audio: 'Audio' }[item.kind] || item.kind, person(item.user_name, item.user_email),
         item.project_name || el('span', { class: 'muted' }, 'None'), item.settings.workflow_title || item.workflow.split('/')[1].replace(/_/g, ' '),
         el('span', { class: 'small' }, item.summary), bytes(item.size), stamp(item.created)]),
       { onRow: (i) => open(data.items[i]), empty: 'No items match.' })),
@@ -335,12 +338,10 @@ export async function settings() {
   const url = el('input', { type: 'text', value: current.comfy_url });
   const signup = el('input', { type: 'checkbox', checked: current.allow_signup });
   const welcome = el('input', { type: 'number', min: 0, step: 1, value: current.signup_credits });
-  const rate = el('input', { type: 'number', min: 0, step: 'any', value: current.credits_per_minute });
   const notice = el('p', { class: 'notice' });
   const save = async () => {
     try {
-      await api('/api/admin/settings', { method: 'PUT', json: { comfy_url: url.value, allow_signup: signup.checked,
-        signup_credits: welcome.value, credits_per_minute: rate.value } });
+      await api('/api/admin/settings', { method: 'PUT', json: { comfy_url: url.value, allow_signup: signup.checked, signup_credits: welcome.value } });
       await refreshStatus();
       notice.className = 'notice ' + (store.online ? 'ok' : 'error');
       notice.textContent = store.online ? 'Saved. The render server is online.' : 'Saved, but the render server does not answer at this address.';
@@ -352,8 +353,8 @@ export async function settings() {
     el('h3', {}, 'Accounts'),
     el('label', { class: 'check', style: 'margin-top:0' }, signup, 'Anyone who can open this site may create an account'),
     el('h3', {}, 'Credits'),
-    el('div', { class: 'grid2' }, field('Credits for a new account', welcome), field('Credits per estimated GPU minute', rate)),
-    el('p', { class: 'muted small', style: 'margin-top:8px' }, 'A 5-second draft takes about 0.9 GPU minutes, so at 10 credits per minute it costs 9 credits.'),
+    field('Credits for a new account', welcome),
+    el('p', { class: 'muted small', style: 'margin-top:8px' }, 'What each kind of work costs is set in the Pricing section.'),
     notice,
     el('button', { class: 'btn primary', style: 'margin-top:12px', onclick: save }, 'Save'))];
 }

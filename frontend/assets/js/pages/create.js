@@ -8,7 +8,7 @@ import { mediaCard } from '../components/media.js';
 import { pickAsset, saveAssetDialog } from '../components/assets.js';
 
 const ACCEPT = { image: 'image/*', video: 'video/*', audio: 'audio/*,video/*' };
-const KIND_LABEL = { video: 'Video', image: 'Image' };
+const KIND_LABEL = { video: 'Video', image: 'Image', audio: 'Audio' };
 
 export function render(view) {
   const form = {
@@ -19,6 +19,7 @@ export function render(view) {
     projectId: Number(localStorage.getItem('scene.project')) || null, projects: [],
     refs: {},        // slot id -> {file}, {existing: name on the render server} or {assetId}, plus {name, url}
     estimate: '', cost: null,
+    parent: null,    // the library item this is made from (a re-run, or its first frame), so the result joins its row on the canvas
   };
 
   const tabs = el('div');
@@ -121,7 +122,7 @@ export function render(view) {
     // A library item sent here with "Use as first frame".
     if (store.prefill) {
       const slot = wf.refs.find((r) => r.id === wf.slots[store.prefill.slot]);
-      if (slot) form.refs[slot.id] = existingRef(store.prefill.ref);
+      if (slot) { form.refs[slot.id] = existingRef(store.prefill.ref); form.parent = store.prefill.parent || null; }
       else showError(new Error('This workflow has no first-frame slot. Pick one that has, such as H3 Director.'));
       store.prefill = null;
     }
@@ -325,7 +326,7 @@ export function render(view) {
     }
     return { workflow: form.wf.id, name: form.name, values: form.values, options: form.options,
       resolution: form.resolution, orientation: form.orientation, seed_mode: form.seedMode,
-      clips: form.wf.chain ? form.clips : 1, project_id: form.projectId, refs };
+      clips: form.wf.chain ? form.clips : 1, project_id: form.projectId, parent: form.parent, refs };
   }
 
   let estimateTimer;
@@ -414,7 +415,7 @@ export function render(view) {
 
   const rerun = store.rerun;
   store.rerun = null;
-  if (rerun) form.kind = rerun.workflow.split('/')[0];
+  if (rerun) { form.kind = rerun.workflow.split('/')[0]; form.parent = rerun.id; }
   if (store.prefill) form.kind = 'video';
   loadCatalog(rerun && rerun.workflow, rerun && rerun.settings).catch(showError);
   drawQueue();

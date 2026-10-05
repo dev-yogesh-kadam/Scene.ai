@@ -57,7 +57,7 @@ export function render(view) {
 
   async function draw() {
     kinds.replaceChildren(segmented(
-      [{ id: '', label: 'All' }, { id: 'video', label: 'Videos' }, { id: 'image', label: 'Images' }], filters.kind,
+      [{ id: '', label: 'All' }, { id: 'video', label: 'Videos' }, { id: 'image', label: 'Images' }, { id: 'audio', label: 'Audio' }], filters.kind,
       (k) => { filters.kind = k; draw(); }));
     try { projects = (await api('/api/projects')).projects; } catch (e) { projects = []; }
     drawProjects();

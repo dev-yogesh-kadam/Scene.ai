@@ -12,7 +12,7 @@ const POINTS = [
 export async function renderAuth(root, onSignedIn) {
   let info = { first_run: false, signup_open: false };
   try { info = await api('/api/auth/state'); } catch (e) { /* show sign-in anyway */ }
-  let mode = info.first_run ? 'register' : 'login';
+  let mode = 'login';
 
   const draw = (message) => {
     const register = mode === 'register';
@@ -49,11 +49,11 @@ export async function renderAuth(root, onSignedIn) {
         el('div', { class: 'auth-points' }, POINTS.map((p) => el('div', {}, icon('check'), p)))),
       el('div', { class: 'auth-side' }, el('div', { class: 'auth-card' },
         el('h1', {}, register ? (info.first_run ? 'Set up Scene.ai' : 'Create your account') : 'Welcome back'),
-        el('p', { class: 'muted' }, info.first_run
+        el('p', { class: 'muted' }, !register ? 'Sign in to your studio.' : info.first_run
           ? 'Create the first account. It becomes the admin of this installation.'
-          : register ? 'It takes a few seconds.' : 'Sign in to your studio.'),
+          : 'It takes a few seconds.'),
         form,
-        !info.first_run && info.signup_open && el('div', { class: 'auth-switch muted' },
+        info.signup_open && el('div', { class: 'auth-switch muted' },
           register ? 'Already have an account? ' : 'New here? ',
           el('button', { type: 'button', onclick: () => { mode = register ? 'login' : 'register'; draw(); } },
             register ? 'Sign in' : 'Create an account'))))));

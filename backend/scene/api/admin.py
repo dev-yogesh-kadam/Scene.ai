@@ -14,9 +14,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
 from .. import __version__, audit, media
+from ..catalog import KINDS
+from ..credits import MOTION, OVERLAY, PER_JOB, RATES
 from ..security import hash_password
 from .auth import MIN_PASSWORD, signup_open
 from .deps import admin_user
+from .library import poster_response
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 DAY = 86400
@@ -27,7 +30,7 @@ LOCAL_DAY = "date({}, 'unixepoch', 'localtime')"
 
 def _settings(state):
     return {"comfy_url": state.comfy.url, "allow_signup": signup_open(state),
-            "signup_credits": state.credits.signup, "credits_per_minute": state.credits.per_minute}
+            "signup_credits": state.credits.signup}
 
 
 def _number(body, key, maximum):
@@ -118,7 +121,8 @@ async def overview(request: Request, days: int = 30, user: dict = Depends(admin_
     unreadable = [w["title"] for w in await state.catalog.listing() if w.get("error")]
     if unreadable:
         attention.append({"level": "warning", "text": "Workflows that can't be read: {}.".format(", ".join(unreadable)), "tab": "workflows"})
-    disk = shutil.disk_usage(state.output_dir.parent)
+    state.output_dir.mkdir(parents=True, exist_ok=True)
+    disk = shutil.disk_usage(state.output_dir)   # finished work is what fills a disk
     if disk.free < 10 * 1024 ** 3:
         attention.append({"level": "serious", "text": "Only {:.1f} GB of disk space is left for storage.".format(disk.free / 1024 ** 3), "tab": "system"})
     stuck = db.one("SELECT COUNT(*) n FROM jobs WHERE status = 'queued' AND created < ?", (now - 3600,))["n"]
@@ -176,7 +180,7 @@ async def overview(request: Request, days: int = 30, user: dict = Depends(admin_
 # ---------------------------------------------------------------- users
 
 USER_ROWS = (
-    "SELECT u.id, u.email, u.name, u.role, u.credits, u.disabled, u.created, "
+    "SELECT u.id, u.email, u.name, u.role, u.credits, u.disabled, u.agent, u.created, "
     "(SELECT COUNT(*) FROM generations g WHERE g.user_id = u.id) AS generations, "
     "(SELECT COUNT(*) FROM jobs j WHERE j.user_id = u.id) AS jobs, "
     "(SELECT MAX(j.created) FROM jobs j WHERE j.user_id = u.id) AS last_job, "
@@ -224,7 +228,8 @@ async def user_detail(user_id: int, request: Request, user: dict = Depends(admin
 
 @router.put("/users/{user_id}")
 async def update_user(user_id: int, body: dict, request: Request, user: dict = Depends(admin_user)):
-    """Change a user's role, add credits (negative takes them away), disable the account, or set a new password."""
+    """Change a user's role, add credits (negative takes them away), disable the account, give or take access to
+    the agent, or set a new password."""
     state = request.app.state
     target = state.db.one("SELECT email FROM users WHERE id = ?", (user_id,))
     if target is None:
@@ -237,6 +242,9 @@ async def update_user(user_id: int, body: dict, request: Request, user: dict = D
             raise HTTPException(400, "The role must be admin or user.")
         state.db.run("UPDATE users SET role = ? WHERE id = ?", (body["role"], user_id))
         audit.record(request, user, "Changed role", email, "now " + body["role"])
+    if "agent" in body:
+        state.db.run("UPDATE users SET agent = ? WHERE id = ?", (1 if body["agent"] else 0, user_id))
+        audit.record(request, user, "Gave agent access" if body["agent"] else "Took agent access away", email)
     if "disabled" in body:
         state.db.run("UPDATE users SET disabled = ? WHERE id = ?", (1 if body["disabled"] else 0, user_id))
         if body["disabled"]:
@@ -326,7 +334,7 @@ def _item(request, item_id):
         "WHERE g.id = ?", (item_id,))
     if row is None:
         raise HTTPException(404, "No such item.")
-    return row, request.app.state.output_dir / str(row["user_id"]) / row["filename"]
+    return row, request.app.state.outputs.folder(row["user_id"]) / row["filename"]
 
 
 @router.get("/library")
@@ -334,7 +342,7 @@ async def list_library(request: Request, kind: str = "", q: str = "", owner: str
                        user: dict = Depends(admin_user)):
     """Every user's items. `owner` is a user id; `project` is a project id or "none"."""
     where, params = [], []
-    if kind in ("video", "image"):
+    if kind in KINDS:
         where.append("g.kind = ?")
         params.append(kind)
     if owner.isdigit():
@@ -378,11 +386,17 @@ async def library_file(item_id: int, request: Request, download: bool = False, u
     return FileResponse(path, filename=path.name if download else None)
 
 
+@router.get("/library/{item_id}/poster")
+async def library_poster(item_id: int, request: Request, user: dict = Depends(admin_user)):
+    return await poster_response(request, _item(request, item_id)[1])
+
+
 @router.delete("/library/{item_id}")
 async def delete_library_item(item_id: int, request: Request, user: dict = Depends(admin_user)):
     """Remove an item from its owner's library (for content that breaks the rules)."""
     row, path = _item(request, item_id)
     path.unlink(missing_ok=True)
+    media.poster_path(path).unlink(missing_ok=True)
     request.app.state.db.run("DELETE FROM generations WHERE id = ?", (item_id,))
     request.app.state.notify(row["user_id"], library_changed=True)
     audit.record(request, user, "Deleted a library item", row["user_email"], row["name"])
@@ -440,7 +454,7 @@ async def workflow_report(request: Request, user: dict = Depends(admin_user)):
 @router.get("/system")
 async def system(request: Request, user: dict = Depends(admin_user)):
     state, db = request.app.state, request.app.state.db
-    storage = state.output_dir.parent
+    storage = state.storage_dir
     server = await _server(state)
     if server["online"]:
         try:
@@ -497,13 +511,245 @@ async def put_settings(body: dict, request: Request, user: dict = Depends(admin_
         state.db.set_setting("allow_signup", "1" if body["allow_signup"] else "0")
     if "signup_credits" in body:
         state.db.set_setting("signup_credits", int(_number(body, "signup_credits", 1000000)))
-    if "credits_per_minute" in body:
-        state.db.set_setting("credits_per_minute", _number(body, "credits_per_minute", 10000))
     after = _settings(state)
     changed = ["{}: {} to {}".format(k.replace("_", " "), before[k], after[k]) for k in after if after[k] != before[k]]
     if changed:
         audit.record(request, user, "Changed settings", "", "; ".join(changed))
     return after
+
+
+# ---------------------------------------------------------------- pricing
+
+# What an admin may set on a credit package and on a server: field -> type.
+PACKAGE_FIELDS = {"name": str, "price_inr": float, "credits": int, "bonus_credits": int, "active": bool}
+SERVER_FIELDS = {"name": str, "cpu": str, "gpu": str, "vram_gb": float, "role": str, "renders": bool, "idle_power_w": float,
+                 "generation_power_w": float, "max_power_w": float, "preferred_workflows": str, "supported_workflows": str,
+                 "purchase_price_inr": float, "purchase_date": str, "life_months": float, "salvage_value_inr": float,
+                 "productive_hours": float, "active": bool}
+REQUIRED = ("name", "price_inr", "credits", "bonus_credits")   # a number left empty anywhere else means "not known yet"
+TABLES = {"packages": ("credit_packages", PACKAGE_FIELDS, "credit package"), "servers": ("servers", SERVER_FIELDS, "server")}
+
+
+def _amount(value, label, empty=None, maximum=1e9):
+    """A number an admin typed, or `empty` when the box was left blank."""
+    if value is None or str(value).strip() == "":
+        return empty
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "{} must be a number.".format(label))
+    if not 0 <= value <= maximum:
+        raise HTTPException(400, "{} must be between 0 and {:g}.".format(label, maximum))
+    return value
+
+
+def _row(body, fields):
+    """The fields of `body` that the table has, each as its type."""
+    row = {}
+    for key, kind in fields.items():
+        if key not in body:
+            continue
+        label = key.replace("_", " ").capitalize()
+        if kind is bool:
+            row[key] = 1 if body[key] else 0
+        elif kind is str:
+            row[key] = " ".join(str(body[key] or "").split())[:300]
+        else:
+            row[key] = _amount(body[key], label, 0 if key in REQUIRED else None)
+            if kind is int and row[key] is not None:
+                row[key] = int(row[key])
+        if key == "name" and not row[key]:
+            raise HTTPException(400, "Give it a name.")
+    return row
+
+
+def _pricing(state, items):
+    """Everything the Pricing section shows. `items` is the workflow listing."""
+    credits, db = state.credits, state.db
+    listed = []
+    for item in items + [{"id": MOTION, "kind": "motion", "title": "Motion graphics"},
+                         {"id": OVERLAY, "kind": "overlay", "title": "Motion graphics over a video"}]:
+        own = credits.pricing(item["id"]) or {}
+        base, per_second, multiplier = credits.rate_for(item["id"])
+        listed.append({
+            "id": item["id"], "kind": item["kind"], "title": item["title"], "error": item.get("error"),
+            "credits_per_second": own.get("credits_per_second"), "base_credits": own.get("base_credits"),
+            "resolution_multiplier": own.get("resolution_multiplier", 1), "quality_multiplier": own.get("quality_multiplier", 1),
+            "preferred_server": own.get("preferred_server", ""), "fallback_servers": own.get("fallback_servers", ""),
+            "enabled": bool(own.get("enabled", 1)),
+            # What it comes to: the rate in force, and the price of one image or of five seconds.
+            "base": base, "per_second": per_second, "multiplier": multiplier, "example": credits.cost(item["id"], 5)})
+    return {"rates": credits.rates(), "per_job": list(PER_JOB), "inr_per_1000_credits": credits.inr_per_1000,
+            "electricity_inr_per_kwh": credits.electricity_rate, "workflows": listed,
+            "packages": db.all("SELECT * FROM credit_packages ORDER BY price_inr, id"),
+            "servers": db.all("SELECT * FROM servers ORDER BY id")}
+
+
+@router.get("/pricing")
+async def get_pricing(request: Request, user: dict = Depends(admin_user)):
+    """The credit rates, each workflow's own pricing, the credit packages and the servers."""
+    return _pricing(request.app.state, await request.app.state.catalog.listing())
+
+
+@router.put("/pricing")
+async def put_pricing(body: dict, request: Request, user: dict = Depends(admin_user)):
+    """Change the rate of a kind, what credits are worth, or the price of electricity."""
+    state = request.app.state
+    changed = []
+    given = body.get("rates") if isinstance(body.get("rates"), dict) else {}
+    values = {"rate_" + kind: given[kind] for kind in RATES if kind in given}
+    values.update({key: body[key] for key in ("inr_per_1000_credits", "electricity_inr_per_kwh") if key in body})
+    before = {**{"rate_" + k: v for k, v in state.credits.rates().items()},
+              "inr_per_1000_credits": state.credits.inr_per_1000, "electricity_inr_per_kwh": state.credits.electricity_rate}
+    for key, value in values.items():
+        label = key.replace("rate_", "").replace("_", " ")
+        value = _amount(value, label.capitalize(), maximum=1e6)
+        if value is None:
+            raise HTTPException(400, "{} can't be left empty.".format(label.capitalize()))
+        if value != before[key]:
+            state.db.set_setting(key, value)
+            changed.append("{}: {:g} to {:g}".format(label, before[key], value))
+    if changed:
+        audit.record(request, user, "Changed pricing", "", "; ".join(changed))
+    return _pricing(state, await state.catalog.listing())
+
+
+@router.put("/pricing/workflow")
+async def put_workflow_pricing(body: dict, request: Request, user: dict = Depends(admin_user)):
+    """Give one workflow its own pricing, or switch it off. A rate left empty follows the rate of the workflow's kind."""
+    state = request.app.state
+    workflow = str(body.get("workflow") or "")
+    if workflow not in (MOTION, OVERLAY) and workflow not in state.catalog.files():
+        raise HTTPException(404, "There is no workflow named '{}'.".format(workflow))
+    row = {
+        "credits_per_second": _amount(body.get("credits_per_second"), "Credits per second", maximum=1e6),
+        "base_credits": _amount(body.get("base_credits"), "Base credits", maximum=1e6),
+        "resolution_multiplier": _amount(body.get("resolution_multiplier"), "Resolution multiplier", 1, 1000),
+        "quality_multiplier": _amount(body.get("quality_multiplier"), "Quality multiplier", 1, 1000),
+        "preferred_server": " ".join(str(body.get("preferred_server") or "").split())[:80],
+        "fallback_servers": " ".join(str(body.get("fallback_servers") or "").split())[:200],
+        "enabled": 0 if body.get("enabled") is False else 1,
+    }
+    state.db.run("INSERT OR REPLACE INTO workflow_pricing (workflow, {}) VALUES (?, {})".format(", ".join(row), ", ".join("?" * len(row))),
+                 (workflow, *row.values()))
+    base, per_second, multiplier = state.credits.rate_for(workflow)
+    audit.record(request, user, "Changed workflow pricing", workflow, "{:g} cr + {:g} cr/s × {:g}{}".format(
+        base, per_second, multiplier, "" if row["enabled"] else " · switched off"))
+    return _pricing(state, await state.catalog.listing())
+
+
+@router.get("/economics")
+async def economics(request: Request, days: int = 30, user: dict = Depends(admin_user)):
+    """What each workflow earned and what it cost to run, from the jobs of the last `days` days. The cost is
+    electricity only: the time a job ran, at the power of the server it ran on."""
+    state, db = request.app.state, request.app.state.db
+    days = days if days in RANGES else 30
+    since = time.time() - days * DAY
+    servers = db.all("SELECT name, generation_power_w, renders, active FROM servers ORDER BY id")
+    watts = {s["name"]: s["generation_power_w"] for s in servers}
+    usual = next((s["generation_power_w"] for s in servers if s["renders"] and s["active"]), None)   # for jobs from before servers were recorded
+    per_kwh, per_credit = state.credits.electricity_rate, state.credits.inr_per_1000 / 1000
+    titles = {w["id"]: w for w in await state.catalog.listing()}
+
+    found = {}
+    for row in db.all(
+            "SELECT workflow, server, COUNT(*) AS jobs, SUM(status = 'done') AS done, SUM(status = 'failed') AS failed, "
+            "SUM(status = 'cancelled') AS cancelled, SUM(retries) AS retries, SUM(output_size) AS output_bytes, "
+            "SUM(CASE WHEN started IS NOT NULL THEN finished - started ELSE 0 END) AS run_seconds, "
+            "SUM(CASE WHEN status = 'done' THEN finished - started ELSE 0 END) AS done_seconds, "
+            "SUM(CASE WHEN status = 'done' THEN seconds_requested ELSE 0 END) AS seconds_made, "
+            "SUM(CASE WHEN status = 'done' THEN cost ELSE 0 END) AS credits, "
+            "SUM(CASE WHEN status != 'done' THEN cost ELSE 0 END) AS refunded "
+            "FROM jobs WHERE created > ? AND status IN ('done', 'failed', 'cancelled') GROUP BY workflow, server", (since,)):
+        item = found.setdefault(row["workflow"], {"id": row["workflow"], "electricity_inr": 0.0, "measured": True})
+        for key in ("jobs", "done", "failed", "cancelled", "retries", "output_bytes", "run_seconds", "done_seconds", "seconds_made", "credits", "refunded"):
+            item[key] = item.get(key, 0) + (row[key] or 0)
+        power = watts.get(row["server"]) or usual
+        if power:
+            item["electricity_inr"] += (row["run_seconds"] or 0) / 3600 * power / 1000 * per_kwh
+        elif row["run_seconds"]:
+            item["measured"] = False   # it ran on a server whose power is not known
+
+    # Motion graphics have no job: what was made is in the library, and what was paid is in the credit log.
+    motion = db.one("SELECT COUNT(*) AS done, SUM(seconds) AS run_seconds, SUM(size) AS output_bytes, "
+                    "SUM(json_extract(context, '$.duration')) AS seconds_made FROM generations WHERE workflow = ? AND created > ?", (MOTION, since))
+    paid = -(db.one("SELECT SUM(amount) n FROM credit_events WHERE note = 'Motion graphics' AND created > ?", (since,))["n"] or 0)
+    if motion["done"] or paid:
+        found[MOTION] = {"id": MOTION, "jobs": motion["done"], "done": motion["done"], "failed": 0, "cancelled": 0, "retries": 0,
+                         "output_bytes": motion["output_bytes"] or 0, "run_seconds": motion["run_seconds"] or 0,
+                         "done_seconds": motion["run_seconds"] or 0, "seconds_made": motion["seconds_made"] or 0,
+                         "credits": paid, "refunded": 0, "electricity_inr": 0.0, "measured": False}   # drawn on the host, whose power is not measured
+
+    rows = []
+    for item in found.values():
+        known = titles.get(item["id"], {})
+        done, runs = item["done"], item["done"] + item["failed"]
+        item.update(
+            title="Motion graphics" if item["id"] == MOTION else known.get("title") or item["id"],
+            kind="motion" if item["id"] == MOTION else item["id"].split("/", 1)[0],
+            success_rate=round(100 * done / runs, 1) if runs else None,
+            runs_per_success=round(runs / done, 2) if done else None,          # 1.08 means 108 runs for 100 results
+            avg_seconds=item["done_seconds"] / done if done else None,
+            render_ratio=item["done_seconds"] / item["seconds_made"] if item["seconds_made"] else None,   # seconds of GPU per second made
+            revenue_inr=item["credits"] * per_credit,
+            electricity_inr=item["electricity_inr"] if item["measured"] else None)
+        item["margin_inr"] = item["revenue_inr"] - item["electricity_inr"] if item["measured"] else None
+        rows.append(item)
+    rows.sort(key=lambda r: (-r["credits"], -r["jobs"]))
+
+    def total(key):
+        return sum(r[key] or 0 for r in rows)
+
+    revenue, electricity = total("revenue_inr"), total("electricity_inr")
+    runs = total("done") + total("failed")
+    return {"days": days, "workflows": rows,
+            "totals": {"jobs": total("jobs"), "done": total("done"), "failed": total("failed"), "cancelled": total("cancelled"),
+                       "credits": total("credits"), "refunded": total("refunded"), "revenue_inr": revenue, "electricity_inr": electricity,
+                       "margin_inr": revenue - electricity, "margin_percent": round(100 * (revenue - electricity) / revenue, 1) if revenue else None,
+                       "run_seconds": total("run_seconds"), "output_bytes": total("output_bytes"),
+                       "failure_rate": round(100 * total("failed") / runs, 1) if runs else None},
+            "electricity_inr_per_kwh": per_kwh, "inr_per_1000_credits": state.credits.inr_per_1000,
+            "unmeasured": [s["name"] for s in servers if s["active"] and not s["generation_power_w"]]}
+
+
+@router.post("/pricing/{table}")
+async def add_pricing_row(table: str, body: dict, request: Request, user: dict = Depends(admin_user)):
+    """Add a credit package or a server."""
+    if table not in TABLES:
+        raise HTTPException(404, "No such list.")
+    name, fields, what = TABLES[table]
+    row = dict(_row(dict({"name": ""}, **body), fields), created=time.time())
+    new_id = request.app.state.db.run("INSERT INTO {} ({}) VALUES ({})".format(name, ", ".join(row), ", ".join("?" * len(row))), tuple(row.values()))
+    audit.record(request, user, "Added a " + what, row["name"])
+    return {"id": new_id}
+
+
+@router.put("/pricing/{table}/{row_id}")
+async def change_pricing_row(table: str, row_id: int, body: dict, request: Request, user: dict = Depends(admin_user)):
+    if table not in TABLES:
+        raise HTTPException(404, "No such list.")
+    name, fields, what = TABLES[table]
+    found = request.app.state.db.one("SELECT name FROM {} WHERE id = ?".format(name), (row_id,))
+    if found is None:
+        raise HTTPException(404, "No such {}.".format(what))
+    row = _row(body, fields)
+    if row:
+        request.app.state.db.run("UPDATE {} SET {} WHERE id = ?".format(name, ", ".join(key + " = ?" for key in row)), (*row.values(), row_id))
+        audit.record(request, user, "Changed a " + what, row.get("name", found["name"]))
+    return {"ok": True}
+
+
+@router.delete("/pricing/{table}/{row_id}")
+async def delete_pricing_row(table: str, row_id: int, request: Request, user: dict = Depends(admin_user)):
+    if table not in TABLES:
+        raise HTTPException(404, "No such list.")
+    name, _, what = TABLES[table]
+    found = request.app.state.db.one("SELECT name FROM {} WHERE id = ?".format(name), (row_id,))
+    if found is None:
+        raise HTTPException(404, "No such {}.".format(what))
+    request.app.state.db.run("DELETE FROM {} WHERE id = ?".format(name), (row_id,))
+    audit.record(request, user, "Deleted a " + what, found["name"])
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- export
@@ -513,6 +759,8 @@ EXPORTS = {
              "(SELECT COUNT(*) FROM jobs j WHERE j.user_id = u.id) AS jobs, "
              "(SELECT COUNT(*) FROM generations g WHERE g.user_id = u.id) AS items FROM users u ORDER BY u.id",
     "jobs": "SELECT j.id, u.email AS user, j.name, j.workflow, j.summary, j.status, j.cost AS credits, "
+            "j.credits_required, j.credits_reserved, j.credits_consumed, j.credits_refunded, j.seconds_requested, j.server, "
+            "j.retries, j.output_size, "
             "datetime(j.created, 'unixepoch') AS created_utc, round(j.started - j.created, 1) AS wait_seconds, "
             "round(j.finished - j.started, 1) AS run_seconds, j.error FROM jobs j JOIN users u ON u.id = j.user_id ORDER BY j.created DESC",
     "credits": "SELECT c.id, u.email AS user, c.amount, c.reason, c.job_id, datetime(c.created, 'unixepoch') AS created_utc "

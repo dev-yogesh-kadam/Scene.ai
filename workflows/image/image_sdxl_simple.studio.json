@@ -1,0 +1,19 @@
+{
+  "title": "SDXL",
+  "description": "Text to image with Stable Diffusion XL: 25 steps, with a negative prompt.",
+  "labels": {
+    "10:text": "Describe the image: subject, setting, light and style.",
+    "11:text": "Negative prompt (what to keep out of the image)",
+    "12:steps": "Steps",
+    "12:cfg": "CFG (how closely to follow the prompt)"
+  },
+  "defaults": {
+    "10:text": ""
+  },
+  "hints": [
+    "Short, comma-separated phrases work well: the subject first, then setting, light and style.",
+    "The negative prompt lists what to keep out. Its starting value keeps colour out: clear it if you want a colour image.",
+    "SDXL is trained around 1024 px. Much larger sizes can repeat the subject.",
+    "25 steps and CFG 7 are a good default. More steps are slower with little gain."
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "title": "Title card",
+  "description": "A title and a line under it on a plain ground. For an opening, a chapter or an ending.",
+  "needs": null,
+  "fields": [
+    {"id": "title", "label": "Title", "type": "text", "max": 60, "required": true, "placeholder": "Chapter one"},
+    {"id": "subtitle", "label": "Line under it (optional)", "type": "text", "max": 90, "placeholder": "The harbour, before dawn"},
+    {"id": "seconds", "label": "Length", "type": "choice", "choices": [3, 5, 8], "default": 5, "unit": " s"},
+    {"id": "shape", "label": "Shape", "type": "choice", "choices": ["landscape", "portrait", "square"], "default": "landscape"},
+    {"id": "look", "label": "Look", "type": "choice", "choices": ["dark", "light"], "default": "dark"}
+  ]
+}

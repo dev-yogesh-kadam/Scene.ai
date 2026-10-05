@@ -6,6 +6,8 @@ if not exist .venv\Scripts\python.exe (
 )
 .venv\Scripts\python.exe -m pip install -q --disable-pip-version-check -r backend\requirements.txt || goto :fail
 if not exist config.json copy config.example.json config.json >nul
+rem Motion graphics need Node.js. Without it the studio still runs; that section just says what is missing.
+where node >nul 2>nul && if not exist motion\node_modules\hyperframes ( pushd motion & call npm install --no-audit --no-fund & popd )
 cd backend
 ..\.venv\Scripts\python.exe -m scene
 :fail

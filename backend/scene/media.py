@@ -53,6 +53,30 @@ async def last_frame(video, target):
     return target
 
 
+POSTER_WIDTH = 960
+
+
+def poster_path(video):
+    """Where a video's poster is kept: next to it, in a folder of its own."""
+    return video.parent / ".posters" / (video.name + ".jpg")
+
+
+async def poster(video):
+    """A small still from the start of a video, for its thumbnail. It is made once and kept."""
+    target = poster_path(video)
+    if target.is_file() and target.stat().st_mtime >= video.stat().st_mtime:
+        return target
+    target.parent.mkdir(exist_ok=True)
+    target.unlink(missing_ok=True)
+    scale = "scale='min({},iw)':-2".format(POSTER_WIDTH)
+    for start in ("0.1", "0"):   # a clip shorter than 0.1 s has no frame there
+        await _ffmpeg("-loglevel", "error", "-ss", start, "-i", video, "-frames:v", "1", "-vf", scale, "-q:v", "3",
+                      "-update", "1", target, check=False)
+        if target.is_file() and target.stat().st_size:
+            return target
+    raise MediaError("That video can't be read.")
+
+
 async def cut_audio(source, start, seconds, target):
     """Save a piece of an audio (or video) file's sound as a WAV file."""
     await _ffmpeg("-loglevel", "error", "-ss", "{:.3f}".format(start), "-t", "{:.3f}".format(seconds),
@@ -84,6 +108,31 @@ async def join(clips, target):
     args += ["-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p", "-movflags", "+faststart", target]
     await _ffmpeg(*args)
     return target
+
+
+MUSIC_UNDER = 0.35   # how loud added music is against the video's own sound
+
+
+async def add_sound(video, sound, target, replace=False):
+    """Put a sound on a video and save the result as `target`. Returns its length in seconds.
+
+    The picture is copied as it is, not encoded again. The sound is looped if it is shorter than the video,
+    cut to the video's length, and faded out at the end. With replace it takes the place of the video's own
+    sound; otherwise it is mixed under it (music under speech and effects)."""
+    info = await probe(video)
+    if not info["seconds"]:
+        raise MediaError("That video can't be read.")
+    length = info["seconds"]
+    fade = "afade=t=in:d=0.3,afade=t=out:st={:.3f}:d=0.8".format(max(0.0, length - 0.8))
+    if info["audio"] and not replace:
+        mix = ("[1:a]volume={},{}[under];[0:a][under]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]"
+               .format(MUSIC_UNDER, fade))
+    else:
+        mix = "[1:a]{}[a]".format(fade)
+    await _ffmpeg("-loglevel", "error", "-i", video, "-stream_loop", "-1", "-i", sound, "-filter_complex", mix,
+                  "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                  "-t", "{:.3f}".format(length), "-movflags", "+faststart", target)
+    return length
 
 
 async def sequence(parts, target):

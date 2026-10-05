@@ -1,7 +1,7 @@
 // The Home page: a bar to start something, the projects worked on lately, and everything made so far.
 
 import { api } from '../api.js';
-import { el, segmented, ago, initials } from '../dom.js';
+import { el, segmented, ago, initials, still } from '../dom.js';
 import { store, subscribe } from '../store.js';
 import { openViewer } from '../components/media.js';
 import { composer } from '../components/composer.js';
@@ -11,9 +11,12 @@ const MADE = 60;     // finished items shown
 
 export function render(view) {
   let kind = '';     // '' = everything, or 'video' / 'image'
+  let asked = 0;     // the newest library request; older answers are dropped
   const queued = el('p', { class: 'notice ok home-note' });
   const dock = composer({ onQueued: () => {
-    queued.replaceChildren('Added to the queue. ', el('a', { href: '#/canvas' }, 'Watch it on the Canvas'));
+    // The job is filed under no project, so open the canvas on everything, not on the last project.
+    queued.replaceChildren('Added to the queue. ',
+      el('a', { href: '#/canvas', onclick: () => localStorage.setItem('scene.project', '') }, 'Watch it on the Canvas'));
   } });
   const recent = el('section', { class: 'home-section hidden' });
   const filter = el('div');
@@ -33,9 +36,7 @@ export function render(view) {
     location.hash = '#/canvas';
   };
 
-  const cover = (id, itemKind, name) => (itemKind === 'video'
-    ? el('video', { src: `/api/library/${id}/file#t=0.1`, preload: 'metadata', muted: true })
-    : el('img', { src: `/api/library/${id}/file`, alt: name, loading: 'lazy' }));
+  const cover = (id, itemKind, name) => still(`/api/library/${id}/file`, itemKind, name);
 
   // Recent projects: left out completely until the user has made one.
   async function drawRecent() {
@@ -53,9 +54,11 @@ export function render(view) {
   }
 
   async function drawMade() {
-    filter.replaceChildren(segmented([{ id: '', label: 'All' }, { id: 'video', label: 'Videos' }, { id: 'image', label: 'Images' }],
+    filter.replaceChildren(segmented([{ id: '', label: 'All' }, { id: 'video', label: 'Videos' }, { id: 'image', label: 'Images' }, { id: 'audio', label: 'Audio' }],
       kind, (k) => { kind = k; drawMade().catch(() => {}); }));
+    const request = ++asked;
     const items = (await api('/api/library' + (kind ? '?kind=' + kind : ''))).items.slice(0, MADE);
+    if (request !== asked) return;
     grid.classList.toggle('made-grid', items.length > 0);
     grid.replaceChildren(...(items.length ? items.map((item) => {
       const c = item.context || {};

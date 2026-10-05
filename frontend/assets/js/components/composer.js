@@ -1,11 +1,11 @@
-// The quick composer docked on the Canvas: a prompt, the few settings that matter most, and Generate.
+// The quick composer on Home and in the Canvas panel: a prompt, the few settings that matter most, and Generate.
 // Everything else uses the workflow's own defaults; the Create page has the full form.
 
 import { api } from '../api.js';
 import { el } from '../dom.js';
 import { subscribe, refreshJobs } from '../store.js';
 
-const KIND_LABEL = { video: 'Video', image: 'Image' };
+const KIND_LABEL = { video: 'Video', image: 'Image', audio: 'Audio' };
 
 // startFrom(): the library item a new video should start on (the canvas selection), or null.
 // projectId(): the project new work is filed under, or null. onQueued(): a job was added to the queue.
@@ -28,7 +28,7 @@ export function composer({ startFrom = () => null, projectId = () => null, onQue
 
   async function loadCatalog() {
     const list = await api('/api/workflows');
-    form.catalog = list.workflows.filter((w) => !w.error);
+    form.catalog = list.workflows.filter((w) => !w.error && KIND_LABEL[w.kind]);   // an upscaler has no prompt to type here
     if (!form.catalog.length) {
       node.classList.add('off');
       return showError(new Error('No workflows yet. Save a ComfyUI workflow into the workflows folder, then reload.'));
@@ -145,5 +145,5 @@ export function composer({ startFrom = () => null, projectId = () => null, onQue
   loadCatalog().catch(showError);
   const unsubscribe = subscribe((change) => { if (change === 'credits') refreshEstimate(); });
   // refresh(): call when the selection changes, so the "start on" line follows it.
-  return { node, refresh: () => { form.useStart = true; if (form.wf) draw(); }, destroy: unsubscribe };
+  return { node, refresh: () => { form.useStart = true; if (form.wf) draw(); }, focus: () => prompt.focus(), destroy: unsubscribe };
 }

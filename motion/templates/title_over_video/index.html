@@ -1,0 +1,66 @@
+<!doctype html>
+<!-- A Scene.ai motion template. __WIDTH__, __HEIGHT__, __DURATION__ and __SOUND__ are filled in by the studio before the
+     render; the words come in as variables, so they are never read as markup. clip.mp4 is the chosen video. -->
+<html lang="en" data-composition-variables='[
+  {"id":"title","type":"string","label":"Title","default":"Title"},
+  {"id":"subtitle","type":"string","label":"Line under it","default":""},
+  {"id":"place","type":"string","label":"Where","default":"centre"},
+  {"id":"hold","type":"number","label":"Stays for","default":3}
+]'>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=__WIDTH__, height=__HEIGHT__" />
+    <script src="gsap.min.js"></script>
+    <style>
+      @font-face { font-family: Archivo; src: url("Archivo.woff2") format("woff2"); font-weight: 100 900; font-stretch: 62% 125%; }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: __WIDTH__px; height: __HEIGHT__px; overflow: hidden; background: #000; }
+      #root { position: relative; width: 100%; height: 100%; }
+      #clip { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      #dim { position: absolute; inset: 0; background: #000; opacity: 0; z-index: 1; }
+      #over { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 2vmin; padding: 9vmin 8vmin; text-align: center; font-family: Archivo, ui-sans-serif, system-ui, sans-serif; }
+      body[data-place="top"] #over { justify-content: flex-start; }
+      body[data-place="bottom"] #over { justify-content: flex-end; }
+      #bar { width: 8vmin; height: 0.7vmin; background: #ffa51f; transform-origin: center; }
+      #title { color: #fff; font-size: 9.5vmin; line-height: 1.05; font-weight: 700; letter-spacing: -0.02em; overflow-wrap: anywhere; text-shadow: 0 0.3vmin 2vmin rgba(0, 0, 0, 0.45); }
+      #subtitle { color: #ece8e1; font-size: 3.5vmin; line-height: 1.3; font-weight: 450; text-shadow: 0 0.2vmin 1.4vmin rgba(0, 0, 0, 0.5); }
+      #subtitle:empty { display: none; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="__DURATION__" data-width="__WIDTH__" data-height="__HEIGHT__">
+      <video id="clip" class="clip" src="clip.mp4" data-start="0" data-duration="__DURATION__" data-track-index="0" __SOUND__ playsinline></video>
+      <div id="dim" class="clip" data-start="0" data-duration="__DURATION__" data-track-index="1"></div>
+      <div id="over" class="clip" data-start="0" data-duration="__DURATION__" data-track-index="2">
+        <div id="bar"></div>
+        <h1 id="title"></h1>
+        <p id="subtitle"></p>
+      </div>
+    </div>
+    <script>
+      const values = window.__hyperframes.getVariables();
+      document.body.dataset.place = values.place;
+      document.getElementById("title").textContent = values.title;
+      document.getElementById("subtitle").textContent = values.subtitle;
+
+      // hold 0 keeps the words up for the whole video; otherwise they leave after that many seconds.
+      const length = __DURATION__;
+      const hold = Number(values.hold) || 0;
+      const out = hold > 0 ? Math.min(0.9 + hold, length - 0.5) : null;
+      const tl = gsap.timeline({ paused: true });
+      tl.fromTo("#dim", { opacity: 0 }, { opacity: 0.38, duration: 0.6, ease: "power1.out" }, 0.1);
+      tl.fromTo("#bar", { scaleX: 0 }, { scaleX: 1, duration: 0.5, ease: "power3.out" }, 0.25);
+      tl.fromTo("#title", { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.7, ease: "power3.out" }, 0.35);
+      tl.fromTo("#subtitle", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.6, ease: "power2.out" }, 0.65);
+      if (out !== null && out > 1.2) {
+        tl.to("#over", { opacity: 0, duration: 0.5, ease: "power1.in" }, out);
+        tl.to("#dim", { opacity: 0, duration: 0.5, ease: "power1.in" }, out);
+      }
+      tl.set({}, {}, length);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

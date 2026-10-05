@@ -1,21 +1,28 @@
-// The Canvas page: every finished item as a frame on an endless board, with the composer docked below.
-// Frames can be moved and are remembered per project. Work in progress shows as a frame the Gate runs around.
+// The Canvas page: every finished item as a frame on an endless board. A panel on the right makes new work,
+// either directly (Quick action) or through the agent.
+// Each row is a shot: new work starts a row, work made from a frame joins that frame's row. Frames can be
+// dragged between rows, and the rows are remembered per project. Work in progress shows as a frame the Gate runs around.
 
 import { api } from '../api.js';
-import { el, runningGate } from '../dom.js';
+import { el, icon, runningGate, segmented, still } from '../dom.js';
 import { store, subscribe } from '../store.js';
 import { openViewer } from '../components/media.js';
-import { composer } from '../components/composer.js';
+import { quickActions } from '../components/quick.js';
 import { agentPanel } from '../components/agent.js';
+import { castEditor } from '../components/cast.js';
 
 const FRAME = 240;      // width of every frame, in canvas units
 const SLATE = 24;       // room under a frame for its line of facts
+const LABEL = 144;      // room left of a row for the name of its shot
 const GAP = 48;
-const COLUMNS = 5;      // new work is laid out in this many columns
 const SNAP = 8;
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 2;
 const ACTIVE = ['queued', 'running'];
+const PANEL = 380;      // the width the panel starts with; its left edge can be dragged
+const PANEL_MIN = 320;
+const PANEL_MAX = 960;
+const TABS = [{ id: 'quick', label: 'Quick actions', icon: 'bolt' }, { id: 'agent', label: 'Agent', icon: 'chat' }];
 
 const clamp = (n, low, high) => Math.max(low, Math.min(high, n));
 const heightOf = (item) => {
@@ -32,43 +39,87 @@ export function render(view) {
   let items = [];
   let projects = [];
   let project = Number(localStorage.getItem('scene.project')) || 0;   // 0 = everything
-  let layout = { items: {} };     // items: generation id -> {x, y}
+  // rows: [{id, name, keys}], one per shot, top to bottom. A key is a generation id, or 'job:<id>' while it is being made.
+  let layout = { rows: [], count: 0 };
   let ready = false;              // false until the saved layout is loaded: nothing may be placed before that
   const cam = { x: 96, y: 96, k: 1 };
   const selected = new Set();     // generation ids
-  const jobSpots = {};            // job id -> {x, y}: where a job's frame waits and where its result lands
+  const spots = new Map();        // key -> {x, y, h}: where its row puts each frame
+  let bands = [];                 // the rows as drawn: {row, y, h}
   const boxes = new Map();        // what is on the canvas now: key -> {key, x, y, h, node}
   const jobFrames = new Map();    // job id -> the parts of its frame that change while it runs
   let agentJobs = new Set();      // jobs the agent started: their frames are drawn in the agent's colour
 
   const itemLayer = el('div');
   const jobLayer = el('div');
-  const world = el('div', { class: 'canvas-world' }, itemLayer, jobLayer);
+  const labelLayer = el('div');
+  const world = el('div', { class: 'canvas-world' }, labelLayer, itemLayer, jobLayer);
   const stage = el('div', { class: 'canvas-stage' }, world);
-  const picker = el('select', { 'aria-label': 'Project', onchange: (e) => { project = Number(e.target.value) || 0; localStorage.setItem('scene.project', project || ''); selected.clear(); load(); agent.reload(); } });
+  const picker = el('select', { 'aria-label': 'Project', onchange: (e) => { project = Number(e.target.value) || 0; localStorage.setItem('scene.project', project || ''); selected.clear(); load(); agent.reload(); cast.reload().then(() => dock.recast()); } });
   const count = el('span', { class: 'slate-text' });
   const context = el('div', { class: 'float canvas-context hidden' });
   const zoomLabel = el('button', { class: 'btn small quiet', title: 'Zoom to 100% (0)', onclick: () => zoomTo(1) });
   const map = el('div', { class: 'minimap hidden', 'aria-hidden': 'true' });
-  const hint = el('p', { class: 'canvas-hint muted' }, 'Describe a shot below. Everything you make lands here.');
-  const dock = composer({
-    startFrom: () => (selected.size === 1 ? items.find((i) => selected.has(i.id)) : null),
+  const hint = el('p', { class: 'canvas-hint muted' }, 'Use the panel on the right to make a shot. Everything you make lands here.');
+  const dock = quickActions({
+    startFrom: () => (selected.size === 1 ? items.find((i) => selected.has(i.id) && i.kind !== 'audio') : null),   // a sound is not a frame to start on
     projectId: () => project || null,
   });
 
-  const chosenItems = () => items.filter((i) => selected.has(i.id));
-  const agent = agentPanel({
-    selection: chosenItems,
+  // The agent is open to admins and to users an admin has given it to. For the others its tab says so.
+  const comingSoon = () => ({ node: el('div', { class: 'agent-panel soon' },
+    el('div', { class: 'soon-box' }, icon('chat'), el('span', { class: 'soon-tag' }, 'Coming soon'), el('b', {}, 'The agent'),
+      el('p', { class: 'muted small' }, 'Describe what you want and have it planned for you. It is not open on your account yet.'),
+      el('button', { class: 'btn small', onclick: () => showPanel(true, 'quick') }, 'Use Quick actions'))),
+    attach: () => {}, reload: () => {}, focus: () => {}, destroy: () => {} });
+  const agent = !store.user.agent ? comingSoon() : agentPanel({
     projectId: () => project,
     onJobs: (ids) => { agentJobs = new Set(ids); for (const [id, frame] of jobFrames) frame.node.classList.toggle('by-agent', agentJobs.has(id)); },
-    onClose: () => showAgent(false),
   });
-  const agentButton = el('button', { class: 'btn small quiet', title: 'Open the agent (Ctrl or ⌘ + J)', onclick: () => showAgent(!view.classList.contains('with-agent')) }, 'Agent');
-  function showAgent(open) {
-    view.classList.toggle('with-agent', open);
-    agentButton.classList.toggle('on', open);
-    localStorage.setItem('scene.agent', open ? '1' : '');
-    if (open) agent.focus();
+  // The panel is open every time the canvas is entered, and remembers which of its two tabs was showing.
+  let tab = localStorage.getItem('scene.panel.tab') === 'agent' && store.user.agent ? 'agent' : 'quick';   // Quick actions unless the agent was chosen
+  const title = el('b', { class: 'panel-title' });
+  const tabs = el('div');
+  const quick = el('div', { class: 'panel-quick' }, dock.node);
+  // The project's cast: its button sits in the head of the panel, for both tabs.
+  const cast = castEditor({
+    projectId: () => project,
+    selected: () => (selected.size === 1 ? items.find((i) => selected.has(i.id)) || null : null),
+    onChange: () => dock.recast(),
+  });
+  // The left edge of the panel is a grip: drag it to make the panel wider or narrower, double-click for the usual width.
+  let panelWidth = PANEL;
+  const setWidth = (width) => {
+    panelWidth = clamp(Math.round(width) || PANEL, PANEL_MIN, Math.max(PANEL_MIN, Math.min(PANEL_MAX, (view.clientWidth || 9999) - 280)));
+    view.style.setProperty('--panel-w', panelWidth + 'px');
+  };
+  const keepWidth = () => { localStorage.setItem('scene.panel.width', panelWidth); if (ready) fit(); };
+  const grip = el('div', { class: 'panel-grip', title: 'Drag to resize. Double-click for the usual width.', role: 'separator', 'aria-orientation': 'vertical',
+    ondblclick: () => { setWidth(PANEL); keepWidth(); },
+    onpointerdown: (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const from = { x: e.clientX, width: panelWidth };
+      view.classList.add('resizing');
+      track((ev) => setWidth(from.width + from.x - ev.clientX), () => { view.classList.remove('resizing'); keepWidth(); });
+    } });
+  const panel = el('aside', { class: 'side-panel', 'aria-label': 'Make something' }, grip,
+    el('div', { class: 'panel-head' }, title, el('span', { style: 'flex:1' }), cast.button, tabs,
+      el('button', { class: 'icon-btn', title: 'Close (Ctrl or ⌘ + J)', 'aria-label': 'Close the panel', onclick: () => showPanel(false) }, '×')),
+    cast.box, quick, agent.node);
+  const isOpen = () => view.classList.contains('with-panel');
+  const panelButton = el('button', { class: 'btn small quiet', title: 'Show or hide Quick action and the Agent (Ctrl or ⌘ + J)', onclick: () => showPanel(!isOpen()) }, 'Panel');
+  function showPanel(open, which = tab) {
+    tab = which;
+    view.classList.toggle('with-panel', open);
+    panelButton.setAttribute('aria-pressed', String(open));
+    localStorage.setItem('scene.panel.tab', tab);
+    title.textContent = TABS.find((t) => t.id === tab).label;
+    title.classList.toggle('agent-name', tab === 'agent');
+    tabs.replaceChildren(segmented(TABS.map((t) => ({ id: t.id, label: icon(t.icon), hint: t.label })), tab, (id) => showPanel(true, id)));
+    quick.classList.toggle('hidden', tab !== 'quick');
+    agent.node.classList.toggle('hidden', tab !== 'agent');
+    if (open) (tab === 'agent' ? agent : dock).focus();
     if (ready) fit();
   }
 
@@ -77,9 +128,8 @@ export function render(view) {
     context,
     el('div', { class: 'float canvas-view' },
       el('button', { class: 'btn small quiet', title: 'Fit everything (1)', onclick: () => fit() }, 'Fit'),
-      zoomLabel, agentButton),
-    map, agent.node,
-    el('div', { class: 'canvas-dock' }, hint, dock.node));
+      zoomLabel, panelButton),
+    map, hint, panel);
 
   // ------------------------------------------------------------ layout
 
@@ -91,36 +141,44 @@ export function render(view) {
     }
   }, { root: stage, rootMargin: '300px' });
 
-  const media = (item) => (item.kind === 'video'
-    ? el('video', { src: `/api/library/${item.id}/file#t=0.1`, preload: 'metadata', muted: true })
-    : el('img', { src: `/api/library/${item.id}/file`, alt: item.name, draggable: 'false' }));
+  const media = (item) => still(`/api/library/${item.id}/file`, item.kind, item.name);
 
-  // Give everything without a saved place a spot under the shortest column.
-  function place() {
+  // Every shot is a row. Work made from scratch starts a new row at the bottom; work made from a frame
+  // (continued from it, re-run, trimmed, split) joins that frame's row at the right end.
+  const rowOf = (key) => layout.rows.find((row) => row.keys.includes(key));
+  const newRow = () => layout.rows[layout.rows.push({ id: ++layout.count, name: '', keys: [] }) - 1];
+  // The frame something was made from: sent with the job, or the first clip of an edit.
+  const parentOf = (settings) => (settings && (settings.parent || (Array.isArray(settings.clips) && settings.clips[0] && settings.clips[0].id))) || null;
+
+  function arrange() {
+    const before = JSON.stringify(layout);
     const jobs = store.jobs.filter((j) => ACTIVE.includes(j.status) && (!project || j.project_id === project));
-    for (const id of Object.keys(jobSpots)) {
-      const job = store.jobs.find((j) => j.id === id);
-      if (!job || job.status === 'failed' || job.status === 'cancelled') delete jobSpots[id];
+    const known = new Set(items.map((i) => i.id));
+    const live = new Set(jobs.map((j) => 'job:' + j.id));
+    for (const item of [...items].reverse()) {   // oldest first, so shots are numbered in the order they were made
+      if (rowOf(item.id)) continue;
+      const held = item.job_id && rowOf('job:' + item.job_id);   // finished work takes the place its job was holding
+      if (held) held.keys.splice(held.keys.indexOf('job:' + item.job_id), 0, item.id);
+      else (rowOf(parentOf(item.settings)) || newRow()).keys.push(item.id);
     }
-    const bottoms = Array(COLUMNS).fill(0);
-    const taken = (spot, h) => {
-      const column = clamp(Math.round(spot.x / (FRAME + GAP)), 0, COLUMNS - 1);
-      bottoms[column] = Math.max(bottoms[column], spot.y + h + SLATE + GAP);
-    };
-    for (const item of items) if (layout.items[item.id]) taken(layout.items[item.id], heightOf(item));
-    for (const spot of Object.values(jobSpots)) taken(spot, heightOf());
-    const next = (h) => {
-      const column = bottoms.indexOf(Math.min(...bottoms));
-      const spot = { x: column * (FRAME + GAP), y: bottoms[column] };
-      bottoms[column] += h + SLATE + GAP;
-      return spot;
-    };
-    for (const item of [...items].reverse()) {   // oldest first, so new work lands at the end
-      if (layout.items[item.id]) continue;
-      layout.items[item.id] = jobSpots[item.job_id] || next(heightOf(item));
-      delete jobSpots[item.job_id];
+    for (const job of [...jobs].reverse()) {
+      if (rowOf('job:' + job.id) || items.some((i) => i.job_id === job.id)) continue;
+      (rowOf(parentOf(job.settings)) || newRow()).keys.push('job:' + job.id);
     }
-    for (const job of jobs) if (!jobSpots[job.id]) jobSpots[job.id] = next(heightOf());
+    for (const row of layout.rows) row.keys = row.keys.filter((key) => (typeof key === 'number' ? known.has(key) : live.has(key)));
+    layout.rows = layout.rows.filter((row) => row.keys.length);
+
+    const heights = new Map(items.map((i) => [i.id, heightOf(i)]));
+    spots.clear();
+    bands = [];
+    let y = 0;
+    for (const row of layout.rows) {
+      const sizes = row.keys.map((key) => heights.get(key) || heightOf());
+      row.keys.forEach((key, i) => spots.set(key, { x: i * (FRAME + GAP), y, h: sizes[i] }));
+      bands.push({ row, y, h: Math.max(...sizes) });
+      y += Math.max(...sizes) + SLATE + GAP;
+    }
+    if (ready && JSON.stringify(layout) !== before) save();
     return jobs;
   }
 
@@ -128,9 +186,8 @@ export function render(view) {
     for (const key of [...boxes.keys()]) if (typeof key === 'number') boxes.delete(key);
     lazy.disconnect();
     itemLayer.replaceChildren(...items.map((item) => {
-      const spot = layout.items[item.id];
-      const h = heightOf(item);
-      const shot = el('div', { class: 'shot gate', style: `height:${h}px` });
+      const spot = spots.get(item.id);
+      const shot = el('div', { class: 'shot gate', style: `height:${spot.h}px` });
       shot.item = item;
       lazy.observe(shot);
       const c = item.context || {};
@@ -138,7 +195,7 @@ export function render(view) {
         onpointerdown: (e) => grab(e, item.id), ondblclick: () => open(item) },
         shot,
         el('div', { class: 'slate' }, el('b', {}, item.kind), el('span', {}, c.width ? `${c.width}×${c.height}` : item.name)));
-      boxes.set(item.id, { key: item.id, x: spot.x, y: spot.y, h, node });
+      boxes.set(item.id, { key: item.id, ...spot, node });
       return node;
     }));
     count.textContent = items.length === 1 ? '1 item' : `${items.length} items`;
@@ -153,18 +210,19 @@ export function render(view) {
       boxes.delete('job:' + id);
     }
     for (const job of jobs) {
+      const spot = spots.get('job:' + job.id);
+      if (!spot) continue;   // its result is already on the canvas
       let frame = jobFrames.get(job.id);
       if (!frame) {
-        const spot = jobSpots[job.id];
         const clock = el('span');
         const fact = el('span');
-        const shot = el('div', { class: 'shot', style: `height:${heightOf()}px` }, clock);
-        const node = el('div', { class: 'frame developing' + (agentJobs.has(job.id) ? ' by-agent' : ''), style: `left:${spot.x}px;top:${spot.y}px`, title: job.name },
+        const shot = el('div', { class: 'shot', style: `height:${spot.h}px` }, clock);
+        const node = el('div', { class: 'frame developing' + (agentJobs.has(job.id) ? ' by-agent' : ''), title: job.name },
           shot, el('div', { class: 'slate' }, el('b', {}, job.workflow.split('/')[0]), fact));
         frame = { node, shot, clock, fact, gate: null };
         jobFrames.set(job.id, frame);
         jobLayer.append(node);
-        boxes.set('job:' + job.id, { key: 'job:' + job.id, x: spot.x, y: spot.y, h: heightOf(), node });
+        boxes.set('job:' + job.id, { key: 'job:' + job.id, ...spot, node });
       }
       const waiting = job.status === 'queued';
       if (!waiting && !frame.gate) frame.gate = frame.shot.appendChild(runningGate());
@@ -172,13 +230,49 @@ export function render(view) {
       frame.fact.textContent = waiting ? `position ${job.position}` : job.steps ? `step ${job.step} of ${job.steps}` : 'starting';
     }
     hint.classList.toggle('hidden', boxes.size > 0);
+  }
+
+  // Move every frame to where its row puts it, and name the rows down the left side.
+  function settle() {
+    for (const box of boxes.values()) {
+      const spot = spots.get(box.key);
+      if (!spot) continue;
+      Object.assign(box, spot);
+      box.node.style.left = spot.x + 'px';
+      box.node.style.top = spot.y + 'px';
+    }
+    labelLayer.replaceChildren(...bands.map((band, i) => el('button', { class: 'shot-label', title: 'Rename this shot',
+      style: `left:${-LABEL}px;top:${band.y}px;width:${LABEL - GAP / 2}px;height:${band.h}px`,
+      onpointerdown: (e) => e.stopPropagation(), onclick: (e) => rename(band.row, e.currentTarget, i) }, band.row.name || `Shot ${i + 1}`)));
     drawOverlay();
   }
 
+  function rename(row, label, index) {
+    const input = el('input', { type: 'text', class: 'shot-name', maxlength: 40, value: row.name || `Shot ${index + 1}`, 'aria-label': 'Name of the shot' });
+    const done = (keep) => {
+      if (!input.isConnected) return;
+      if (keep) { row.name = input.value.trim() === `Shot ${index + 1}` ? '' : input.value.trim(); save(); }
+      settle();
+    };
+    input.addEventListener('pointerdown', (e) => e.stopPropagation());
+    input.addEventListener('blur', () => done(true));
+    input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') done(true); else if (e.key === 'Escape') done(false); });
+    label.replaceChildren(input);
+    input.select();
+  }
+
+  // update(): jobs or rows changed. draw(): the items themselves changed, so their frames are rebuilt too.
+  function update() {
+    const jobs = arrange();
+    drawJobs(jobs);
+    settle();
+  }
+
   function draw() {
-    const jobs = place();
+    const jobs = arrange();
     drawItems();
     drawJobs(jobs);
+    settle();
   }
 
   // ------------------------------------------------------------ camera
@@ -219,11 +313,12 @@ export function render(view) {
   function fit() {
     if (!boxes.size) { cam.x = 96; cam.y = 96; cam.k = 1; return applyCamera(); }
     const all = bounds([...boxes.values()]);
+    all.x -= LABEL;   // the names of the shots are part of the picture
     const rect = stage.getBoundingClientRect();
-    const panel = view.classList.contains('with-agent') ? 392 : 0;   // the open agent panel covers the right side
-    const room = { w: rect.width - 160 - panel, h: rect.height - 80 - view.querySelector('.canvas-dock').offsetHeight - 80 };
+    const covered = isOpen() ? panelWidth + 12 : 0;   // the open panel covers the right side
+    const room = { w: rect.width - 160 - covered, h: rect.height - 160 };
     cam.k = clamp(Math.min(room.w / (all.right - all.x), room.h / (all.bottom - all.y)), MIN_ZOOM, 1);
-    cam.x = (rect.width - panel - (all.right - all.x) * cam.k) / 2 - all.x * cam.k;
+    cam.x = (rect.width - covered - (all.right - all.x) * cam.k) / 2 - all.x * cam.k;
     cam.y = 80 + (room.h - (all.bottom - all.y) * cam.k) / 2 - all.y * cam.k;
     applyCamera();
   }
@@ -283,17 +378,27 @@ export function render(view) {
         m.box.node.style.top = m.box.y + 'px';
       }
     }, () => {
+      // A click on a frame while the agent is open attaches it to the message, so several can be named one after another.
+      if (!moved && isOpen() && tab === 'agent') agent.attach(items.find((i) => i.id === id));
       if (!moved) return;
-      for (const m of moving) layout.items[m.box.key] = { x: m.box.x, y: m.box.y };
+      // Dropped frames join the shot they were dropped on, at that place in the row; below the last row they start a new shot.
+      const dropped = boxes.get(id);
+      const middle = dropped.y + dropped.h / 2;
+      const ids = moving.map((m) => m.box.key).filter((key) => typeof key === 'number');
+      const band = bands.find((b) => middle < b.y + b.h + SLATE + GAP / 2);
+      const at = Math.max(0, Math.round(dropped.x / (FRAME + GAP)));
+      for (const row of layout.rows) row.keys = row.keys.filter((key) => !ids.includes(key));
+      const row = band ? band.row : newRow();
+      row.keys.splice(Math.min(at, row.keys.length), 0, ...ids);
+      update();
       save();
-      drawOverlay();
     });
   }
 
   function selectionChanged() {
     for (const box of boxes.values()) box.node.classList.toggle('selected', selected.has(box.key));
     dock.refresh();
-    agent.refresh();
+    cast.refresh();
     drawOverlay();
   }
 
@@ -369,7 +474,7 @@ export function render(view) {
 
   async function load() {
     ready = false;
-    for (const [id, frame] of jobFrames) { frame.node.remove(); boxes.delete('job:' + id); delete jobSpots[id]; }
+    for (const [id, frame] of jobFrames) { frame.node.remove(); boxes.delete('job:' + id); }
     jobFrames.clear();
     try {
       projects = (await api('/api/projects')).projects;
@@ -377,19 +482,17 @@ export function render(view) {
       picker.replaceChildren(el('option', { value: '' }, 'All work'),
         ...projects.map((p) => el('option', { value: p.id, selected: p.id === project }, p.name)));
       const [board] = await Promise.all([api('/api/boards/canvas?project=' + project), loadItems()]);
-      layout = { items: {}, ...board.data };
+      const saved = board.data || {};
+      layout = { rows: Array.isArray(saved.rows) ? saved.rows.filter((row) => row && Array.isArray(row.keys)) : [], count: Number(saved.count) || 0 };
       ready = true;
-      const unplaced = items.some((i) => !layout.items[i.id]);
       draw();
-      dock.refresh();
       fit();
-      if (unplaced) save();
     } catch (e) { hint.textContent = e.message; hint.classList.remove('hidden'); }
   }
 
   const onKey = (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') { e.preventDefault(); return showAgent(!view.classList.contains('with-agent')); }
-    if (e.target.closest('input, textarea, select, dialog') || e.metaKey || e.ctrlKey) return;
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') { e.preventDefault(); return showPanel(!isOpen()); }
+    if (e.target.closest('input, textarea, select, dialog, [contenteditable]') || e.metaKey || e.ctrlKey) return;
     if (e.key === '1') fit();
     else if (e.key === '0') zoomTo(1);
     else if (e.key === 'Escape' && selected.size) { selected.clear(); selectionChanged(); }
@@ -401,13 +504,15 @@ export function render(view) {
   }, 1000);
   const unsubscribe = subscribe((change) => {
     if (!ready) return;
-    if (change === 'jobs') drawJobs(place());
-    if (change === 'library') loadItems().then(() => { draw(); save(); }).catch(() => {});
+    if (change === 'jobs') update();
+    if (change === 'library') loadItems().then(draw).catch(() => {});
   });
 
   applyCamera();
   load();
-  if (localStorage.getItem('scene.agent')) showAgent(true);
+  cast.reload();
+  setWidth(Number(localStorage.getItem('scene.panel.width')));
+  showPanel(true);
   return () => {
     unsubscribe();
     dock.destroy();
@@ -416,6 +521,7 @@ export function render(view) {
     clearTimeout(saveTimer);
     lazy.disconnect();
     window.removeEventListener('keydown', onKey);
-    view.classList.remove('full', 'with-agent');
+    view.classList.remove('full', 'with-panel', 'resizing');
+    view.style.removeProperty('--panel-w');
   };
 }

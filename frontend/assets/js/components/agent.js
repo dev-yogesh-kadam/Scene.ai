@@ -1,30 +1,51 @@
-// The agent panel on the Canvas: say what to make, read the plan and its cost, approve it.
+// The agent tab of the Canvas panel: say what to make, read the plan and its cost, approve it.
 // The agent only proposes. Nothing is queued or charged until Approve is pressed.
 
 import { api } from '../api.js';
-import { el } from '../dom.js';
+import { el, still } from '../dom.js';
 import { store, subscribe, refreshJobs } from '../store.js';
 
 const KEPT = 12;   // how many past plans are remembered per project
-const MARK = { queued: 'Waiting', running: 'Running', done: 'Done', failed: 'Failed', cancelled: 'Cancelled' };
+const RECALLED = 6;   // how many earlier turns are sent along, so the agent can follow the conversation
+const MARK = { queued: 'Waiting', running: 'Running', done: 'Done', failed: 'Failed', cancelled: 'Cancelled', waiting: 'Waits for the step before' };
 
-// selection(): the selected library items. projectId(): the current project or 0. onJobs(ids): jobs the agent started.
-export function agentPanel({ selection = () => [], projectId = () => 0, onJobs = () => {}, onClose = () => {} } = {}) {
+// projectId(): the current project or 0. onJobs(ids): jobs the agent started.
+// The page calls attach(item) when a frame is clicked: the item goes into the message as a chip, where the cursor is.
+export function agentPanel({ projectId = () => 0, onJobs = () => {} } = {}) {
   let runs = [];       // {instruction, reply, steps, total, state: 'proposed' | 'approved' | 'dismissed'}
   let brief = '';
-  let busy = false;
+  let busy = false;       // a message is with the model
+  let working = false;    // an approved plan is being carried out, which can take minutes when steps wait for each other
 
   const status = el('span', { class: 'slate-text' }, 'checking…');
+  // Which model answers: any the Ollama server has. The choice is this browser's, kept in localStorage.
+  const modelPicker = el('select', { class: 'small agent-model hidden', 'aria-label': 'Model', title: 'The model the agent uses',
+    onchange: (e) => localStorage.setItem('scene.agent.model', e.target.value) });
   const chips = el('div', { class: 'row agent-context' });
   const briefBox = el('div', { class: 'agent-brief hidden' });
   const log = el('div', { class: 'agent-log' });
-  const input = el('textarea', { rows: 2, 'aria-label': 'Instruction', placeholder: 'Tell the agent what to make',
-    onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } } });
-  const sendButton = el('button', { class: 'btn agent', onclick: () => send() }, 'Plan');
-  const node = el('aside', { class: 'agent-panel', 'aria-label': 'Agent' },
-    el('div', { class: 'agent-head' }, el('span', { class: 'agent-name' }, 'Agent'), status, el('span', { style: 'flex:1' }),
-      el('button', { class: 'btn small quiet', title: 'What the agent keeps true in every shot of this project', onclick: () => toggleBrief() }, 'Brief'),
-      el('button', { class: 'icon-btn', title: 'Close (Ctrl or ⌘ + J)', 'aria-label': 'Close the agent', onclick: onClose }, '×')),
+  // The message is typed text with chips in it, one per attached item, so the words around a chip say what it is for.
+  const input = el('div', { class: 'agent-input', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Message',
+    'data-placeholder': 'Ask the agent, or tell it what to make. Click a frame to attach it.',
+    onkeydown: (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (e.shiftKey) document.execCommand('insertLineBreak'); else send();
+    },
+    onpaste: (e) => {   // only the words of what is pasted, never its markup
+      e.preventDefault();
+      document.execCommand('insertText', false, (e.clipboardData || window.clipboardData).getData('text/plain'));
+    } });
+  let caret = null;   // where the cursor last was in the message: a click on the canvas takes the focus away
+  const rememberCaret = () => {
+    const picked = window.getSelection();
+    if (picked.rangeCount && input.contains(picked.anchorNode)) caret = picked.getRangeAt(0).cloneRange();
+  };
+  document.addEventListener('selectionchange', rememberCaret);
+  const sendButton = el('button', { class: 'btn agent', onclick: () => send() }, 'Send');
+  const node = el('div', { class: 'agent-panel' },
+    el('div', { class: 'agent-head' }, modelPicker, status, el('span', { style: 'flex:1' }),
+      el('button', { class: 'btn small quiet', title: 'What the agent keeps true in every shot of this project', onclick: () => toggleBrief() }, 'Brief')),
     briefBox, chips, log,
     el('div', { class: 'agent-foot' }, input, sendButton));
 
@@ -48,27 +69,73 @@ export function agentPanel({ selection = () => [], projectId = () => 0, onJobs =
     text.focus();
   }
 
+  // ------------------------------------------------------------ the message and its attached items
+
+  const chipsIn = () => [...input.querySelectorAll('.attach')];
+
+  // Put an item into the message as a chip, where the cursor was. An item that is already there is not added twice.
+  function attach(item) {
+    if (chipsIn().some((chip) => Number(chip.dataset.id) === item.id)) return;
+    const chip = el('span', { class: 'attach', contenteditable: 'false', 'data-id': item.id, 'data-name': item.name, title: item.name },
+      el('span', { class: 'attach-thumb' }, still(`/api/library/${item.id}/file`, item.kind)),
+      el('span', { class: 'attach-name' }, item.name),
+      el('button', { type: 'button', class: 'attach-drop', title: 'Remove', 'aria-label': `Remove ${item.name}`, tabindex: '-1',
+        onclick: () => { chip.remove(); input.focus(); } }, '×'));
+    const range = caret && input.contains(caret.startContainer) ? caret : null;
+    const space = document.createTextNode('\u00a0');
+    if (range) {
+      range.deleteContents();
+      range.insertNode(space);
+      range.insertNode(chip);
+    } else input.append(chip, space);
+    // Leave the cursor after the chip, ready for the words that say what the item is for.
+    const after = document.createRange();
+    after.setStartAfter(space);
+    after.collapse(true);
+    input.focus();
+    const picked = window.getSelection();
+    picked.removeAllRanges();
+    picked.addRange(after);
+    caret = after.cloneRange();
+  }
+
+  // The message as it is sent: each chip becomes its tag (@1, @2… in the order they appear), and the ids go along in that order.
+  // shown is the same message with the names of the items, for the log.
+  function message() {
+    const ids = [];
+    const read = (nodes, named) => [...nodes].map((n) => {
+      if (n.nodeType === Node.TEXT_NODE) return n.textContent;
+      if (n.classList && n.classList.contains('attach')) {
+        const id = Number(n.dataset.id);
+        if (!ids.includes(id)) ids.push(id);
+        return named ? `[${n.dataset.name}]` : '@' + (ids.indexOf(id) + 1);
+      }
+      if (n.nodeName === 'BR') return '\n';
+      return read(n.childNodes, named) + (n.nodeName === 'DIV' ? '\n' : '');
+    }).join('');
+    const tidy = (text) => text.replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ').trim();
+    return { text: tidy(read(input.childNodes, false)), shown: tidy(read(input.childNodes, true)), ids };
+  }
+
   function drawContext() {
-    const chosen = selection();
-    chips.replaceChildren(...[
-      el('span', { class: 'chip' }, brief ? 'Brief' : 'No brief yet'),
-      chosen.length > 0 && el('span', { class: 'chip' }, chosen.length === 1 ? chosen[0].name : `${chosen.length} selected`),
-    ].filter(Boolean));
+    chips.replaceChildren(el('span', { class: 'chip' }, brief ? 'Brief' : 'No brief yet'));
   }
 
   // ------------------------------------------------------------ plans
 
   function drawStep(run, step) {
     const job = step.job && store.jobs.find((j) => j.id === step.job);
-    const state = step.error ? 'failed' : job ? job.status : step.job ? 'done' : '';
+    const state = step.error ? 'failed' : job ? job.status : (step.job || step.made) ? 'done' : step.rendering ? 'running' : step.waiting ? 'waiting' : '';
     return el('div', { class: 'agent-step ' + state },
       el('i', { class: 'cell-mark' }),
       el('div', { class: 'agent-step-body' },
         el('b', {}, step.name),
-        el('span', { class: 'slate-text' }, [step.workflow_title, step.facts, step.start && 'starts on ' + step.start.name].filter(Boolean).join(' · ')),
+        el('span', { class: 'slate-text' }, [step.workflow_title, step.facts, step.start && 'starts on ' + step.start.name,
+          step.after && `starts on the result of step ${step.after.step + 1}`,
+          ...(step.uses || []).map((use) => `${use.name} as ${use.label.toLowerCase()}${use.cast ? ' (cast)' : ''}`)].filter(Boolean).join(' · ')),
         el('p', { class: 'small muted' }, step.prompt),
         step.error && el('p', { class: 'small error' }, step.error)),
-      el('span', { class: 'slate-text' }, state ? MARK[state] : step.credits + ' cr'));
+      el('span', { class: 'slate-text' }, state ? MARK[state] : step.credits ? step.credits + ' cr' : 'Free'));
   }
 
   function drawLog() {
@@ -81,44 +148,107 @@ export function agentPanel({ selection = () => [], projectId = () => 0, onJobs =
             el('span', { class: 'slate-text' }, `${run.total} cr · you have ${Number(store.user.credits ?? 0)} cr`),
             el('span', { class: 'row' },
               el('button', { class: 'btn small quiet', onclick: () => { run.state = 'dismissed'; saveRuns(); drawLog(); } }, 'Dismiss'),
-              el('button', { class: 'btn small primary', disabled: busy || run.total > Number(store.user.credits ?? 0), onclick: () => approve(run) }, 'Approve'))),
+              el('button', { class: 'btn small primary', disabled: working || run.total > Number(store.user.credits ?? 0), onclick: () => approve(run) }, 'Approve'))),
+          // An approved plan with steps still to carry out: it was interrupted, or a step failed. Resume goes on from there.
+          run.state === 'approved' && !working && run.steps.some((step) => !step.job && !step.made) && el('div', { class: 'agent-approve' },
+            el('span', { class: 'slate-text' }, 'Not every step was carried out.'),
+            el('button', { class: 'btn small primary', onclick: () => approve(run) }, 'Resume')),
           run.state === 'dismissed' && el('div', { class: 'agent-approve' }, el('span', { class: 'slate-text' }, 'Dismissed. Nothing was made.'))))))
-      : [el('p', { class: 'muted small' }, 'Say what you want to see. The agent writes the shots, picks the settings and shows the cost. Nothing runs until you approve.')]));
+      : [el('p', { class: 'muted small' }, 'Ask a question or say what you want to see. The agent writes the shots, picks the settings and shows the cost. Nothing runs until you approve.')]));
     log.scrollTop = log.scrollHeight;
   }
 
   async function send() {
-    const instruction = input.value.trim();
-    if (!instruction || busy) return;
+    const { text, shown: instruction, ids } = message();
+    if (!text || busy) return;
     busy = true;
     sendButton.disabled = true;
-    sendButton.replaceChildren(el('i', { class: 'cell-mark stepping' }), 'Planning');
+    sendButton.replaceChildren(el('i', { class: 'cell-mark stepping' }), 'Thinking');
     try {
       const plan = await api('/api/agent/plan', { method: 'POST',
-        json: { instruction, project_id: projectId() || null, selection: selection().map((i) => i.id) } });
+        json: { instruction: text, project_id: projectId() || null, selection: ids, model: localStorage.getItem('scene.agent.model') || null,
+          history: runs.slice(-RECALLED).map((r) => ({ instruction: r.instruction, reply: r.reply, steps: r.steps.map((s) => s.name) })) } });
       runs.push({ instruction, reply: plan.reply, steps: plan.steps, total: plan.total, state: plan.steps.length ? 'proposed' : 'answered' });
-      input.value = '';
+      input.replaceChildren();
+      caret = null;
       saveRuns();
     } catch (e) {
       runs.push({ instruction, reply: e.message, steps: [], total: 0, state: 'answered' });
     }
     busy = false;
     sendButton.disabled = false;
-    sendButton.replaceChildren('Plan');
+    sendButton.replaceChildren('Send');
     drawLog();
   }
 
-  // Queue the approved steps one by one, through the same door as the Create page. Stops at the first refusal.
+  // Run the approved steps one by one: generations are queued through the same door as the Create page,
+  // edits are made through the timeline export. Stops at the first refusal.
+  // The library item a step made, waiting for its job if it is still being rendered. A failed or cancelled job throws.
+  async function resultOf(step) {
+    if (step.made) return step.made;
+    if (step.error || !step.job) throw new Error('The step this one starts on was not made.');
+    for (;;) {
+      const job = store.jobs.find((j) => j.id === step.job);
+      if (job && (job.status === 'failed' || job.status === 'cancelled')) throw new Error('The step this one starts on did not finish.');
+      if (!job || job.status === 'done') {
+        const made = (await api('/api/library')).items.find((i) => i.job_id === step.job);
+        if (made) return made.id;
+        if (!job) throw new Error('The step this one starts on has no result in the library.');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      if (!node.isConnected) throw new Error('Stopped: the canvas was left before the earlier step finished. Press Resume to go on.');
+    }
+  }
+
+  // Carry out the steps of an approved plan, in order. Steps that were already carried out are left alone, so this
+  // also resumes a plan that was interrupted while a step was waiting for the one before it.
   async function approve(run) {
-    busy = true;
+    working = true;
     run.state = 'approved';
     drawLog();
     for (const step of run.steps) {
+      if (step.job || step.made) continue;
+      step.error = null;
       try {
-        const settings = { ...step.settings, refs: {} };
+        if (step.motion) {   // words and shapes drawn by HyperFrames: rendered on the spot, with no job; charged by its length
+          step.rendering = true;
+          drawLog();
+          try {
+            step.made = (await api('/api/motion/render', { method: 'POST', json: { ...step.motion, project_id: projectId() || null } })).id;
+          } finally { step.rendering = false; }
+          drawLog();
+          continue;
+        }
+        if (step.sound) {   // a sound put on a video with ffmpeg: made on the spot, with no job and no charge
+          step.made = (await api('/api/edit/sound', { method: 'POST', json: { ...step.sound, project_id: projectId() || null } })).id;
+          drawLog();
+          continue;
+        }
+        if (step.edit) {   // a cut or a join of videos the user has: made on the spot, with no job and no charge
+          step.made = (await api('/api/timeline/export', { method: 'POST',
+            json: { name: step.name, project_id: projectId() || null, clips: step.edit.clips, parent: step.edit.clips[0].id } })).id;
+          drawLog();
+          continue;
+        }
+        const uses = step.uses || [];
+        const settings = { ...step.settings, refs: {}, parent: step.start ? step.start.id : uses.length ? uses[0].id : null };
+        for (const use of uses) {   // each attached item goes into the slot the plan named for it
+          const ref = await api(`/api/library/${use.id}/reference?kind=${use.kind}`, { method: 'POST' });
+          settings.refs[use.slot] = { comfy_name: ref.comfy_name, name: ref.name };
+        }
         if (step.start) {
           const ref = await api(`/api/library/${step.start.id}/reference`, { method: 'POST' });
           settings.refs[step.start.slot] = { comfy_name: ref.comfy_name, name: ref.name };
+        }
+        if (step.after) {   // this shot starts on what an earlier step of the plan makes: wait for it, then take it as the first frame
+          step.waiting = true;
+          saveRuns();
+          drawLog();
+          let earlier;
+          try { earlier = await resultOf(run.steps[step.after.step]); } finally { step.waiting = false; }
+          const ref = await api(`/api/library/${earlier}/reference`, { method: 'POST' });
+          settings.refs[step.after.slot] = { comfy_name: ref.comfy_name, name: ref.name };
+          settings.parent = earlier;
         }
         const data = new FormData();
         data.append('settings', JSON.stringify(settings));
@@ -129,7 +259,7 @@ export function agentPanel({ selection = () => [], projectId = () => 0, onJobs =
         break;
       }
     }
-    busy = false;
+    working = false;
     saveRuns();
     refreshJobs().catch(() => {});
     drawLog();
@@ -143,8 +273,19 @@ export function agentPanel({ selection = () => [], projectId = () => 0, onJobs =
     try {
       const [saved, savedBrief, state] = await Promise.all([api(board('agent')), api(board('brief')), api('/api/agent/status')]);
       runs = saved.data.runs || [];
+      for (const run of runs) for (const step of run.steps) { step.waiting = false; step.rendering = false; }   // nothing is under way after a reload
       brief = (savedBrief.data.text || '').trim();
-      status.textContent = state.online ? state.model : 'offline';
+      // With more than one model on the server there is a choice; otherwise just its name.
+      const models = state.online ? state.models || [] : [];
+      const picked = localStorage.getItem('scene.agent.model');
+      const current = models.includes(picked) ? picked : state.model;
+      // A hosted model is named "<service>/<name>"; it is shown as its name and the service it is asked of.
+      const services = Object.fromEntries((state.hosted || []).map((s) => [s.id, s.name]));
+      const shown = (name) => { const [sid, ...rest] = name.split('/'); return rest.length && services[sid] ? `${rest.join('/')} · ${services[sid]}` : name; };
+      modelPicker.replaceChildren(...models.map((name) => el('option', { value: name, selected: name === current }, shown(name))));
+      modelPicker.classList.toggle('hidden', models.length < 2);
+      status.classList.toggle('hidden', models.length >= 2);
+      status.textContent = state.online ? shown(state.model) : 'offline';
       status.title = state.online ? '' : state.detail;
       status.classList.toggle('error', !state.online);
       onJobs(startedJobs());
@@ -155,6 +296,7 @@ export function agentPanel({ selection = () => [], projectId = () => 0, onJobs =
 
   const unsubscribe = subscribe((change) => { if (change === 'jobs' || change === 'credits') drawLog(); });
   load();
-  // refresh(): the selection changed. reload(): the project changed.
-  return { node, refresh: drawContext, reload: load, focus: () => input.focus(), destroy: unsubscribe };
+  // attach(item): put a library item into the message. reload(): the project changed.
+  return { node, attach, reload: load, focus: () => input.focus(),
+    destroy: () => { unsubscribe(); document.removeEventListener('selectionchange', rememberCaret); } };
 }

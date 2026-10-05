@@ -6,9 +6,10 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from .. import media
+from ..catalog import KINDS
 from ..references import upload_reference
 from .deps import current_user
 
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/api", tags=["library"])
 
 
 def _path(request, row):
-    return request.app.state.output_dir / str(row["user_id"]) / row["filename"]
+    return request.app.state.outputs.folder(row["user_id"]) / row["filename"]
 
 
 def _own(request, user, item_id):
@@ -43,7 +44,7 @@ async def list_items(request: Request, kind: str = "", q: str = "", project: str
     sql = ("SELECT g.*, j.cost, p.name AS project_name FROM generations g LEFT JOIN jobs j ON j.id = g.job_id "
            "LEFT JOIN projects p ON p.id = g.project_id WHERE g.user_id = ?")
     params = [user["id"]]
-    if kind in ("video", "image"):
+    if kind in KINDS:
         sql, params = sql + " AND g.kind = ?", params + [kind]
     if project == "none":
         sql += " AND g.project_id IS NULL"
@@ -70,6 +71,25 @@ async def get_file(item_id: int, request: Request, download: bool = False, user:
     return FileResponse(path, filename=path.name if download else None)
 
 
+async def poster_response(request, path):
+    """A video's poster. The browser keeps it and only asks whether it has changed, which costs no download."""
+    if not path.is_file():
+        raise HTTPException(404, "The file is missing from storage.")
+    try:
+        poster = await media.poster(path)
+    except media.MediaError as error:
+        raise HTTPException(404, str(error))
+    response = FileResponse(poster, stat_result=poster.stat(), headers={"Cache-Control": "private, no-cache"})
+    if request.headers.get("if-none-match") == response.headers["etag"]:
+        return Response(status_code=304, headers={"ETag": response.headers["etag"], "Cache-Control": "private, no-cache"})
+    return response
+
+
+@router.get("/library/{item_id}/poster")
+async def get_poster(item_id: int, request: Request, user: dict = Depends(current_user)):
+    return await poster_response(request, _path(request, _own(request, user, item_id)))
+
+
 @router.put("/library/{item_id}")
 async def update_item(item_id: int, body: dict, request: Request, user: dict = Depends(current_user)):
     """Rename an item or move it to a project (project_id null = no project)."""
@@ -87,26 +107,32 @@ async def update_item(item_id: int, body: dict, request: Request, user: dict = D
 @router.delete("/library/{item_id}")
 async def delete_item(item_id: int, request: Request, user: dict = Depends(current_user)):
     row = _own(request, user, item_id)
-    _path(request, row).unlink(missing_ok=True)
+    path = _path(request, row)
+    path.unlink(missing_ok=True)
+    media.poster_path(path).unlink(missing_ok=True)
     request.app.state.db.run("DELETE FROM generations WHERE id = ?", (item_id,))
     return {"ok": True}
 
 
 @router.post("/library/{item_id}/reference")
-async def as_reference(item_id: int, request: Request, user: dict = Depends(current_user)):
-    """Make a library item usable as a reference in a new job: an image as it is, a video's last frame."""
+async def as_reference(item_id: int, request: Request, kind: str = "image", user: dict = Depends(current_user)):
+    """Make a library item usable as a reference in a new job. kind is what the slot takes: an image slot gets an
+    image as it is or a video's last frame; a video slot a video; an audio slot a sound, or a video for its sound."""
     row = _own(request, user, item_id)
     path = _path(request, row)
     if not path.is_file():
         raise HTTPException(404, "The file is missing from storage.")
     comfy = request.app.state.comfy
-    if row["kind"] == "image":
-        name = await upload_reference(comfy, path.name, path.read_bytes())
-        return {"comfy_name": name, "name": row["name"]}
-    with tempfile.TemporaryDirectory() as tmp:
-        frame = await media.last_frame(path, Path(tmp) / (path.stem + "_last.png"))
-        name = await upload_reference(comfy, frame.name, frame.read_bytes(), "image/png")
-    return {"comfy_name": name, "name": "End of " + row["name"]}
+    if kind == "image" and row["kind"] == "video":
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = await media.last_frame(path, Path(tmp) / (path.stem + "_last.png"))
+            name = await upload_reference(comfy, frame.name, frame.read_bytes(), "image/png")
+        return {"comfy_name": name, "name": "End of " + row["name"]}
+    if row["kind"] == kind or (kind == "audio" and row["kind"] == "video"):
+        return {"comfy_name": await upload_reference(comfy, path.name, path.read_bytes()), "name": row["name"]}
+    raise HTTPException(400, "{} is {}, and this needs {}.".format(
+        row["name"], {"image": "an image", "video": "a video", "audio": "a sound"}[row["kind"]],
+        {"image": "an image or a video", "video": "a video", "audio": "a sound"}.get(kind, "something else")))
 
 
 # ---------------------------------------------------------------- projects

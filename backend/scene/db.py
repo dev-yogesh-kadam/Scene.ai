@@ -1,7 +1,8 @@
-"""SQLite storage: users, sessions, jobs, finished generations, projects, boards, assets, credits and settings."""
+"""SQLite storage: users, sessions, jobs, finished generations, projects, boards, assets, credits, pricing and settings."""
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 SCHEMA = """
@@ -100,16 +101,73 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS workflow_pricing (
+    workflow TEXT PRIMARY KEY,
+    credits_per_second REAL,
+    base_credits REAL,
+    resolution_multiplier REAL NOT NULL DEFAULT 1,
+    quality_multiplier REAL NOT NULL DEFAULT 1,
+    preferred_server TEXT NOT NULL DEFAULT '',
+    fallback_servers TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS credit_packages (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    price_inr REAL NOT NULL DEFAULT 0,
+    credits INTEGER NOT NULL DEFAULT 0,
+    bonus_credits INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS servers (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    cpu TEXT NOT NULL DEFAULT '',
+    gpu TEXT NOT NULL DEFAULT '',
+    vram_gb REAL,
+    role TEXT NOT NULL DEFAULT '',
+    renders INTEGER NOT NULL DEFAULT 0,
+    idle_power_w REAL,
+    generation_power_w REAL,
+    max_power_w REAL,
+    preferred_workflows TEXT NOT NULL DEFAULT '',
+    supported_workflows TEXT NOT NULL DEFAULT '',
+    purchase_price_inr REAL,
+    purchase_date TEXT NOT NULL DEFAULT '',
+    life_months REAL,
+    salvage_value_inr REAL,
+    productive_hours REAL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created REAL NOT NULL
+);
 """
 
 # Columns added after the first release: (table, column, definition). Added to older databases on start.
 COLUMNS = [
     ("users", "credits", "INTEGER NOT NULL DEFAULT 0"),
     ("users", "disabled", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "agent", "INTEGER NOT NULL DEFAULT 0"),   # may use the agent; an admin always may
     ("jobs", "project_id", "INTEGER"),
     ("jobs", "cost", "INTEGER NOT NULL DEFAULT 0"),
     ("generations", "project_id", "INTEGER"),
     ("credit_events", "note", "TEXT NOT NULL DEFAULT ''"),
+    # What a job was asked for and what became of its credits. `cost` stays the price of the job.
+    ("jobs", "seconds_requested", "REAL"),
+    ("jobs", "credits_required", "INTEGER NOT NULL DEFAULT 0"),
+    ("jobs", "credits_reserved", "INTEGER NOT NULL DEFAULT 0"),
+    ("jobs", "credits_consumed", "INTEGER NOT NULL DEFAULT 0"),
+    ("jobs", "credits_refunded", "INTEGER NOT NULL DEFAULT 0"),
+    ("jobs", "server", "TEXT NOT NULL DEFAULT ''"),
+    ("jobs", "retries", "INTEGER NOT NULL DEFAULT 0"),
+    ("jobs", "output_size", "INTEGER"),
+]
+
+# The studio's two machines, added to an installation that has no servers yet. Every value can be changed in the
+# admin console; the power of Zoro is a first assumption until it is measured at the wall.
+SERVERS = [
+    ("Lufi", "Ryzen 9 7900X", "RTX 4060 Ti", 8, "Hosting, the agent's local models, light workflows", 0, None),
+    ("Zoro", "Ryzen 9 9950X", "RTX 5090", 32, "Heavy image, video and audio generation", 1, 950),
 ]
 
 
@@ -128,6 +186,9 @@ class Database:
                 self.conn.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, column, definition))
                 if (table, column) == ("users", "credits"):  # accounts from before credits existed
                     self.conn.execute("UPDATE users SET credits = ?", (starting_credits,))
+        if not self.conn.execute("SELECT 1 FROM servers").fetchone():
+            self.conn.executemany("INSERT INTO servers (name, cpu, gpu, vram_gb, role, renders, generation_power_w, created) "
+                                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [(*server, time.time()) for server in SERVERS])
 
     def run(self, sql, params=()):
         """Run a statement and return the new row id (for INSERT)."""

@@ -12,22 +12,31 @@ export function projectDialog({ project } = {}) {
     const brief = el('textarea', { rows: 4, placeholder: 'Style, characters, places, rules. The agent keeps these true in every shot.' });
     const error = el('p', { class: 'error notice' });
     const submit = el('button', { class: 'btn primary', type: 'submit' }, project ? 'Save' : 'Create project');
-    const dialog = el('dialog', { class: 'project-dialog' },
+    const cancel = el('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel');
+    // While a request is running the window cannot be closed, so its result is never lost.
+    const busy = (on) => { submit.disabled = cancel.disabled = on; };
+    const dialog = el('dialog', { class: 'project-dialog', oncancel: (e) => { if (submit.disabled) e.preventDefault(); } },
       el('form', { method: 'dialog', onsubmit: async (e) => {
         e.preventDefault();
-        submit.disabled = true;
+        busy(true);
         try {
           if (project) {
             await api('/api/projects/' + project.id, { method: 'PUT', json: { name: name.value } });
             saved = { ...project, name: name.value.trim() };
           } else {
-            saved = await api('/api/projects', { method: 'POST', json: { name: name.value } });
+            // Created once: if only the brief failed, a second try saves the brief and makes no second project.
+            if (!saved) {
+              saved = await api('/api/projects', { method: 'POST', json: { name: name.value } });
+              name.disabled = true;
+              submit.textContent = 'Save brief';
+              cancel.textContent = 'Skip the brief';
+            }
             if (brief.value.trim()) await api('/api/boards/brief', { method: 'PUT', json: { project: saved.id, data: { text: brief.value } } });
           }
           dialog.close();
         } catch (err) {
-          error.textContent = err.message;
-          submit.disabled = false;
+          error.textContent = saved && !project ? 'The project was created, but its brief was not saved: ' + err.message : err.message;
+          busy(false);
         }
       } },
         el('h2', {}, project ? 'Rename project' : 'New project'),
@@ -37,7 +46,7 @@ export function projectDialog({ project } = {}) {
         !project && field('Brief (optional)', brief),
         error,
         el('div', { class: 'dialog-buttons' },
-          el('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'), submit)));
+          cancel, submit)));
     dialog.addEventListener('close', () => { dialog.remove(); resolve(saved); });
     document.body.append(dialog);
     dialog.showModal();
