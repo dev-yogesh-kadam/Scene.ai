@@ -13,8 +13,9 @@ from .. import media
 from ..catalog import KINDS
 from ..comfy import workflows
 from ..agent import AgentError
-from ..references import UPLOAD_PREFIX, read_upload, upload_reference
-from .deps import COOKIE, current_user, user_for_token
+from ..references import media_kind, owns_upload, read_upload, upload_reference
+from ..security import same_origin
+from .deps import COOKIE, current_user, limited, user_for_token
 
 router = APIRouter(prefix="/api", tags=["studio"])
 
@@ -78,7 +79,7 @@ async def status(request: Request, user: dict = Depends(current_user)):
 async def list_workflows(request: Request, user: dict = Depends(current_user)):
     state = request.app.state
     listed = [w for w in await state.catalog.listing() if state.credits.enabled(w["id"])]
-    return {"workflows": listed, "kinds": KINDS, "default": state.settings.default_workflow}
+    return {"workflows": listed, "kinds": KINDS, "default": state.catalog.current(state.settings.default_workflow)}
 
 
 @router.get("/workflows/{kind}/{name}")
@@ -86,7 +87,7 @@ async def get_workflow(kind: str, name: str, request: Request, user: dict = Depe
     return workflows.describe(await request.app.state.catalog.load("{}/{}".format(kind, name)))
 
 
-@router.post("/estimate")
+@router.post("/estimate", dependencies=[limited("estimate", 120, 60)])
 async def estimate(settings: dict, request: Request, user: dict = Depends(current_user)):
     state = request.app.state
     wf = await state.catalog.load(str(settings.get("workflow", "")))
@@ -140,15 +141,15 @@ async def _video_seconds(state, data, filename):
         path.unlink(missing_ok=True)
 
 
-@router.post("/jobs")
+@router.post("/jobs", dependencies=[limited("jobs", 30, 60)])
 async def create_job(request: Request, user: dict = Depends(current_user)):
     """Multipart form: "settings" (JSON) plus one file per filled reference slot, named "ref:<slot id>".
 
-    A slot can instead reuse a file: {"comfy_name": ...} for one already on the render server,
+    A slot can instead reuse a file: {"comfy_name": ...} for one this user already put on the render server,
     or {"asset_id": ...} for one of the user's saved assets.
     """
     state = request.app.state
-    form = await request.form()
+    form = await request.form(max_files=24, max_fields=64)
     try:
         settings = json.loads(form["settings"])
     except (KeyError, ValueError, TypeError):
@@ -156,7 +157,8 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     wf = await state.catalog.load(str(settings.get("workflow", "")))
     switched_on(state, wf["id"])
     schema = workflows.describe(wf)
-    slots = {r["id"] for r in schema["refs"]}
+    settings["workflow"] = wf["id"]   # the id it goes by now, if it was asked for by the id of a workflow it replaced
+    slots = workflows.refs_in_use(schema, settings)   # a file for a slot the chosen mode does not read is not sent on
 
     project_id = settings.get("project_id") or None
     if project_id and not state.db.one("SELECT 1 FROM projects WHERE id = ? AND user_id = ?", (project_id, user["id"])):
@@ -186,16 +188,24 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
                 raise HTTPException(400, "A saved asset used here no longer exists.")
             data = path.read_bytes()
             await measure(slot, data, asset["filename"])
-            refs[slot] = {"comfy_name": await upload_reference(state.comfy, asset["filename"], data), "name": asset["name"]}
-        elif str(ref.get("comfy_name", "")).startswith(UPLOAD_PREFIX):
-            refs[slot] = {"comfy_name": str(ref["comfy_name"]), "name": str(ref.get("name", ""))}
+            refs[slot] = {"comfy_name": await upload_reference(state.comfy, asset["filename"], data, db=state.db, user_id=user["id"]),
+                          "name": asset["name"]}
+        elif ref.get("comfy_name"):
+            # Only a file this user put on the render server: another user's file name must not be usable.
+            if not owns_upload(state.db, user["id"], ref["comfy_name"]):
+                raise HTTPException(400, "A reference file used here is not one of yours. Add it again.")
+            refs[slot] = {"comfy_name": str(ref["comfy_name"]), "name": str(ref.get("name", ""))[:200]}
+    kinds = {r["id"]: r["kind"] for r in schema["refs"]}
     for key, upload in form.multi_items():
         if not key.startswith("ref:") or key[4:] not in slots or not hasattr(upload, "filename"):
             continue
+        given, wanted = media_kind(upload.filename), kinds.get(key[4:])
+        if wanted and given and given != wanted and not (wanted == "audio" and given == "video"):
+            raise HTTPException(400, "{} is not {} file.".format(upload.filename, {"image": "an image", "video": "a video", "audio": "a sound"}[wanted]))
         data = await read_upload(upload)
         await measure(key[4:], data, upload.filename)
-        name = await upload_reference(state.comfy, upload.filename, data, upload.content_type)
-        refs[key[4:]] = {"comfy_name": name, "name": upload.filename}
+        name = await upload_reference(state.comfy, upload.filename, data, upload.content_type, db=state.db, user_id=user["id"])
+        refs[key[4:]] = {"comfy_name": name, "name": upload.filename[:200]}
     settings["refs"] = refs
 
     _, ctx = workflows.build_prompt(wf, dict(settings, clips=1))  # fails here, not in the queue, if a setting is wrong
@@ -227,8 +237,8 @@ async def delete_job(job_id: str, request: Request, user: dict = Depends(current
 
 @router.get("/ref-preview")
 async def ref_preview(name: str, request: Request, user: dict = Depends(current_user)):
-    """Show a reference that is already in ComfyUI's input folder (used by "Re-run")."""
-    if not name.startswith(UPLOAD_PREFIX) or "/" in name or "\\" in name:
+    """Show a reference of this user's that is already in ComfyUI's input folder (used by "Re-run")."""
+    if not owns_upload(request.app.state.db, user["id"], name):
         raise HTTPException(404, "No such file.")
     response = await request.app.state.comfy.view(name, "", "input")
     if response.status_code != 200:
@@ -248,7 +258,7 @@ async def ref_preview(name: str, request: Request, user: dict = Depends(current_
 async def events(ws: WebSocket):
     state = ws.app.state
     user = user_for_token(state.db, ws.cookies.get(COOKIE))
-    if user is None:
+    if user is None or not same_origin(ws):   # another site's page must not open a connection with the user's cookie
         await ws.close(code=4401)
         return
     await ws.accept()

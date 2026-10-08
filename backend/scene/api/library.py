@@ -126,10 +126,11 @@ async def as_reference(item_id: int, request: Request, kind: str = "image", user
     if kind == "image" and row["kind"] == "video":
         with tempfile.TemporaryDirectory() as tmp:
             frame = await media.last_frame(path, Path(tmp) / (path.stem + "_last.png"))
-            name = await upload_reference(comfy, frame.name, frame.read_bytes(), "image/png")
+            name = await upload_reference(comfy, frame.name, frame.read_bytes(), "image/png", db=request.app.state.db, user_id=user["id"])
         return {"comfy_name": name, "name": "End of " + row["name"]}
     if row["kind"] == kind or (kind == "audio" and row["kind"] == "video"):
-        return {"comfy_name": await upload_reference(comfy, path.name, path.read_bytes()), "name": row["name"]}
+        name = await upload_reference(comfy, path.name, path.read_bytes(), db=request.app.state.db, user_id=user["id"])
+        return {"comfy_name": name, "name": row["name"]}
     raise HTTPException(400, "{} is {}, and this needs {}.".format(
         row["name"], {"image": "an image", "video": "a video", "audio": "a sound"}[row["kind"]],
         {"image": "an image or a video", "video": "a video", "audio": "a sound"}.get(kind, "something else")))

@@ -1,0 +1,87 @@
+{
+  "title": "MiniMax H3",
+  "description": "The one MiniMax H3 workflow: a new scene built from reference images, or a first frame animated exactly as it is. Saved at high quality (CRF 16).",
+  "replaces": [
+    "video/h3_director",
+    "video/video_minimax_h3_i2v",
+    "video/video_minimax_h3_r2v",
+    "video/ai_influencer",
+    "video/MiniMax_H3_AI_Influencer",
+    "video/MiniMax_H3_AI_Influencer_v2",
+    "video/ref2va_vsa_4step_rtx4090_v2",
+    "video/comfy_plus_codex"
+  ],
+  "output_name": "16.filename_prefix",
+  "defaults": {"100:value": ""},
+  "hide": ["105", "107", "108", "109", "113", "114"],
+  "controls": [
+    {"node": "144", "input": "sparsity", "type": "float", "label": "VSA sparsity (advanced: 0.5 keeps more detail, 0.75 is faster; used by fast low-quality runs in reference mode)"},
+    {"node": "6", "input": "ref_image_size", "type": "choice", "choices": ["match", "max"], "label": "Reference image size (advanced: max = stronger identity, slower)"}
+  ],
+  "options": [
+    {
+      "id": "engine", "label": "Mode", "default": "reference", "top": true,
+      "choices": [
+        {"id": "reference", "label": "Reference mode", "hint": "A new scene built from your references: characters, outfit, background, prop, motion video, voice sample."},
+        {"id": "first_frame", "label": "First-frame mode", "hint": "Animates the first frame image exactly as it is. With no first frame it is text to video. The reference images, the motion video and the voice sample are not used."}
+      ]
+    },
+    {
+      "id": "mode", "label": "Speed", "default": "fast",
+      "choices": [
+        {"id": "fast", "label": "Fast", "hint": "fast attention: about twice as fast"},
+        {"id": "normal", "label": "Normal", "hint": "no speed-up"}
+      ]
+    },
+    {
+      "id": "quality", "label": "Quality", "default": "medium",
+      "choices": [
+        {"id": "low", "label": "Low", "hint": "a draft with the turbo LoRA: 4 steps in reference mode, 8 in first-frame mode"},
+        {"id": "medium", "label": "Medium", "hint": "20 steps, full model"},
+        {"id": "high", "label": "High", "hint": "40 steps, full model"}
+      ]
+    }
+  ],
+  "rules": [
+    {"when": {"engine": "reference"}, "set": {"107.value": true}},
+    {"when": {"engine": "first_frame"}, "set": {"107.value": false}},
+    {"when": {"mode": "fast"}, "set": {"109.value": true}},
+    {"when": {"mode": "normal"}, "set": {"109.value": false}},
+    {"when": {"quality": "low"}, "set": {"108.value": false}},
+    {"when": {"quality": "medium"}, "set": {"108.value": true, "105.value": 20}},
+    {"when": {"quality": "high"}, "set": {"108.value": true, "105.value": 40}}
+  ],
+  "refs_when": [
+    {
+      "when": {"engine": "reference"},
+      "refs": ["201:image", "202:image", "203:image", "204:image", "205:image", "206:image", "207:video", "208:audio"]
+    }
+  ],
+  "estimate": {
+    "key": ["engine", "mode", "quality"],
+    "base_pixels": 1032192,
+    "table": {
+      "reference/fast/low": {"5": [0.9, true], "10": [2.0, true], "15": [18, true]},
+      "reference/fast/medium": {"5": [2.3, true], "10": [6.1, true], "15": [25, false]},
+      "reference/fast/high": {"5": [4.3, false], "10": [14, false]},
+      "reference/normal/low": {"5": [1.2, true], "10": [3.2, true], "15": [25, false]},
+      "reference/normal/medium": {"5": [4.3, true], "10": [13.8, true], "15": [90, false]},
+      "reference/normal/high": {"5": [8.3, true], "10": [27.0, true], "15": [180, false]},
+      "first_frame/fast/low": {"5": [2.0, false]},
+      "first_frame/normal/low": {"5": [2.0, false]},
+      "first_frame/fast/medium": {"5": [2.3, false], "10": [6.1, false]},
+      "first_frame/fast/high": {"5": [4.3, false], "10": [14, false]},
+      "first_frame/normal/medium": {"5": [4.3, false], "10": [13.8, false]},
+      "first_frame/normal/high": {"5": [8.3, false], "10": [27.0, false]}
+    }
+  },
+  "hints": [
+    "Reference mode builds a new scene from your references. First-frame mode keeps the first frame exactly: use it when the shot must stay the same, such as a podcast or a fixed scene.",
+    "In reference mode say \"the main character\", \"the outfit\", \"the background\" in the prompt. The workflow numbers the references for you.",
+    "Low quality is a draft: expect smudges, soft backgrounds and frozen mouths. Use medium or high for finals.",
+    "Best results come from 5-6 s clips, one action each. Keep the seed fixed while you change the prompt.",
+    "For a sharp background write \"Deep focus: the background stays sharp and detailed, no background blur.\" For a stable camera write \"Locked camera, no cuts, no zoom.\"",
+    "For speech put the words in quotes after \"Audio:\", one short sentence, and add \"realistic lip articulation, no exaggerated mouth opening\". Lip sync to your own audio needs a voice track, with one speaker per clip.",
+    "Use reference images of at least 1024 px, with no watermarks or text. A watermark can get copied into the video."
+  ]
+}

@@ -294,7 +294,7 @@ async def agent_plan(body: dict, request: Request, user: dict = Depends(agent_us
         raise HTTPException(400, "There is no workflow the agent can use yet.")
     answer = await state.agent.ask(agent.SYSTEM.format(max_steps=agent.MAX_STEPS),
                                    agent.question(agent.carry_over(instruction, body.get("history")), _brief(request, user, project), offers, selection,
-                                                  state.settings.default_workflow, agent.past_turns(body.get("history")), pinned, recent),
+                                                  state.catalog.current(state.settings.default_workflow), agent.past_turns(body.get("history")), pinned, recent),
                                    [o["id"] for o in offers], **_model(body))
 
     steps = []

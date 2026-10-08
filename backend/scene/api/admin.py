@@ -16,8 +16,7 @@ from fastapi.responses import FileResponse, Response
 from .. import __version__, audit, backup, edits, media
 from ..catalog import KINDS
 from ..credits import MOTION, OVERLAY, PER_JOB, RATES
-from ..security import hash_password
-from .auth import MIN_PASSWORD, signup_open
+from .auth import new_hash, password_problem, signup_open
 from .deps import admin_user
 from .library import poster_response
 
@@ -184,7 +183,7 @@ async def overview(request: Request, days: int = 30, user: dict = Depends(admin_
 # ---------------------------------------------------------------- users
 
 USER_ROWS = (
-    "SELECT u.id, u.email, u.name, u.role, u.credits, u.disabled, u.agent, u.created, "
+    "SELECT u.id, u.email, u.name, u.role, u.credits, u.disabled, u.agent, u.mfa_enabled, u.created, "
     "(SELECT COUNT(*) FROM generations g WHERE g.user_id = u.id) AS generations, "
     "(SELECT COUNT(*) FROM jobs j WHERE j.user_id = u.id) AS jobs, "
     "(SELECT MAX(j.created) FROM jobs j WHERE j.user_id = u.id) AS last_job, "
@@ -233,7 +232,7 @@ async def user_detail(user_id: int, request: Request, user: dict = Depends(admin
 @router.put("/users/{user_id}")
 async def update_user(user_id: int, body: dict, request: Request, user: dict = Depends(admin_user)):
     """Change a user's role, add credits (negative takes them away), disable the account, give or take access to
-    the agent, or set a new password."""
+    the agent, set a new password, or turn off their two-step sign-in (when they have lost their phone)."""
     state = request.app.state
     target = state.db.one("SELECT email FROM users WHERE id = ?", (user_id,))
     if target is None:
@@ -255,12 +254,16 @@ async def update_user(user_id: int, body: dict, request: Request, user: dict = D
             state.db.run("DELETE FROM sessions WHERE user_id = ?", (user_id,))  # signs them out everywhere
         audit.record(request, user, "Disabled account" if body["disabled"] else "Enabled account", email)
     if "password" in body:
-        if len(str(body["password"])) < MIN_PASSWORD:
-            raise HTTPException(400, "The password needs at least {} characters.".format(MIN_PASSWORD))
-        state.db.run("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(str(body["password"])), user_id))
+        if password_problem(str(body["password"])):
+            raise HTTPException(400, password_problem(str(body["password"])))
+        state.db.run("UPDATE users SET password_hash = ? WHERE id = ?", (await new_hash(str(body["password"])), user_id))
         if user_id != user["id"]:
             state.db.run("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         audit.record(request, user, "Set a new password", email)
+    if body.get("mfa_off"):
+        state.db.run("UPDATE users SET mfa_enabled = 0, mfa_secret = '', mfa_step = 0, mfa_recovery = '[]' WHERE id = ?", (user_id,))
+        state.db.run("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        audit.record(request, user, "Turned off two-step sign-in", email)
     if "add_credits" in body:
         try:
             amount = int(body["add_credits"])

@@ -80,9 +80,10 @@ Stop the app with `Ctrl+C`.
 | `api_url`, `api_key`, `api_models` | none | A hosted model service for the agent beside the local ones, for example Kimi. See [docs/servers.md](docs/servers.md). |
 | `gemini_key`, `gemini_models` | none | Google Gemini models for the agent. |
 | `host`, `port` | `0.0.0.0`, `8080` | Where the app listens. Use `127.0.0.1` to keep it to this computer. |
-| `default_workflow` | none | Workflow selected for new users, for example `video/h3_director`. |
+| `default_workflow` | none | Workflow selected for new users, for example `video/h3_master`. |
 | `allow_signup` | `true` | Whether visitors can create accounts. The first account can always be created. |
-| `secure_cookies` | `false` | Set to `true` when the app is served over https. |
+| `first_account_local` | `true` | The first account (the admin) can only be made from a browser on the machine the app runs on. Set `false` for a server with no browser of its own. |
+| `secure_cookies` | `false` | Marks the session cookie `Secure` for every visit. Visits over https, including through a Cloudflare tunnel, get it anyway. |
 | `signup_credits` | `1000` | Credits a new account starts with. An admin can change it in the admin console. |
 | `signups_per_day` | `3` | New accounts one visitor address may make in a day. `0` means no limit. |
 | `storage_dir`, `workflows_dir` | `storage`, `workflows` | Where data and workflows live. Keep `storage_dir` outside the repo on a real installation, for example `C:/Scene/Data`: git can then never touch the database. |

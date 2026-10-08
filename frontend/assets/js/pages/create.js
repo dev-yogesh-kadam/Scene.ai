@@ -86,9 +86,10 @@ export function render(view) {
     }
     body.classList.remove('hidden');
     wanted = wanted || localStorage.getItem('scene.workflow.' + form.kind) || form.fallback;
-    const pick = usable.find((w) => w.id === wanted) || usable[0];
+    // Work made with a workflow that has since been merged into another is run again with the one that replaced it.
+    const pick = usable.find((w) => w.id === wanted) || usable.find((w) => (w.replaces || []).includes(wanted)) || usable[0];
     picker.value = pick.id;
-    selectWorkflow(pick.id, pick.id === wanted ? saved : undefined).catch(showError);
+    selectWorkflow(pick.id, pick.id === wanted || (pick.replaces || []).includes(wanted) ? saved : undefined).catch(showError);
   }
 
   async function selectWorkflow(id, saved) {
@@ -100,12 +101,17 @@ export function render(view) {
     form.resolution = wf.size && wf.size.resolution;
     form.orientation = wf.size && wf.size.orientation;
     form.seedMode = 'fixed';
-    form.name = id.split('/')[1];
+    form.name = wf.id.split('/')[1];
     form.clips = 1;
     form.refs = {};
     if (saved) {   // re-run from the library
       for (const c of wf.controls) if (saved.values && c.id in saved.values) form.values[c.id] = saved.values[c.id];
-      for (const o of wf.options) if (saved.options && o.id in saved.options) form.options[o.id] = saved.options[o.id];
+      // The prompt is also kept on its own: it carries over from a workflow whose prompt box had another id.
+      const prompted = wf.controls.find((c) => c.role === 'prompt');
+      if (prompted && saved.prompt && !(saved.values && prompted.id in saved.values)) form.values[prompted.id] = saved.prompt;
+      for (const o of wf.options) {
+        if (saved.options && o.choices.some((c) => c.id === saved.options[o.id])) form.options[o.id] = saved.options[o.id];
+      }
       if (wf.size) {
         form.resolution = saved.resolution || form.resolution;
         form.orientation = saved.orientation || form.orientation;
@@ -123,7 +129,7 @@ export function render(view) {
     if (store.prefill) {
       const slot = wf.refs.find((r) => r.id === wf.slots[store.prefill.slot]);
       if (slot) { form.refs[slot.id] = existingRef(store.prefill.ref); form.parent = store.prefill.parent || null; }
-      else showError(new Error('This workflow has no first-frame slot. Pick one that has, such as H3 Director.'));
+      else showError(new Error('This workflow has no first-frame slot. Pick one that has, such as MiniMax H3.'));
       store.prefill = null;
     }
     note.textContent = wf.description + (wf.approximate ? ' Some node settings were guessed because the render server is offline.' : '');
@@ -184,9 +190,12 @@ export function render(view) {
         form.clips > 1 && el('div', { class: 'hint' }, 'One prompt is used for every clip. To give each clip its own prompt, separate them with a line containing only ---')));
     }
 
-    const groups = wf.options.map((o) => field(o.label,
-      seg(o.choices, form.options[o.id], (id) => { form.options[o.id] = id; }),
-      el('div', { class: 'hint' }, (o.choices.find((c) => c.id === form.options[o.id]) || {}).hint || '')));
+    // A choice can change which reference boxes the workflow reads, so they are drawn again with it.
+    const choice = (o) => field(o.label,
+      seg(o.choices, form.options[o.id], (id) => { form.options[o.id] = id; drawRefs(); }),
+      el('div', { class: 'hint' }, (o.choices.find((c) => c.id === form.options[o.id]) || {}).hint || ''));
+    parts.unshift(...wf.options.filter((o) => o.top).map(choice));   // what the whole form depends on comes first
+    const groups = wf.options.filter((o) => !o.top).map(choice);
     const sizes = wf.resolutions.map((r) => ({ id: r, label: String(r) }));
     if (wf.size) {
       special.add(byRole('width').id).add(byRole('height').id);
@@ -274,14 +283,20 @@ export function render(view) {
     if (asset) setRef(slot, { assetId: asset.id, name: asset.name, kind: asset.kind, url: `/api/assets/${asset.id}/file` });
   }
 
+  // Whether the workflow reads this box with the choices made: some belong to one mode only. A file left in a box
+  // that is out of use stays there for when the mode is switched back, and is not sent.
+  const inUse = (slot) => Object.entries(slot.when || {}).every(([k, v]) => [].concat(v).includes(form.options[k]));
+  const used = () => new Set(form.wf.refs.filter(inUse).map((slot) => slot.id));
+
   function drawRefs() {
     const wf = form.wf;
-    if (!wf.refs.length) { refsBlock.className = ''; return refsBlock.replaceChildren(); }
+    const shown = wf.refs.filter(inUse);
+    if (!shown.length) { refsBlock.className = ''; return refsBlock.replaceChildren(); }
     refsBlock.className = 'form-section';
     refsBlock.replaceChildren(
       el('h2', {}, 'References'),
       el('p', { class: 'muted' }, 'All optional unless marked with *. Drop a file on a box, click it, or pick one of your saved assets.'),
-      el('div', { class: 'refs' }, wf.refs.map((slot) => {
+      el('div', { class: 'refs' }, shown.map((slot) => {
         const current = form.refs[slot.id];
         const file = el('input', { type: 'file', accept: ACCEPT[slot.kind], hidden: true,
           onchange: (e) => e.target.files[0] && setRef(slot, e.target.files[0]) });
@@ -320,7 +335,7 @@ export function render(view) {
 
   function settings() {
     const refs = {};
-    for (const [id, r] of Object.entries(form.refs)) {
+    for (const [id, r] of Object.entries(form.refs).filter(([id]) => used().has(id))) {
       if (r.existing) refs[id] = { comfy_name: r.existing, name: r.name };
       else if (r.assetId) refs[id] = { asset_id: r.assetId };
     }
@@ -385,7 +400,7 @@ export function render(view) {
     if (hits.length && !confirmed) return askToConfirm(hits);
     const data = new FormData();
     data.append('settings', JSON.stringify(settings()));
-    for (const [id, r] of Object.entries(form.refs)) if (r.file) data.append('ref:' + id, r.file, r.name);
+    for (const [id, r] of Object.entries(form.refs)) if (r.file && used().has(id)) data.append('ref:' + id, r.file, r.name);
     generateButton.disabled = true;
     generateLabel.textContent = 'Uploading…';
     try {

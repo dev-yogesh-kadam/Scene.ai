@@ -86,6 +86,12 @@ CREATE TABLE IF NOT EXISTS credit_events (
     job_id TEXT,
     created REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS uploads (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    created REAL NOT NULL,
+    PRIMARY KEY (user_id, name)
+);
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY,
     actor_id INTEGER,
@@ -161,6 +167,12 @@ COLUMNS = [
     ("jobs", "server", "TEXT NOT NULL DEFAULT ''"),
     ("jobs", "retries", "INTEGER NOT NULL DEFAULT 0"),
     ("jobs", "output_size", "INTEGER"),
+    # Two-step sign-in: the authenticator secret, whether it is on, the last code's time step (a code is used once)
+    # and the hashes of the unused recovery codes, as a JSON list.
+    ("users", "mfa_secret", "TEXT NOT NULL DEFAULT ''"),
+    ("users", "mfa_enabled", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "mfa_step", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "mfa_recovery", "TEXT NOT NULL DEFAULT '[]'"),
 ]
 
 # The studio's two machines, added to an installation that has no servers yet. Every value can be changed in the

@@ -9,7 +9,7 @@
   "gemini_models": "",
   "host": "0.0.0.0",
   "port": 8080,
-  "default_workflow": "video/h3_director",
+  "default_workflow": "video/h3_master",
   "allow_signup": true,
   "secure_cookies": false
 }

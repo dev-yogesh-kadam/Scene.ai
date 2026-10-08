@@ -34,6 +34,7 @@ class Settings:
     node_path: str = ""           # the Node.js program that renders motion graphics; empty = the one that is installed
     default_workflow: str = ""
     allow_signup: bool = True
+    first_account_local: bool = True   # the first account (the admin) can only be made from the machine the app runs on
     session_days: int = 30
     secure_cookies: bool = False  # set true when the app is served over https
     signup_credits: int = 1000    # credits a new account starts with

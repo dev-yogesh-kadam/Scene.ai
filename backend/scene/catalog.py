@@ -45,7 +45,25 @@ class Catalog:
     def forget_nodes(self):
         self.object_info, self.tried = None, 0.0
 
+    def replaced(self):
+        """Retired workflow id -> the id of the workflow that took its place (its presets file lists it under "replaces").
+        Earlier work, a saved default and a job still waiting name the old id; they are served by the new workflow."""
+        found = {}
+        for workflow_id, path in self.files().items():
+            sidecar = path.with_name(path.stem + ".studio.json")
+            try:
+                old = json.loads(sidecar.read_text(encoding="utf-8")).get("replaces") if sidecar.is_file() else None
+            except (OSError, ValueError):
+                old = None
+            found.update({str(name): workflow_id for name in old or []})
+        return found
+
+    def current(self, workflow_id):
+        """The id a workflow goes by now."""
+        return workflow_id if workflow_id in self.files() else self.replaced().get(workflow_id, workflow_id)
+
     async def load(self, workflow_id):
+        workflow_id = self.current(workflow_id)
         path = self.files().get(workflow_id)
         if path is None:
             raise workflows.WorkflowError("There is no workflow named '{}'.".format(workflow_id))
@@ -84,6 +102,8 @@ class Catalog:
                 profile = (await self.load(workflow_id))["profile"]
                 item["title"] = profile.get("title") or item["title"]
                 item["description"] = profile.get("description", "")
+                if profile.get("replaces"):   # earlier work made with one of these is run again with this workflow
+                    item["replaces"] = profile["replaces"]
             except workflows.WorkflowError as e:
                 item["error"] = str(e)
             items.append(item)
