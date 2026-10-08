@@ -21,6 +21,7 @@ import websockets
 from . import edits, media, motion, sequence
 from .comfy import workflows
 from .comfy.client import ComfyError
+from .db import as_everyone
 
 VIDEO_TYPES = {".mp4", ".webm", ".mov", ".mkv", ".gif"}
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -56,7 +57,9 @@ class JobManager:
         now = time.time()
         # A job waits only behind the jobs of its own lane: renders behind renders, edits behind edits.
         waiting, busy = {True: [], False: []}, {True: 0, False: 0}
-        for r in self.db.all("SELECT id, workflow, status FROM jobs WHERE status IN ('queued', 'running') ORDER BY created"):
+        with as_everyone():   # where the user's jobs stand in the queue depends on everyone's
+            queue = self.db.all("SELECT id, workflow, status FROM jobs WHERE status IN ('queued', 'running') ORDER BY created")
+        for r in queue:
             if r["status"] == "running":
                 busy[edits.is_edit(r["workflow"])] = 1
             else:
@@ -349,7 +352,8 @@ class JobManager:
 
     def history(self):
         """Earlier runs, for time estimates."""
-        rows = self.db.all("SELECT workflow, context, seconds FROM generations ORDER BY created DESC LIMIT 500")
+        with as_everyone():   # every user's runs: how long a workflow takes does not depend on who ran it
+            rows = self.db.all("SELECT workflow, context, seconds FROM generations ORDER BY created DESC LIMIT 500")
         return [dict(r, context=json.loads(r["context"])) for r in rows]
 
     def _notify_all_waiting(self, also):

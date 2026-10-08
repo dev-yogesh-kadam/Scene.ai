@@ -19,7 +19,7 @@ from .comfy import workflows
 from .comfy.client import Comfy, ComfyError
 from .config import load_settings
 from .credits import Credits
-from .db import Database
+from .db import open_database
 from .jobs import JobManager
 from .outputs import Outputs
 from .security import LoginThrottle, RateLimit, is_https, same_origin
@@ -57,7 +57,7 @@ class Hub:
 def create_app(settings=None):
     settings = settings or load_settings()
     storage = settings.path("storage_dir")
-    db = Database(storage / "scene.db", settings.signup_credits)
+    db = open_database(settings, storage)
     comfy = Comfy(lambda: db.setting("comfy_url", settings.comfy_url))
     catalog = Catalog(settings.path("workflows_dir"), comfy, storage / "cache" / "node_definitions.json")
     credits = Credits(db, settings)
@@ -89,6 +89,7 @@ def create_app(settings=None):
             worker.cancel()
         await comfy.http.aclose()
         await agent.http.aclose()
+        db.close()
 
     # No /docs, /redoc or /openapi.json: a map of every route is of no use to the studio's users, only to an attacker.
     app = FastAPI(title="Scene.ai", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)

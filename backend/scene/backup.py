@@ -20,14 +20,14 @@ def make(db, folder, config_file="", keep=14):
         raise RuntimeError("it holds the copies of another database, {}".format(owner.read_text(encoding="utf-8").strip()))
     owner.write_text(str(db.path), encoding="utf-8")
     day = date.today().isoformat()
-    target = folder / "scene_{}.db".format(day)
+    target = folder / "scene_{}{}".format(day, db.suffix)
     partial = folder / "scene.partial"   # a copy that was cut short never stands in for a whole one
     partial.unlink(missing_ok=True)
     db.backup(partial)
     partial.replace(target)
     if config_file and Path(config_file).is_file():
         shutil.copy2(config_file, folder / "config_{}.json".format(day))
-    for pattern in ("scene_*.db", "config_*.json"):
+    for pattern in ("scene_*" + db.suffix, "config_*.json"):
         for old in sorted(folder.glob(pattern))[:-keep] if keep > 0 else []:
             old.unlink()
     return target
@@ -35,7 +35,7 @@ def make(db, folder, config_file="", keep=14):
 
 def newest(folder):
     """When the last copy of the database was made, or None if there is none."""
-    return max((f.stat().st_mtime for f in Path(folder).glob("scene_*.db")), default=None)
+    return max((f.stat().st_mtime for f in Path(folder).glob("scene_*") if f.suffix in (".db", ".dump")), default=None)
 
 
 def attempt(db, folder, config_file="", keep=14):

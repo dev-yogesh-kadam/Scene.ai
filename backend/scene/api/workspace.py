@@ -280,7 +280,8 @@ async def agent_plan(body: dict, request: Request, user: dict = Depends(agent_us
 
     # What was made lately here, so "the music you just made" can be put on "this video" without attaching either.
     recent = [{"id": r["id"], "kind": r["kind"], "name": r["name"]} for r in state.db.all(
-        "SELECT id, kind, name FROM generations WHERE user_id = ? AND project_id IS ? ORDER BY created DESC LIMIT 8", (user["id"], project or None))]
+        "SELECT id, kind, name FROM generations WHERE user_id = ? AND " + ("project_id = ?" if project else "project_id IS NULL")
+        + " ORDER BY created DESC LIMIT 8", (user["id"], project) if project else (user["id"],))]
     known = {s["id"]: {"name": s["name"], "kind": s["kind"]} for s in selection}
     known.update({r["id"]: {"name": r["name"], "kind": r["kind"]} for r in recent if r["id"] not in known})
 

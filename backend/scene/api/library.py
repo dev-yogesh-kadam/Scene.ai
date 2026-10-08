@@ -146,7 +146,7 @@ async def list_projects(request: Request, user: dict = Depends(current_user)):
         "(SELECT g.id FROM generations g WHERE g.project_id = p.id ORDER BY g.created DESC LIMIT 1) AS cover_id, "
         "(SELECT g.kind FROM generations g WHERE g.project_id = p.id ORDER BY g.created DESC LIMIT 1) AS cover_kind, "
         "(SELECT MAX(g.created) FROM generations g WHERE g.project_id = p.id) AS updated "
-        "FROM projects p WHERE p.user_id = ? ORDER BY p.name COLLATE NOCASE", (user["id"],))}
+        "FROM projects p WHERE p.user_id = ? ORDER BY lower(p.name)", (user["id"],))}
 
 
 @router.post("/projects")

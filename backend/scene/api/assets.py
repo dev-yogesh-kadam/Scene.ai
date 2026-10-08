@@ -41,7 +41,7 @@ async def list_assets(request: Request, kind: str = "", user: dict = Depends(cur
         sql += " AND kind IN ('audio', 'video')"
     elif kind in ("image", "video"):
         sql, params = sql + " AND kind = ?", params + [kind]
-    return {"assets": request.app.state.db.all(sql + " ORDER BY tag, name COLLATE NOCASE", params), "tags": TAGS}
+    return {"assets": request.app.state.db.all(sql + " ORDER BY tag, lower(name)", params), "tags": TAGS}
 
 
 @router.post("")

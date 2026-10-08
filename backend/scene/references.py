@@ -54,7 +54,7 @@ async def upload_reference(comfy, filename, data, mime=None, db=None, user_id=No
     stored = "{}{}_{}".format(UPLOAD_PREFIX, hashlib.sha1(data).hexdigest()[:10], safe_name(filename)[:200])
     name = await comfy.upload(stored, data, mime or mimetypes.guess_type(stored)[0])
     if db is not None and user_id is not None:
-        db.run("INSERT OR IGNORE INTO uploads (user_id, name, created) VALUES (?, ?, ?)", (user_id, name, time.time()))
+        db.run("INSERT INTO uploads (user_id, name, created) VALUES (?, ?, ?) ON CONFLICT DO NOTHING", (user_id, name, time.time()))
     return name
 
 

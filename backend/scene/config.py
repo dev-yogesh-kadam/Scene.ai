@@ -26,6 +26,10 @@ class Settings:
     port: int = 8080
     workflows_dir: str = "workflows"
     storage_dir: str = "storage"
+    # PostgreSQL, as postgresql://<account>:<password>@localhost:5432/scene; empty = SQLite in storage_dir. The owner
+    # account makes and changes the tables when the app starts; the app itself then only reads and writes rows.
+    database_url: str = ""
+    database_owner_url: str = ""
     output_dir: str = ""          # where finished images and videos are kept; empty = "outputs" inside storage_dir
     backup_dir: str = ""          # where the daily copies of the database go; empty = "backups" inside storage_dir
     backup_keep: int = 14         # how many days of copies are kept; 0 = no backups

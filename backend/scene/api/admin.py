@@ -24,7 +24,8 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 DAY = 86400
 RANGES = (7, 30, 90)
 SPEND = "reason IN ('generation', 'refund')"   # a charge and its refund cancel out
-LOCAL_DAY = "date({}, 'unixepoch', 'localtime')"
+COUNT_IF = "SUM(CASE WHEN {} THEN 1 ELSE 0 END)"   # how many rows meet a condition, in SQL both databases speak
+DONE_FAILED = COUNT_IF.format("status = 'done'") + " AS done, " + COUNT_IF.format("status = 'failed'") + " AS failed"
 
 
 def _settings(state):
@@ -95,7 +96,7 @@ async def overview(request: Request, days: int = 30, user: dict = Depends(admin_
 
     def series(table, extra="", value="COUNT(*)", column="created"):
         return _daily(db, calendar, "SELECT {} AS day, {} AS n FROM {} WHERE {} > ? {} GROUP BY day".format(
-            LOCAL_DAY.format(column), value, table, column, extra), since)
+            db.local_day(column), value, table, column, extra), since)
 
     server = await _server(state)
     running = db.one("SELECT j.id, j.name, j.workflow, j.started, j.est_seconds, u.name AS user_name "
@@ -162,7 +163,7 @@ async def overview(request: Request, days: int = 30, user: dict = Depends(admin_
             "SUM(CASE WHEN j.status = 'done' THEN j.finished - j.started ELSE 0 END) AS gpu_seconds "
             "FROM jobs j JOIN users u ON u.id = j.user_id WHERE j.created > ? GROUP BY u.id ORDER BY credits DESC, jobs DESC LIMIT 6", (since,)),
         "top_workflows": db.all(
-            "SELECT workflow, COUNT(*) AS jobs, SUM(status = 'done') AS done, SUM(status = 'failed') AS failed, "
+            "SELECT workflow, COUNT(*) AS jobs, " + DONE_FAILED + ", "
             "AVG(CASE WHEN status = 'done' THEN finished - started END) AS avg_seconds "
             "FROM jobs WHERE created > ? GROUP BY workflow ORDER BY jobs DESC LIMIT 6", (since,)),
         "failures": db.all(
@@ -212,7 +213,7 @@ async def user_detail(user_id: int, request: Request, user: dict = Depends(admin
     if found is None:
         raise HTTPException(404, "No such user.")
     stats = db.one(
-        "SELECT SUM(status = 'done') AS done, SUM(status = 'failed') AS failed, SUM(status = 'cancelled') AS cancelled, "
+        "SELECT " + DONE_FAILED + ", " + COUNT_IF.format("status = 'cancelled'") + " AS cancelled, "
         "SUM(CASE WHEN status = 'done' THEN finished - started ELSE 0 END) AS gpu_seconds FROM jobs WHERE user_id = ?", (user_id,))
     return {
         "user": found,
@@ -379,9 +380,9 @@ async def list_library(request: Request, kind: str = "", q: str = "", owner: str
         "items": items, "total": total,
         # What the filters offer: people who have items, and their projects.
         "owners": db.all("SELECT u.id, u.name, u.email, COUNT(*) AS items FROM generations g JOIN users u ON u.id = g.user_id "
-                         "GROUP BY u.id ORDER BY u.name COLLATE NOCASE"),
+                         "GROUP BY u.id ORDER BY lower(u.name)"),
         "projects": db.all("SELECT p.id, p.name, p.user_id, u.name AS user_name FROM projects p JOIN users u ON u.id = p.user_id "
-                           "ORDER BY p.name COLLATE NOCASE"),
+                           "ORDER BY lower(p.name)"),
     }
 
 
@@ -444,7 +445,7 @@ async def workflow_report(request: Request, user: dict = Depends(admin_user)):
     """Each workflow file: whether it can be read, whether it has presets, and how much it is used."""
     state = request.app.state
     usage = {r["workflow"]: r for r in state.db.all(
-        "SELECT workflow, COUNT(*) AS jobs, SUM(status = 'done') AS done, SUM(status = 'failed') AS failed, "
+        "SELECT workflow, COUNT(*) AS jobs, " + DONE_FAILED + ", "
         "AVG(CASE WHEN status = 'done' THEN finished - started END) AS avg_seconds, MAX(created) AS last_used "
         "FROM jobs GROUP BY workflow")}
     files = state.catalog.files()
@@ -473,14 +474,13 @@ async def system(request: Request, user: dict = Depends(admin_user)):
         ffmpeg = media.ffmpeg_path()
     except media.MediaError:
         ffmpeg = None
-    database = storage / "scene.db"
     return {
         "server": server,
         "app": {"version": __version__, "python": platform.python_version(), "os": "{} {}".format(platform.system(), platform.release()),
                 "uptime_seconds": time.time() - state.started, "ffmpeg": bool(ffmpeg),
                 "online_users": state.hub.online(), "open_connections": sum(len(s) for s in state.hub.sockets.values())},
         "storage": {"folder": str(storage), "disk_total": disk.total, "disk_free": disk.free,
-                    "database": database.stat().st_size if database.is_file() else 0,
+                    "database": state.db.size(), "database_kind": state.db.kind,
                     "library": db.one("SELECT SUM(size) n FROM generations")["n"] or 0,
                     "assets": db.one("SELECT SUM(size) n FROM assets")["n"] or 0,
                     "backup_folder": str(state.backup_dir), "last_backup": backup.newest(state.backup_dir)},
@@ -638,7 +638,8 @@ async def put_workflow_pricing(body: dict, request: Request, user: dict = Depend
         "fallback_servers": " ".join(str(body.get("fallback_servers") or "").split())[:200],
         "enabled": 0 if body.get("enabled") is False else 1,
     }
-    state.db.run("INSERT OR REPLACE INTO workflow_pricing (workflow, {}) VALUES (?, {})".format(", ".join(row), ", ".join("?" * len(row))),
+    state.db.run("INSERT INTO workflow_pricing (workflow, {}) VALUES (?, {}) ON CONFLICT (workflow) DO UPDATE SET {}".format(
+        ", ".join(row), ", ".join("?" * len(row)), ", ".join("{0} = excluded.{0}".format(key) for key in row)),
                  (workflow, *row.values()))
     base, per_second, multiplier = state.credits.rate_for(workflow)
     audit.record(request, user, "Changed workflow pricing", workflow, "{:g} cr + {:g} cr/s × {:g}{}".format(
@@ -662,8 +663,8 @@ async def economics(request: Request, days: int = 30, user: dict = Depends(admin
 
     found = {}
     for row in db.all(
-            "SELECT workflow, server, COUNT(*) AS jobs, SUM(status = 'done') AS done, SUM(status = 'failed') AS failed, "
-            "SUM(status = 'cancelled') AS cancelled, SUM(retries) AS retries, SUM(output_size) AS output_bytes, "
+            "SELECT workflow, server, COUNT(*) AS jobs, " + DONE_FAILED + ", "
+            + COUNT_IF.format("status = 'cancelled'") + " AS cancelled, SUM(retries) AS retries, SUM(output_size) AS output_bytes, "
             "SUM(CASE WHEN started IS NOT NULL THEN finished - started ELSE 0 END) AS run_seconds, "
             "SUM(CASE WHEN status = 'done' THEN finished - started ELSE 0 END) AS done_seconds, "
             "SUM(CASE WHEN status = 'done' THEN seconds_requested ELSE 0 END) AS seconds_made, "
@@ -753,18 +754,19 @@ async def delete_pricing_row(table: str, row_id: int, request: Request, user: di
 
 # ---------------------------------------------------------------- export
 
+# Each export is SQL with {created} where the time of the row goes, written as text the way the database knows how.
 EXPORTS = {
-    "users": "SELECT u.id, u.name, u.email, u.role, u.credits, u.disabled, datetime(u.created, 'unixepoch') AS created_utc, "
+    "users": "SELECT u.id, u.name, u.email, u.role, u.credits, u.disabled, {created} AS created_utc, "
              "(SELECT COUNT(*) FROM jobs j WHERE j.user_id = u.id) AS jobs, "
              "(SELECT COUNT(*) FROM generations g WHERE g.user_id = u.id) AS items FROM users u ORDER BY u.id",
     "jobs": "SELECT j.id, u.email AS user, j.name, j.workflow, j.summary, j.status, j.cost AS credits, "
             "j.credits_required, j.credits_reserved, j.credits_consumed, j.credits_refunded, j.seconds_requested, j.server, "
             "j.retries, j.output_size, "
-            "datetime(j.created, 'unixepoch') AS created_utc, round(j.started - j.created, 1) AS wait_seconds, "
-            "round(j.finished - j.started, 1) AS run_seconds, j.error FROM jobs j JOIN users u ON u.id = j.user_id ORDER BY j.created DESC",
-    "credits": "SELECT c.id, u.email AS user, c.amount, c.reason, c.job_id, datetime(c.created, 'unixepoch') AS created_utc "
+            "{created} AS created_utc, round(CAST(j.started - j.created AS NUMERIC), 1) AS wait_seconds, "
+            "round(CAST(j.finished - j.started AS NUMERIC), 1) AS run_seconds, j.error FROM jobs j JOIN users u ON u.id = j.user_id ORDER BY j.created DESC",
+    "credits": "SELECT c.id, u.email AS user, c.amount, c.reason, c.job_id, {created} AS created_utc "
                "FROM credit_events c JOIN users u ON u.id = c.user_id ORDER BY c.id DESC",
-    "audit": "SELECT id, actor_email AS actor, action, target, detail, ip, datetime(created, 'unixepoch') AS created_utc "
+    "audit": "SELECT id, actor_email AS actor, action, target, detail, ip, {created} AS created_utc "
              "FROM audit_log ORDER BY id DESC",
 }
 
@@ -780,7 +782,9 @@ def _cell(value):
 async def export(name: str, request: Request, user: dict = Depends(admin_user)):
     if name not in EXPORTS:
         raise HTTPException(404, "No such export.")
-    rows = request.app.state.db.all(EXPORTS[name])
+    db = request.app.state.db
+    table = {"users": "u", "jobs": "j", "credits": "c"}.get(name)
+    rows = db.all(EXPORTS[name].format(created=db.utc_text(table + ".created" if table else "created")))
     out = io.StringIO()
     writer = csv.writer(out)
     if rows:

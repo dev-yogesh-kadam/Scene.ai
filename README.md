@@ -82,6 +82,8 @@ Stop the app with `Ctrl+C`.
 | `host`, `port` | `0.0.0.0`, `8080` | Where the app listens. Use `127.0.0.1` to keep it to this computer. |
 | `default_workflow` | none | Workflow selected for new users, for example `video/h3_master`. |
 | `allow_signup` | `true` | Whether visitors can create accounts. The first account can always be created. |
+| `database_url` | `""` | The PostgreSQL database, as `postgresql://scene_app:<password>@localhost:5432/scene`. Empty means SQLite in `storage_dir`. See [docs/database.md](docs/database.md). |
+| `database_owner_url` | `""` | The account that owns the tables; it makes and changes them when the app starts. |
 | `first_account_local` | `true` | The first account (the admin) can only be made from a browser on the machine the app runs on. Set `false` for a server with no browser of its own. |
 | `secure_cookies` | `false` | Marks the session cookie `Secure` for every visit. Visits over https, including through a Cloudflare tunnel, get it anyway. |
 | `signup_credits` | `1000` | Credits a new account starts with. An admin can change it in the admin console. |
