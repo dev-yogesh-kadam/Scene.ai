@@ -27,6 +27,9 @@ class Settings:
     workflows_dir: str = "workflows"
     storage_dir: str = "storage"
     output_dir: str = ""          # where finished images and videos are kept; empty = "outputs" inside storage_dir
+    backup_dir: str = ""          # where the daily copies of the database go; empty = "backups" inside storage_dir
+    backup_keep: int = 14         # how many days of copies are kept; 0 = no backups
+    config_file: str = ""         # the config.json these settings were read from, so it is backed up too
     frontend_dir: str = "frontend"
     node_path: str = ""           # the Node.js program that renders motion graphics; empty = the one that is installed
     default_workflow: str = ""
@@ -52,4 +55,5 @@ def load_settings(config_file=None):
         if field.type is bool and isinstance(value, str):
             value = value.lower() in ("1", "true", "yes", "on")
         setattr(settings, field.name, field.type(value))
+    settings.config_file = str(config_file) if config_file.is_file() else ""
     return settings

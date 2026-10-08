@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import media, motion, sequence
+from . import backup, media, motion, sequence
 from .agent import Agent, AgentError, service
 from .api import admin, assets, auth, library, studio, workspace
 from .catalog import Catalog
@@ -35,6 +35,12 @@ class Hub:
 
     def discard(self, user_id, ws):
         self.sockets.get(user_id, set()).discard(ws)
+        if not self.sockets.get(user_id):
+            self.sockets.pop(user_id, None)   # nobody with no connection left counts as online
+
+    def online(self):
+        """How many users have the app open: someone with three tabs is one user."""
+        return len(self.sockets)
 
     def send(self, user_id, message):
         for ws in list(self.sockets.get(user_id, ())):
@@ -73,6 +79,10 @@ def create_app(settings=None):
     async def lifespan(app):
         app.state.jobs = JobManager(db, comfy, catalog, credits, app.state.outputs, notify, storage / "tmp", settings.node_path)
         workers = [asyncio.create_task(app.state.jobs.run_forever()), asyncio.create_task(app.state.jobs.run_forever(local=True))]
+        if settings.backup_keep > 0:
+            copies = (db, app.state.backup_dir, settings.config_file, settings.backup_keep)
+            backup.attempt(*copies)   # one at every start, before anything is changed
+            workers.append(asyncio.create_task(backup.run_forever(*copies)))
         yield
         for worker in workers:
             worker.cancel()
@@ -95,6 +105,7 @@ def create_app(settings=None):
     app.state.storage_dir = storage
     app.state.output_dir = settings.path("output_dir") if settings.output_dir else storage / "outputs"
     app.state.outputs = Outputs(app.state.output_dir, db)
+    app.state.backup_dir = settings.path("backup_dir") if settings.backup_dir else storage / "backups"
 
     @app.exception_handler(workflows.WorkflowError)
     @app.exception_handler(media.MediaError)

@@ -40,11 +40,6 @@ REF_CLASS = re.compile(r"(?:Load|Optional)(Image|Video|Audio)")
 EXTRA_LOADERS = {"image": ("LoadImage", "image"), "audio": ("LoadAudio", "audio")}
 SLOT_WORDS = {"first_frame": "first frame", "last_frame": "last frame", "voice_track": "voice track"}
 MAX_CLIPS = 8
-DURATION_WARNING = {
-    "when": {"duration": 15},
-    "message": "15 s clips can overflow the GPU memory and get very slow. 5-6 s clips give the best results.",
-    "alt": {"label": "Use 5 s instead", "set": {"duration": 5}},
-}
 
 
 class WorkflowError(Exception):
@@ -441,9 +436,7 @@ def describe(wf):
             "resolution": min(SHORT_EDGE, key=lambda r: abs(SHORT_EDGE[r] - min(w, h))),
         }
 
-    confirm = profile.get("confirm")
-    if confirm is None:
-        confirm = [DURATION_WARNING] if "duration" in roles else []
+    confirm = profile.get("confirm") or []
     slots = {}
     for slot, words in SLOT_WORDS.items():
         match = next((r["id"] for r in refs if words in r["label"].lower()), None)

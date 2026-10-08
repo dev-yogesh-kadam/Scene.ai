@@ -876,7 +876,8 @@ def test_prices_follow_what_was_asked_for_at_the_rate_of_each_kind(client):
     import json
     from pathlib import Path
     import pytest
-    definitions = Path(__file__).resolve().parents[2] / "storage" / "cache" / "node_definitions.json"
+    from scene.config import load_settings
+    definitions = load_settings().path("storage_dir") / "cache" / "node_definitions.json"   # read only: wherever this machine keeps its data
     if not definitions.is_file():
         pytest.skip("no saved node definitions on this machine")
     client.app.state.catalog.saved = json.loads(definitions.read_text(encoding="utf-8"))
@@ -1050,3 +1051,26 @@ def test_a_running_edit_can_be_cancelled_and_gives_its_credits_back(client, monk
             break
         time.sleep(0.1)
     assert client.get("/api/auth/me").json()["credits"] == 500
+
+
+def test_the_database_is_backed_up_at_every_start_and_old_copies_are_dropped(client, tmp_path):
+    import sqlite3
+    from scene import backup
+    folder = client.app.state.backup_dir
+    assert folder == tmp_path / "backups" and len(list(folder.glob("scene_*.db"))) == 1     # made when the app started
+    register(client)
+    assert not [a for a in client.get("/api/admin/overview").json()["attention"] if "backed up" in a["text"]]
+    assert client.get("/api/admin/system").json()["storage"]["last_backup"] > 0
+    # today's copy is written again, with what has changed since, and only the newest days are kept
+    for day in ("2020-01-01", "2020-01-02", "2020-01-03"):
+        (folder / "scene_{}.db".format(day)).write_bytes(b"old")
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    made = backup.make(client.app.state.db, folder, tmp_path / "config.json", keep=2)
+    assert sorted(f.name for f in folder.glob("scene_*.db")) == ["scene_2020-01-03.db", made.name]
+    assert len(list(folder.glob("config_*.json"))) == 1 and not (folder / "scene.partial").exists()
+    assert sqlite3.connect(made).execute("SELECT email FROM users").fetchall() == [(ADMIN["email"],)]
+    assert backup.attempt(client.app.state.db, tmp_path / "config.json" / "not a folder") is None    # a failure does not stop the app
+    # a folder that holds the copies of one database takes no other: a test copy of the app cannot replace the real ones
+    (folder / "database.txt").write_text("C:/somewhere/else/scene.db", encoding="utf-8")
+    kept = made.read_bytes()
+    assert backup.attempt(client.app.state.db, folder) is None and made.read_bytes() == kept
