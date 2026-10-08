@@ -1,0 +1,42 @@
+{
+  "title": "Ideogram 4",
+  "description": "Text to image, strong at layout and text in the picture. Write in plain words: the agent turns the prompt into the structured caption this model needs.",
+  "caption": {"template": "134:114:value", "ratio": "37:aspect_ratio"},
+  "labels": {
+    "98:24:text": "Describe the image and any words to write in it. A JSON caption can be pasted instead."
+  },
+  "defaults": {
+    "98:24:text": ""
+  },
+  "hide": [
+    "134:114:value", "134:115:value", "134:183:value", "134:184:value", "134:185:value",
+    "98:155:cfg", "98:157:cfg"
+  ],
+  "controls": [
+    {
+      "node": "37", "input": "aspect_ratio", "type": "choice", "primary": true,
+      "choices": [
+        "1:1 (Square)", "16:9 (Widescreen)", "9:16 (Portrait Widescreen)", "4:3 (Standard)",
+        "3:4 (Portrait Standard)", "3:2 (Photo)", "2:3 (Portrait Photo)", "21:9 (Ultrawide)"
+      ],
+      "label": "Aspect ratio"
+    },
+    {
+      "node": "37", "input": "megapixels", "type": "float", "primary": true,
+      "choices": [0.5, 1, 1.5, 2],
+      "label": "Size in megapixels (1 is about 1024 x 1024)"
+    },
+    {
+      "node": "98:156", "input": "choice", "type": "choice", "primary": true,
+      "choices": ["Turbo", "Default", "Quality"],
+      "label": "Preset (Turbo is fastest, Quality runs 48 steps)"
+    }
+  ],
+  "hints": [
+    "The model is trained on structured JSON captions. Your prompt is turned into one by the agent's model before the job starts, which takes about 20 seconds and needs the agent to be online.",
+    "A prompt that is already a JSON caption is used as it is.",
+    "\"Image blocked by safety filter\" comes from the model's own filter.",
+    "Put the exact words you want written in the picture in quotes.",
+    "There is no negative prompt. Say what you want to see."
+  ]
+}

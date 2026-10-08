@@ -1,0 +1,116 @@
+{
+  "title": "H3 Reference to Video",
+  "description": "Make a video from reference images. The references guide what people and things look like; the prompt says what happens.",
+  "labels": {
+    "137:image": "Reference image 1 (<Picture 1> in the prompt)",
+    "139:image": "Reference image 2 (<Picture 2> in the prompt)",
+    "138:value": "Say what happens. Refer to your references as <Picture 1>, <Picture 2>, <Audio 1>."
+  },
+  "required_refs": [
+    "137:image"
+  ],
+  "optional_refs": [
+    "139:image"
+  ],
+  "extra_refs": [
+    {
+      "id": "image_3",
+      "label": "Reference image 3 (<Picture 3> in the prompt)",
+      "kind": "image",
+      "node": "136",
+      "input": "ref_images.ref_image_2"
+    },
+    {
+      "id": "audio_1",
+      "label": "Reference audio (<Audio 1> in the prompt)",
+      "kind": "audio",
+      "node": "136",
+      "input": "ref_audios.ref_audio_0"
+    }
+  ],
+  "hide": [
+    "143",
+    "144",
+    "146"
+  ],
+  "defaults": {
+    "138:value": ""
+  },
+  "controls": [
+    {
+      "node": "115",
+      "input": "aspect_ratio",
+      "type": "choice",
+      "choices": [
+        "16:9 (Widescreen)",
+        "9:16 (Portrait Widescreen)",
+        "1:1 (Square)",
+        "4:3 (Standard)",
+        "3:4 (Portrait Standard)",
+        "3:2 (Photo)",
+        "2:3 (Portrait Photo)",
+        "21:9 (Ultrawide)"
+      ],
+      "label": "Aspect ratio",
+      "primary": true
+    },
+    {
+      "node": "115",
+      "input": "megapixels",
+      "type": "float",
+      "choices": [
+        0.2,
+        0.4,
+        0.6,
+        0.9
+      ],
+      "label": "Size in megapixels (0.4 is about 848 x 480, 0.9 about 1280 x 720)",
+      "primary": true
+    }
+  ],
+  "options": [
+    {
+      "id": "speed",
+      "label": "Speed",
+      "default": "standard",
+      "choices": [
+        {
+          "id": "standard",
+          "label": "Standard",
+          "hint": "20 steps, full model"
+        },
+        {
+          "id": "turbo",
+          "label": "Turbo",
+          "hint": "4-step LoRA: faster, slightly less detail"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "speed": "standard"
+      },
+      "set": {
+        "146.value": false,
+        "143.value": 20
+      }
+    },
+    {
+      "when": {
+        "speed": "turbo"
+      },
+      "set": {
+        "146.value": true,
+        "144.value": 4
+      }
+    }
+  ],
+  "hints": [
+    "Refer to your references in the prompt as <Picture 1>, <Picture 2>, <Picture 3> and <Audio 1>.",
+    "Use reference images of at least 1024 px, with no watermarks or text.",
+    "5-6 s clips, one action each, give the best results.",
+    "Larger sizes take much longer. Start at 0.4 megapixels and go up once the result is right."
+  ]
+}

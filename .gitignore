@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# HyperFrames and its packages, installed by `npm install` in motion/
+motion/node_modules/
+
+# Local settings and data (users, sessions, generated media)
+config.json
+storage/
+
+# Media from the old command-line script
+legacy/h3_director_cli/outputs/
+legacy/h3_director_cli/inputs/
+
+# OS and editor
+.DS_Store
+Thumbs.db

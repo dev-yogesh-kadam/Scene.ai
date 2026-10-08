@@ -1,0 +1,106 @@
+{
+  "title": "H3 Image to Video",
+  "description": "Animate an image: the video starts on it. Add a last frame to end on a second image, or leave both empty for text to video.",
+  "labels": {
+    "114:image": "First frame (the video starts on this image)",
+    "105:104:prompt": "Describe the motion, the camera and the sound."
+  },
+  "optional_refs": [
+    "114:image"
+  ],
+  "extra_refs": [
+    {
+      "id": "last_frame",
+      "label": "Last frame (the video ends on this image)",
+      "kind": "image",
+      "node": "105:104",
+      "input": "last_frame"
+    }
+  ],
+  "hide": [
+    "105:124",
+    "105:125",
+    "105:126"
+  ],
+  "defaults": {
+    "105:104:prompt": "",
+    "105:111:value": 5
+  },
+  "controls": [
+    {
+      "node": "115",
+      "input": "aspect_ratio",
+      "type": "choice",
+      "choices": [
+        "16:9 (Widescreen)",
+        "9:16 (Portrait Widescreen)",
+        "1:1 (Square)",
+        "4:3 (Standard)",
+        "3:4 (Portrait Standard)",
+        "3:2 (Photo)",
+        "2:3 (Portrait Photo)",
+        "21:9 (Ultrawide)"
+      ],
+      "label": "Aspect ratio",
+      "primary": true
+    },
+    {
+      "node": "115",
+      "input": "megapixels",
+      "type": "float",
+      "choices": [
+        0.2,
+        0.4,
+        0.6,
+        0.9
+      ],
+      "label": "Size in megapixels (0.4 is about 848 x 480, 0.9 about 1280 x 720)",
+      "primary": true
+    }
+  ],
+  "options": [
+    {
+      "id": "speed",
+      "label": "Speed",
+      "default": "standard",
+      "choices": [
+        {
+          "id": "standard",
+          "label": "Standard",
+          "hint": "20 steps, full model"
+        },
+        {
+          "id": "turbo",
+          "label": "Turbo",
+          "hint": "8-step LoRA: faster, slightly less detail"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "speed": "standard"
+      },
+      "set": {
+        "105:126.value": false,
+        "105:124.value": 20
+      }
+    },
+    {
+      "when": {
+        "speed": "turbo"
+      },
+      "set": {
+        "105:126.value": true,
+        "105:125.value": 8
+      }
+    }
+  ],
+  "hints": [
+    "Pick the aspect ratio that matches your image, or it will be cropped.",
+    "Describe the motion, the camera and the sound. The image already shows what things look like.",
+    "5-6 s clips give the best results. For longer videos use Long video, which chains clips.",
+    "Larger sizes take much longer. Start at 0.4 megapixels and go up once the motion is right."
+  ]
+}

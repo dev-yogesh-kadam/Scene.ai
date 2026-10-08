@@ -1,0 +1,34 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "H3 Director: step by step (asks questions)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/h3_director.py",
+      "console": "integratedTerminal",
+      "args": []
+    },
+    {
+      "name": "H3 Director: low quality 5 s (text only)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/h3_director.py",
+      "console": "integratedTerminal",
+      "args": ["--prompt-file", "prompt_example.txt", "--resolution", "768", "--orientation", "landscape", "--duration", "5", "--mode", "fast", "--quality", "low"]
+    },
+    {
+      "name": "H3 Director: medium quality 5 s with references (edit the paths)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/h3_director.py",
+      "console": "integratedTerminal",
+      "args": [
+        "--prompt-file", "prompt_example.txt",
+        "--character-1", "/path/to/character.jpg",
+        "--background", "/path/to/background.jpg",
+        "--resolution", "768", "--orientation", "landscape", "--duration", "5", "--mode", "fast", "--quality", "medium"
+      ]
+    }
+  ]
+}

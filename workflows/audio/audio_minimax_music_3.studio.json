@@ -1,0 +1,33 @@
+{
+  "title": "MiniMax Music 3",
+  "description": "Text to music: a full song or an instrumental, up to 5 minutes. Describe the music; add lyrics for a song.",
+  "controls": [
+    {
+      "node": "37:13", "input": "caption", "type": "text", "role": "prompt",
+      "label": "Describe the music: genre, tempo, key, instruments, mood, and the vocals."
+    },
+    {
+      "node": "37:13", "input": "lyrics", "type": "text", "primary": true,
+      "label": "Lyrics (with [Intro] [Verse] [Chorus] [Bridge] [Outro] tags; leave empty for no words)"
+    },
+    {
+      "node": "37:13", "input": "max_duration", "type": "float", "primary": true,
+      "choices": [30, 60, 120, 180, 300],
+      "label": "Length in seconds"
+    }
+  ],
+  "defaults": {
+    "37:13:caption": "",
+    "37:13:lyrics": "",
+    "37:13:max_duration": 60
+  },
+  "pricing": {"seconds": "37:13:max_duration"},
+  "hide": ["37:9:steps", "37:9:cfg"],
+  "hints": [
+    "Write the description in three parts: the overall style (genre, tempo in BPM, key, mood), the vocals, then the arrangement (instruments and how each section sounds).",
+    "The more specific the description, the closer the result.",
+    "In the lyrics, only the tags in square brackets set the structure: [Intro], [Verse], [Chorus], [Bridge], [Outro]. The words themselves set the mood.",
+    "Longer songs take more time and more GPU memory.",
+    "The seed is random by default, so the same description gives a different take each time."
+  ]
+}
