@@ -13,7 +13,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
-from .. import __version__, audit, edits, media
+from .. import __version__, audit, backup, edits, media
 from ..catalog import KINDS
 from ..credits import MOTION, OVERLAY, PER_JOB, RATES
 from ..security import hash_password
@@ -125,6 +125,9 @@ async def overview(request: Request, days: int = 30, user: dict = Depends(admin_
     disk = shutil.disk_usage(state.output_dir)   # finished work is what fills a disk
     if disk.free < 10 * 1024 ** 3:
         attention.append({"level": "serious", "text": "Only {:.1f} GB of disk space is left for storage.".format(disk.free / 1024 ** 3), "tab": "system"})
+    saved = backup.newest(state.backup_dir)
+    if state.settings.backup_keep > 0 and (saved is None or saved < now - 2 * DAY):
+        attention.append({"level": "serious", "text": "The database has not been backed up for two days. Check the folder {}.".format(state.backup_dir), "tab": "system"})
     stuck = db.one("SELECT COUNT(*) n FROM jobs WHERE status = 'queued' AND created < ?", (now - 3600,))["n"]
     if stuck:
         attention.append({"level": "warning", "text": "{} job{} been waiting for over an hour.".format(stuck, " has" if stuck == 1 else "s have"), "tab": "jobs"})
@@ -172,6 +175,7 @@ async def overview(request: Request, days: int = 30, user: dict = Depends(admin_
         "attention": attention,
         "activity": sorted(activity, key=lambda a: a["time"], reverse=True)[:14],
         "totals": {"users": db.one("SELECT COUNT(*) n FROM users")["n"],
+                   "online": state.hub.online(),
                    "items": db.one("SELECT COUNT(*) n FROM generations")["n"],
                    "credits_held": db.one("SELECT SUM(credits) n FROM users")["n"] or 0},
     }
@@ -471,11 +475,12 @@ async def system(request: Request, user: dict = Depends(admin_user)):
         "server": server,
         "app": {"version": __version__, "python": platform.python_version(), "os": "{} {}".format(platform.system(), platform.release()),
                 "uptime_seconds": time.time() - state.started, "ffmpeg": bool(ffmpeg),
-                "open_connections": sum(len(s) for s in state.hub.sockets.values())},
+                "online_users": state.hub.online(), "open_connections": sum(len(s) for s in state.hub.sockets.values())},
         "storage": {"folder": str(storage), "disk_total": disk.total, "disk_free": disk.free,
                     "database": database.stat().st_size if database.is_file() else 0,
                     "library": db.one("SELECT SUM(size) n FROM generations")["n"] or 0,
-                    "assets": db.one("SELECT SUM(size) n FROM assets")["n"] or 0},
+                    "assets": db.one("SELECT SUM(size) n FROM assets")["n"] or 0,
+                    "backup_folder": str(state.backup_dir), "last_backup": backup.newest(state.backup_dir)},
         "counts": {name: db.one("SELECT COUNT(*) n FROM " + name)["n"]
                    for name in ("users", "sessions", "jobs", "generations", "assets", "projects", "credit_events", "audit_log")},
     }

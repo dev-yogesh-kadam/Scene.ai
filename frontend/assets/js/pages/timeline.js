@@ -1,7 +1,7 @@
 // The Timeline page: put finished videos in order, trim them, watch the cut and export it as one video.
 
 import { api } from '../api.js';
-import { el, icon, timecode } from '../dom.js';
+import { el, icon, tabTitle, timecode } from '../dom.js';
 import { subscribe, refreshJobs } from '../store.js';
 
 const fileUrl = (id) => `/api/library/${id}/file`;
@@ -207,6 +207,7 @@ export function render(view) {
         api('/api/library?kind=video' + (project ? '&project=' + project : '')), api('/api/boards/timeline?project=' + project)]);
       picker.replaceChildren(el('option', { value: '' }, 'All work'),
         ...projects.projects.map((p) => el('option', { value: p.id, selected: p.id === project }, p.name)));
+      tabTitle((projects.projects.find((p) => p.id === project) || { name: 'Timeline' }).name);
       videos = library.items;
       name.value = board.data.name || 'Timeline';
       // A saved clip keeps its place only while its video is still in the library; end 0 means the whole video.

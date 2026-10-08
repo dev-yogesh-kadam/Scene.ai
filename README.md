@@ -85,7 +85,8 @@ Stop the app with `Ctrl+C`.
 | `secure_cookies` | `false` | Set to `true` when the app is served over https. |
 | `signup_credits` | `1000` | Credits a new account starts with. An admin can change it in the admin console. |
 | `signups_per_day` | `3` | New accounts one visitor address may make in a day. `0` means no limit. |
-| `storage_dir`, `workflows_dir` | `storage`, `workflows` | Where data and workflows live. |
+| `storage_dir`, `workflows_dir` | `storage`, `workflows` | Where data and workflows live. Keep `storage_dir` outside the repo on a real installation, for example `C:/Scene/Data`: git can then never touch the database. |
+| `backup_dir`, `backup_keep` | `backups` inside `storage_dir`, `14` | Where a dated copy of the database and of `config.json` is written at every start and once a day, and how many days are kept. Best on another disk. `backup_keep: 0` turns it off. |
 | `node_path` | the installed one | The Node.js program that renders motion graphics. See [docs/motion.md](docs/motion.md). |
 | `output_dir` | `outputs` inside `storage_dir` | Where finished images and videos are kept. Can be any folder, for example `C:/Scene/Outputs`. |
 

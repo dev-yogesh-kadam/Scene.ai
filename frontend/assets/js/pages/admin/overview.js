@@ -45,7 +45,7 @@ export async function overview(ctx) {
   const secondary = el('div', { class: 'stat-row' }, [
     ['Jobs', number(now.jobs)], ['Failed', number(now.failed)], ['Average wait in queue', span(now.avg_wait) || '0 s'],
     ['Average render time', span(now.avg_run) || 'none yet'], ['New accounts', number(now.signups)],
-    ['All users', number(o.totals.users)], ['All library items', number(o.totals.items)], ['Credits held by users', number(o.totals.credits_held)],
+    ['Online now', number(o.totals.online)], ['All users', number(o.totals.users)], ['All library items', number(o.totals.items)], ['Credits held by users', number(o.totals.credits_held)],
   ].map(([k, v]) => el('div', {}, el('span', { class: 'muted' }, k), el('b', {}, v))));
 
   const running = o.queue.running;

@@ -173,7 +173,8 @@ SERVERS = [
 
 class Database:
     def __init__(self, path, starting_credits=0):
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.path = Path(path).resolve()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.Lock()
         self.conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
@@ -189,6 +190,15 @@ class Database:
         if not self.conn.execute("SELECT 1 FROM servers").fetchone():
             self.conn.executemany("INSERT INTO servers (name, cpu, gpu, vram_gb, role, renders, generation_power_w, created) "
                                   "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [(*server, time.time()) for server in SERVERS])
+
+    def backup(self, target):
+        """Write a whole copy of the database to `target`. Safe while the app is running."""
+        copy = sqlite3.connect(str(target))
+        try:
+            with self.lock:
+                self.conn.backup(copy)
+        finally:
+            copy.close()
 
     def run(self, sql, params=()):
         """Run a statement and return the new row id (for INSERT)."""

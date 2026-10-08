@@ -53,6 +53,7 @@ export function openViewer(item, { base = '/api/library', owner = false, actions
     try { await navigator.clipboard.writeText(promptText); copy.textContent = 'Copied'; } catch (e) { copy.textContent = 'Copy failed'; }
     setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
   } }, 'Copy');
+  const download = el('a', { class: 'btn primary', href: url + '?download=true', download: item.filename, title: 'Download (D)' }, 'Download');
   const dialog = el('dialog', { class: 'viewer' },
     el('div', { class: 'viewer-grid' },
       el('div', { class: 'viewer-media' }, media),
@@ -63,9 +64,14 @@ export function openViewer(item, { base = '/api/library', owner = false, actions
           el('div', { class: 'viewer-section' }, el('h3', {}, 'Details'),
             el('dl', { class: 'facts' }, detailsOf(item, { owner }).flatMap(([k, v]) => [el('dt', {}, k), el('dd', {}, v)])))),
         el('div', { class: 'viewer-actions' },
-          el('a', { class: 'btn primary', href: url + '?download=true', download: item.filename }, 'Download'),
+          download,
           actions.map((a) => el('button', { class: 'btn' + (a.danger ? ' danger' : ''), onclick: () => a.run(dialog) }, a.label))))));
   dialog.addEventListener('close', () => dialog.remove());
+  dialog.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 'd' || e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select')) return;
+    e.preventDefault();
+    download.click();
+  });
   dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
   document.body.append(dialog);
   dialog.showModal();

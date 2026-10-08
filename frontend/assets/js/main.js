@@ -1,7 +1,7 @@
 // Scene.ai front end entry: sign-in gate, app shell and page routing.
 
 import { api } from './api.js';
-import { el, icon, segmented } from './dom.js';
+import { el, icon, segmented, tabTitle } from './dom.js';
 import { store, subscribe, startLive, stopLive, refreshJobs } from './store.js';
 import { renderAuth } from './pages/auth.js';
 import * as home from './pages/home.js';
@@ -47,6 +47,7 @@ function showAuth() {
   if (leaveShell) leaveShell();
   leavePage = leaveShell = null;
   stopLive();
+  tabTitle();
   store.user = null;
   // Signing in always lands on All projects. replaceState does not fire hashchange, so the page is routed once, by showApp.
   renderAuth(root, (user) => { store.user = user; history.replaceState(null, '', LANDING); showApp(); });
@@ -113,6 +114,7 @@ function showApp() {
     const target = PAGES.find((p) => p.path === location.hash);
     if (!target) { location.hash = LANDING; return; }
     if (leavePage) leavePage();
+    tabTitle(target.label);   // the canvas and the timeline put the name of their project here once it is loaded
     leavePage = target.page.render(view) || null;
     drawNav();
     window.scrollTo(0, 0);

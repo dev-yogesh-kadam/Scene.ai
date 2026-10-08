@@ -11,6 +11,9 @@ export function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+// The name on the browser tab: what is open (a project, a page), then the app.
+export function tabTitle(name) { document.title = name ? `${name} · Scene.ai` : 'Scene.ai'; }
+
 // Line icons (24px grid, drawn with the text colour): 1.6px stroke with rounded ends and corners.
 // The markup is fixed text from this file, never user input.
 const ICONS = {

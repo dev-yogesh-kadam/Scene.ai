@@ -49,11 +49,6 @@
       "when": {"quality": "high"},
       "message": "High quality runs 40 full steps and takes about twice as long as medium.",
       "alt": {"label": "Use medium instead", "set": {"quality": "medium"}}
-    },
-    {
-      "when": {"duration": 15},
-      "message": "A single 15 s clip overflows the 32 GB of GPU memory and gets very slow. Three chained 5 s clips are far quicker and drift less.",
-      "alt": {"label": "Make 3 chained 5 s clips instead", "set": {"duration": 5, "clips": 3}}
     }
   ],
   "estimate": {

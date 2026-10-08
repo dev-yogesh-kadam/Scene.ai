@@ -4,7 +4,7 @@
 // dragged between rows, and the rows are remembered per project. Work in progress shows as a frame the Gate runs around.
 
 import { api } from '../api.js';
-import { el, icon, runningGate, segmented, still } from '../dom.js';
+import { el, icon, runningGate, segmented, still, tabTitle } from '../dom.js';
 import { store, subscribe } from '../store.js';
 import { openViewer } from '../components/media.js';
 import { quickActions } from '../components/quick.js';
@@ -402,6 +402,7 @@ export function render(view) {
     drawOverlay();
   }
 
+  const download = (item) => el('a', { href: `/api/library/${item.id}/file?download=true`, download: item.filename }).click();
   const open = (item) => openViewer(item, { actions: item.workflow.startsWith('edit/') ? []
     : [{ label: 'Re-run', run: (dialog) => { dialog.close(); store.rerun = item; location.hash = '#/create'; } }] });
 
@@ -437,7 +438,7 @@ export function render(view) {
         onclick: () => { store.rerun = one; location.hash = '#/create'; } }, 'Re-run'),
       videos.length > 0 && el('button', { class: 'btn small quiet', onclick: (e) => addToTimeline(videos, e.currentTarget) },
         one ? 'Add to timeline' : `Add ${videos.length} to timeline`),
-      one && el('a', { class: 'btn small quiet', href: `/api/library/${one.id}/file?download=true`, download: one.filename }, 'Download'),
+      el('button', { class: 'btn small quiet', title: 'Download (D)', onclick: () => chosen.forEach(download) }, one ? 'Download' : `Download ${chosen.length}`),
     ].filter(Boolean));
     const area = bounds(chosen.map((i) => boxes.get(i.id)));
     context.style.left = Math.max(8, cam.x + area.x * cam.k) + 'px';
@@ -481,6 +482,7 @@ export function render(view) {
       if (project && !projects.some((p) => p.id === project)) project = 0;
       picker.replaceChildren(el('option', { value: '' }, 'All work'),
         ...projects.map((p) => el('option', { value: p.id, selected: p.id === project }, p.name)));
+      tabTitle((projects.find((p) => p.id === project) || { name: 'Canvas' }).name);
       const [board] = await Promise.all([api('/api/boards/canvas?project=' + project), loadItems()]);
       const saved = board.data || {};
       layout = { rows: Array.isArray(saved.rows) ? saved.rows.filter((row) => row && Array.isArray(row.keys)) : [], count: Number(saved.count) || 0 };
@@ -497,6 +499,7 @@ export function render(view) {
     else if (e.key === '0') zoomTo(1);
     else if (e.key === 'Escape' && selected.size) { selected.clear(); selectionChanged(); }
     else if (e.key === 'Enter' && selected.size === 1) open(items.find((i) => selected.has(i.id)));
+    else if (e.key.toLowerCase() === 'd' && !e.altKey && !e.repeat) items.filter((i) => selected.has(i.id)).forEach(download);
   };
   window.addEventListener('keydown', onKey);
   const ticker = setInterval(() => {   // keeps elapsed time moving
