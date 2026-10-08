@@ -1,11 +1,11 @@
-"""The canvas, the timeline and the agent: arranging finished work, joining clips, and planning new work."""
+"""The canvas, the timeline and the agent: arranging finished work, queueing edits and motion graphics, and planning new work."""
 
 import json
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from .. import agent, cast, credits, media, motion, sequence
+from .. import agent, cast, credits, edits, media, motion, sequence
 from ..comfy import workflows
 from .deps import agent_user, current_user
 from .studio import price
@@ -16,9 +16,7 @@ router = APIRouter(prefix="/api", tags=["workspace"])
 KINDS = ("canvas", "timeline", "brief", "agent", "cast")
 MAX_BOARD_BYTES = 200_000
 MAX_CLIPS = 50
-EXPORT_WORKFLOW = "edit/timeline"  # what an exported video is filed under; it has no workflow file
 MOTION_WORKFLOW = credits.MOTION   # what a rendered motion graphic is filed and priced under
-SOUND_WORKFLOW = "edit/sound"      # what a video with a sound put on it is filed under
 
 
 def _project_id(request, user, project):
@@ -57,7 +55,7 @@ async def save_board(kind: str, body: dict, request: Request, user: dict = Depen
 
 @router.post("/timeline/export")
 async def export_timeline(body: dict, request: Request, user: dict = Depends(current_user)):
-    """Join the timeline's clips into one video and add it to the library. Costs no credits: it needs no GPU."""
+    """Queue a job that joins the timeline's clips into one video for the library. Costs no credits: it needs no GPU."""
     state = request.app.state
     clips = body.get("clips") or []
     if not isinstance(clips, list) or not all(isinstance(clip, dict) for clip in clips):
@@ -71,36 +69,23 @@ async def export_timeline(body: dict, request: Request, user: dict = Depends(cur
                            (clip.get("id"), user["id"]))
         if row is None:
             raise HTTPException(404, "A clip on the timeline is no longer in your library.")
-        path = state.outputs.folder(user["id"]) / row["filename"]
-        if not path.is_file():
+        if not (state.outputs.folder(user["id"]) / row["filename"]).is_file():
             raise HTTPException(404, "The file of {} is missing from storage.".format(row["name"]))
         try:
-            parts.append((path, float(clip.get("start") or 0), float(clip.get("end") or 0)))
+            parts.append({"id": row["id"], "start": float(clip.get("start") or 0), "end": float(clip.get("end") or 0)})
         except (TypeError, ValueError):
             raise HTTPException(400, "The start and end of {} must be numbers.".format(row["name"]))
     # The item an edit was cut from, if the caller names one of the clips: the canvas puts the result on its row.
-    parent = body.get("parent") if body.get("parent") in [clip.get("id") for clip in clips] else None
-    started = time.time()
+    parent = body.get("parent") if body.get("parent") in [part["id"] for part in parts] else None
     name = str(body.get("name") or "").strip()[:80] or "Timeline"
-    target = state.outputs.folder(user["id"]) / "timeline_{}.mp4".format(time.strftime("%Y%m%d_%H%M%S"))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    seconds = await media.sequence(parts, target)
-    frame = await media.probe(target)
-    count = "1 clip" if len(parts) == 1 else "{} clips".format(len(parts))
-    item_id = state.db.run(
-        "INSERT INTO generations (user_id, job_id, project_id, workflow, kind, name, filename, summary, settings, "
-        "context, seconds, size, created) VALUES (?, NULL, ?, ?, 'video', ?, ?, ?, ?, ?, ?, ?, ?)",
-        (user["id"], project_id, EXPORT_WORKFLOW, name, target.name, "{} joined · {:.0f} s".format(count, seconds),
-         json.dumps({"workflow_title": "Timeline export", "clips": clips, "parent": parent}),
-         json.dumps({"duration": round(seconds, 1), "width": frame["width"], "height": frame["height"]}),
-         round(time.time() - started, 1), target.stat().st_size, time.time()))
-    state.notify(user["id"], library_changed=True)
-    return {"id": item_id, "name": name, "seconds": round(seconds, 2)}
+    job_id = state.jobs.add(user["id"], name, edits.TIMELINE, {"workflow_title": "Timeline export", "clips": parts, "parent": parent},
+                            "1 clip joined" if len(parts) == 1 else "{} clips joined".format(len(parts)), None, 0, project_id)
+    return {"job": job_id, "name": name}
 
 
 @router.post("/edit/sound")
 async def add_sound(body: dict, request: Request, user: dict = Depends(current_user)):
-    """Put one of the user's sounds on one of their videos and add the result to the library. Costs no credits."""
+    """Queue a job that puts one of the user's sounds on one of their videos, for the library. Costs no credits."""
     state = request.app.state
     rows = {}
     for key, kind, what in (("video", "video", "a video"), ("audio", "audio", "a sound")):
@@ -108,27 +93,17 @@ async def add_sound(body: dict, request: Request, user: dict = Depends(current_u
         if rows[key] is None:
             raise HTTPException(400, "Choose {} from your library.".format(what))
     folder = state.outputs.folder(user["id"])
-    video, sound = folder / rows["video"]["filename"], folder / rows["audio"]["filename"]
-    if not video.is_file() or not sound.is_file():
+    if not (folder / rows["video"]["filename"]).is_file() or not (folder / rows["audio"]["filename"]).is_file():
         raise HTTPException(404, "A file is missing from storage.")
     replace = body.get("replace") is True
     project_id = _project_id(request, user, body.get("project_id")) or rows["video"]["project_id"]
-    started = time.time()
     name = (" ".join(str(body.get("name") or "").split()) or "{} with sound".format(rows["video"]["name"]))[:80]
-    target = folder / "sound_{}.mp4".format(time.strftime("%Y%m%d_%H%M%S"))
-    seconds = await media.add_sound(video, sound, target, replace)
-    frame = await media.probe(target)
-    item_id = state.db.run(
-        "INSERT INTO generations (user_id, job_id, project_id, workflow, kind, name, filename, summary, settings, "
-        "context, seconds, size, created) VALUES (?, NULL, ?, ?, 'video', ?, ?, ?, ?, ?, ?, ?, ?)",
-        (user["id"], project_id, SOUND_WORKFLOW, name, target.name,
-         "{} {} {} · {:.0f} s".format(rows["audio"]["name"], "in place of the sound of" if replace else "under", rows["video"]["name"], seconds),
-         json.dumps({"workflow_title": "Sound added", "video": rows["video"]["id"], "audio": rows["audio"]["id"], "replace": replace,
-                     "prompt": json.loads(rows["video"]["settings"]).get("prompt", ""), "parent": rows["video"]["id"]}),
-         json.dumps({"duration": round(seconds, 1), "width": frame["width"], "height": frame["height"]}),
-         round(time.time() - started, 1), target.stat().st_size, time.time()))
-    state.notify(user["id"], library_changed=True)
-    return {"id": item_id, "name": name, "seconds": round(seconds, 2)}
+    job_id = state.jobs.add(
+        user["id"], name, edits.SOUND,
+        {"workflow_title": "Sound added", "video": rows["video"]["id"], "audio": rows["audio"]["id"], "replace": replace,
+         "prompt": json.loads(rows["video"]["settings"]).get("prompt", ""), "parent": rows["video"]["id"]},
+        "{} {} {}".format(rows["audio"]["name"], "in place of the sound of" if replace else "under", rows["video"]["name"]), None, 0, project_id)
+    return {"job": job_id, "name": name}
 
 
 # ---------------------------------------------------------------- the cast of a project
@@ -205,78 +180,34 @@ async def motion_estimate(body: dict, request: Request, user: dict = Depends(cur
 
 @router.post("/motion/render")
 async def motion_render(body: dict, request: Request, user: dict = Depends(current_user)):
-    """Render a motion graphic and add the video to the library. It is charged by its length before the render
-    and refunded if the render fails."""
+    """Queue the render of a motion graphic for the library. It is charged by its length now, and the queue gives
+    the credits back if the render fails or is cancelled."""
     state = request.app.state
-    _, cost = await _motion_price(state, user, body)
+    seconds, cost = await _motion_price(state, user, body)   # refuses what can't be rendered
+    project_id = _project_id(request, user, body.get("project_id")) or None
+    if "scenes" in body:   # a video made of scenes of words, as the agent plans them
+        scenes = sequence.clean_scenes(body.get("scenes"))
+        words = [scene["heading"] or scene["text"] for scene in scenes]
+        name = (" ".join(str(body.get("name") or "").split()) or words[0])[:80]
+        settings = {"workflow_title": "Motion graphics", "scenes": scenes,
+                    "look": body.get("look") if body.get("look") in sequence.LOOKS else "dark",
+                    "shape": body.get("shape") if body.get("shape") in motion.SHAPES else "landscape",
+                    "prompt": " / ".join(words)[:600], "parent": None}
+        summary = "Motion graphics · {}".format("1 scene" if len(scenes) == 1 else "{} scenes".format(len(scenes)))
+    else:                  # one of the templates, on its own or over a video
+        template = next(t for t in motion.templates() if t["id"] == body.get("template"))
+        values = motion.clean(template, body.get("values") if isinstance(body.get("values"), dict) else {})
+        row = state.db.one("SELECT id, name FROM generations WHERE id = ? AND user_id = ? AND kind = 'video'",
+                           (body.get("source"), user["id"])) if template["needs"] == "video" else None
+        name = (values.get("title") or template["title"])[:80]
+        settings = {"workflow_title": "Motion graphics · " + template["title"], "template": template["id"], "values": values,
+                    "prompt": " · ".join(str(values[key]) for key in ("title", "subtitle") if values.get(key)),
+                    "parent": row["id"] if row else None}
+        summary = template["title"] + (" over " + row["name"] if row else "")
     if not state.credits.charge(user["id"], cost, "generation", note="Motion graphics"):
         raise HTTPException(402, "This needs {} credits and you have {}. Ask an admin for more.".format(cost, state.credits.balance(user["id"])))
-    try:
-        made = await (_render_sequence if "scenes" in body else _render_template)(body, request, user)
-    except BaseException:
-        state.credits.add(user["id"], cost, "refund", note="Motion graphics")
-        state.notify(user["id"])
-        raise
-    return dict(made, credits=cost)
-
-
-async def _render_template(body, request, user):
-    """A motion graphic drawn from one of the templates, on its own or over a video."""
-    state = request.app.state
-    template = next((t for t in motion.templates() if t["id"] == body.get("template")), None)
-    if template is None:
-        raise HTTPException(404, "There is no such motion template.")
-    values = motion.clean(template, body.get("values") if isinstance(body.get("values"), dict) else {})
-    project_id = _project_id(request, user, body.get("project_id")) or None
-    source = row = None
-    if template["needs"] == "video":
-        row = state.db.one("SELECT * FROM generations WHERE id = ? AND user_id = ? AND kind = 'video'", (body.get("source"), user["id"]))
-        if row is None:
-            raise HTTPException(400, "Select a video on the canvas first: {} is laid over a video.".format(template["title"].lower()))
-        source = state.outputs.folder(user["id"]) / row["filename"]
-        if not source.is_file():
-            raise HTTPException(404, "The file of {} is missing from storage.".format(row["name"]))
-    started = time.time()
-    name = (values.get("title") or template["title"])[:80]
-    target = state.outputs.folder(user["id"]) / "motion_{}.mp4".format(time.strftime("%Y%m%d_%H%M%S"))
-    made = await motion.render(template["id"], values, target, source, state.settings.node_path, state.storage_dir / "tmp")
-    words = " · ".join(str(values[key]) for key in ("title", "subtitle") if values.get(key))
-    item_id = state.db.run(
-        "INSERT INTO generations (user_id, job_id, project_id, workflow, kind, name, filename, summary, settings, "
-        "context, seconds, size, created) VALUES (?, NULL, ?, ?, 'video', ?, ?, ?, ?, ?, ?, ?, ?)",
-        (user["id"], project_id, MOTION_WORKFLOW, name, target.name,
-         "{}{} · {:.0f} s".format(template["title"], " over " + row["name"] if row else "", made["seconds"]),
-         json.dumps({"workflow_title": "Motion graphics · " + template["title"], "template": template["id"], "values": values,
-                     "prompt": words, "parent": row["id"] if row else None}),
-         json.dumps({"duration": round(made["seconds"], 1), "width": made["width"], "height": made["height"]}),
-         round(time.time() - started, 1), target.stat().st_size, time.time()))
-    state.notify(user["id"], library_changed=True)
-    return {"id": item_id, "name": name, "seconds": round(made["seconds"], 2)}
-
-
-async def _render_sequence(body, request, user):
-    """A motion graphics video made of scenes of words, as the agent plans them."""
-    state = request.app.state
-    scenes = sequence.clean_scenes(body.get("scenes"))
-    look = body.get("look") if body.get("look") in sequence.LOOKS else "dark"
-    shape = body.get("shape") if body.get("shape") in motion.SHAPES else "landscape"
-    project_id = _project_id(request, user, body.get("project_id")) or None
-    started = time.time()
-    words = [scene["heading"] or scene["text"] for scene in scenes]
-    name = (" ".join(str(body.get("name") or "").split()) or words[0])[:80]
-    target = state.outputs.folder(user["id"]) / "motion_{}.mp4".format(time.strftime("%Y%m%d_%H%M%S"))
-    made = await motion.render_sequence(scenes, look, shape, target, state.settings.node_path, state.storage_dir / "tmp")
-    count = "1 scene" if len(scenes) == 1 else "{} scenes".format(len(scenes))
-    item_id = state.db.run(
-        "INSERT INTO generations (user_id, job_id, project_id, workflow, kind, name, filename, summary, settings, "
-        "context, seconds, size, created) VALUES (?, NULL, ?, ?, 'video', ?, ?, ?, ?, ?, ?, ?, ?)",
-        (user["id"], project_id, MOTION_WORKFLOW, name, target.name, "Motion graphics · {} · {:.0f} s".format(count, made["seconds"]),
-         json.dumps({"workflow_title": "Motion graphics", "scenes": scenes, "look": look, "shape": shape,
-                     "prompt": " / ".join(words)[:600], "parent": None}),
-         json.dumps({"duration": round(made["seconds"], 1), "width": made["width"], "height": made["height"]}),
-         round(time.time() - started, 1), target.stat().st_size, time.time()))
-    state.notify(user["id"], library_changed=True)
-    return {"id": item_id, "name": name, "seconds": round(made["seconds"], 2)}
+    job_id = state.jobs.add(user["id"], name, MOTION_WORKFLOW, settings, summary, None, cost, project_id, seconds)
+    return {"job": job_id, "name": name, "credits": cost}
 
 
 # ---------------------------------------------------------------- agent
@@ -376,7 +307,7 @@ async def agent_plan(body: dict, request: Request, user: dict = Depends(agent_us
         before = len(steps)
         if isinstance(proposed, dict) and proposed.get("tool") == agent.SOUND_TOOL:
             made = agent.sound_for(proposed, known)
-            if made:   # a sound on a video: made on Approve through the sound endpoint, which costs nothing
+            if made:   # a sound on a video: queued on Approve through the sound endpoint, which costs nothing
                 steps.append({"name": made["name"], "workflow_title": "Sound", "kind": "video", "prompt": "", "facts": made["facts"],
                               "time": "a few seconds", "credits": 0, "settings": None, "start": None, "sound": made["sound"]})
         else:
@@ -398,7 +329,7 @@ async def _plan_step(state, proposed, instruction, steps, made_by, schemas, name
     if not isinstance(proposed, dict):
         return
     if proposed.get("tool") in agent.MOTION_TOOLS:
-        # Words and shapes drawn by HyperFrames: made on Approve through the motion endpoint, which charges by the length.
+        # Words and shapes drawn by HyperFrames: queued on Approve through the motion endpoint, which charges by the length.
         made = agent.motion_for(proposed, videos)
         if made:
             scenes = made["motion"].get("scenes")

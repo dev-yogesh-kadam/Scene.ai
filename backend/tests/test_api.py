@@ -82,6 +82,24 @@ def register(client, **extra):
     return client.post("/api/auth/register", json={**ADMIN, **extra}).json()
 
 
+def after(client, job_id):
+    """A job, once it is no longer waiting or running."""
+    import time
+    for _ in range(300):
+        job = next(j for j in client.get("/api/jobs").json()["jobs"] if j["id"] == job_id)
+        if job["status"] not in ("queued", "running"):
+            break
+        time.sleep(0.1)
+    return job
+
+
+def made_by(client, response):
+    """The library item a queued edit or motion graphic made."""
+    job = after(client, response.json()["job"])
+    assert job["status"] == "done", job["error"]
+    return next(i for i in client.get("/api/library").json()["items"] if i["job_id"] == job["id"])
+
+
 JOB = {"workflow": "video/h3_director", "values": {"100:value": "She waves."}, "options": {"mode": "fast", "quality": "low"}}
 
 
@@ -295,10 +313,9 @@ def test_timeline_export_joins_clips_into_a_new_library_video(client):
     first, second = sorted(i["id"] for i in client.get("/api/library").json()["items"])
     assert client.post("/api/timeline/export", json={"clips": []}).status_code == 400
     assert client.post("/api/timeline/export", json={"clips": [{"id": 999}]}).status_code == 404
-    made = client.post("/api/timeline/export", json={"name": "Cut 1", "clips": [{"id": first}, {"id": second, "start": 0.25, "end": 0.75}]}).json()
-    assert 1.45 < made["seconds"] < 1.55
-    item = next(i for i in client.get("/api/library").json()["items"] if i["id"] == made["id"])
-    assert (item["name"], item["workflow"], item["context"]["width"]) == ("Cut 1", "edit/timeline", 64)
+    item = made_by(client, client.post("/api/timeline/export", json={"name": "Cut 1", "clips": [{"id": first}, {"id": second, "start": 0.25, "end": 0.75}]}))
+    assert (item["name"], item["workflow"], item["context"]["width"], item["context"]["duration"]) == ("Cut 1", "edit/timeline", 64, 1.5)
+    assert item["summary"] == "2 clips joined · 2 s" and client.get("/api/jobs").json()["jobs"][0]["status"] == "done"
     joined = asyncio.run(media.probe(folder / item["filename"]))
     assert joined["audio"] and 1.4 < joined["seconds"] < 1.6
 
@@ -430,8 +447,8 @@ def test_agent_edits_selected_videos_instead_of_generating(client, monkeypatch):
     plan = client.post("/api/agent/plan", json={"instruction": "trim and join", "selection": ids}).json()
     assert [s["name"] for s in plan["steps"]] == ["Tail", "Both"]
     assert plan["steps"][0]["edit"]["clips"] == [{"id": ids[1], "start": 0.5, "end": 2.0}]      # the end is held to the video's length
-    made = client.post("/api/timeline/export", json={"name": "Tail", "clips": plan["steps"][0]["edit"]["clips"]}).json()
-    assert 1.3 < made["seconds"] < 1.7 and client.get("/api/auth/me").json()["credits"] == 500
+    made = made_by(client, client.post("/api/timeline/export", json={"name": "Tail", "clips": plan["steps"][0]["edit"]["clips"]}))
+    assert 1.3 < made["context"]["duration"] < 1.7 and client.get("/api/auth/me").json()["credits"] == 500
 
 
 def asyncio_run(coroutine):
@@ -729,8 +746,8 @@ def test_a_job_and_an_edit_remember_the_item_they_were_made_from(client):
     post_job(client)
     assert [j["settings"]["parent"] for j in client.get("/api/jobs").json()["jobs"]][::-1] == [source, None, None]
     clip = {"id": source, "start": 0, "end": 0.5}
-    cut = client.post("/api/timeline/export", json={"clips": [clip], "parent": source}).json()
-    plain = client.post("/api/timeline/export", json={"clips": [clip], "parent": 999}).json()
+    cut = made_by(client, client.post("/api/timeline/export", json={"clips": [clip], "parent": source}))
+    plain = made_by(client, client.post("/api/timeline/export", json={"clips": [clip], "parent": 999}))
     made = {i["id"]: i["settings"]["parent"] for i in client.get("/api/library").json()["items"] if i["workflow"] == "edit/timeline"}
     assert made == {cut["id"]: source, plain["id"]: None}
 
@@ -767,8 +784,7 @@ def test_the_agent_puts_a_sound_on_a_video_with_ffmpeg(client, monkeypatch):
         {"instruction": "attach this generated audio to the vido", "reply": "I cannot attach audio.", "steps": []}]}).json()
     assert talked["steps"][0]["sound"]["audio"] == ids["Tune"] and talked["reply"] == "I'll put Tune under Clip. Approve to make it."
     assert client.post("/api/agent/plan", json={"instruction": "what can you do?"}).json()["steps"] == []
-    made = client.post("/api/edit/sound", json=step["sound"]).json()
-    item = next(i for i in client.get("/api/library").json()["items"] if i["id"] == made["id"])
+    item = made_by(client, client.post("/api/edit/sound", json=step["sound"]))
     result = asyncio_run(media.probe(folder / item["filename"]))
     assert result["audio"] and 2.8 < result["seconds"] < 3.2          # the 1 s tune is looped to the length of the 3 s video
     assert item["workflow"] == "edit/sound" and item["settings"]["parent"] == ids["Clip"]
@@ -932,10 +948,10 @@ def test_motion_graphics_are_charged_by_the_second_and_refunded_when_a_render_fa
         raise motion.MotionError("The render stopped.")
 
     monkeypatch.setattr(motion, "render", broken)
-    assert client.post("/api/motion/render", json=card).status_code == 400
+    queued = client.post("/api/motion/render", json=card).json()
+    assert queued["credits"] == 240 and after(client, queued["job"])["error"] == "The render stopped."
     assert client.get("/api/auth/me").json()["credits"] == 500
-    assert [(e["amount"], e["reason"], e["note"]) for e in client.get("/api/admin/credits").json()["events"]][:2] == [
-        (240, "refund", "Motion graphics"), (-240, "generation", "Motion graphics")]
+    assert [(e["amount"], e["reason"]) for e in client.get("/api/admin/credits").json()["events"]][:2] == [(240, "refund"), (-240, "generation")]
 
     async def drawn(template_id, values, target, *args, **kwargs):
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -943,9 +959,10 @@ def test_motion_graphics_are_charged_by_the_second_and_refunded_when_a_render_fa
         return {"seconds": 8.0, "width": 1920, "height": 1080}
 
     monkeypatch.setattr(motion, "render", drawn)
-    assert client.post("/api/motion/render", json=card).json()["credits"] == 240
+    item = made_by(client, client.post("/api/motion/render", json=card))
+    assert (item["workflow"], item["summary"], item["cost"]) == ("edit/motion", "Title card · 8 s", 240)
     assert client.get("/api/auth/me").json()["credits"] == 260
-    client.post("/api/motion/render", json=card)
+    made_by(client, client.post("/api/motion/render", json=card))
     refused = client.post("/api/motion/render", json=card)          # 20 credits are left
     assert refused.status_code == 402 and "240 credits and you have 20" in refused.json()["detail"]
 
@@ -1004,3 +1021,32 @@ def test_economics_show_what_each_workflow_earned_and_what_its_electricity_cost(
     assert row["revenue_inr"] == 10 and round(row["electricity_inr"], 2) == 11.4 and round(row["margin_inr"], 2) == -1.4
     assert row["runs_per_success"] == 2 and row["success_rate"] == 50 and row["avg_seconds"] == 3600 and row["render_ratio"] == 720
     assert report["totals"]["failure_rate"] == 50 and report["unmeasured"] == ["Lufi"] and report["days"] == 7
+
+
+def test_a_running_edit_can_be_cancelled_and_gives_its_credits_back(client, monkeypatch):
+    import asyncio, time
+    from scene import motion
+    register(client)
+
+    async def slow(template_id, values, target, *args, **kwargs):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"half a video")
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(motion, "render", slow)
+    job = client.post("/api/motion/render", json={"template": "title_card", "values": {"title": "Chapter one", "seconds": 8}}).json()["job"]
+    post_job(client)                                               # a render that is refused at once: the edit does not wait behind it
+    for _ in range(100):
+        if next(j for j in client.get("/api/jobs").json()["jobs"] if j["id"] == job)["status"] == "running":
+            break
+        time.sleep(0.05)
+    assert client.get("/api/auth/me").json()["credits"] in (160, 260)   # 240 held for the motion graphic, and 100 until the render fails
+    client.delete("/api/jobs/" + job)
+    cancelled = after(client, job)
+    assert cancelled["status"] == "cancelled" and (cancelled["credits_reserved"], cancelled["credits_refunded"]) == (0, 240)
+    assert not list(client.app.state.outputs.folder(1).glob("motion_*"))     # the half-written file is gone
+    for _ in range(100):
+        if client.get("/api/auth/me").json()["credits"] == 500:
+            break
+        time.sleep(0.1)
+    assert client.get("/api/auth/me").json()["credits"] == 500

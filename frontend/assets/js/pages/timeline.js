@@ -2,7 +2,7 @@
 
 import { api } from '../api.js';
 import { el, icon, timecode } from '../dom.js';
-import { subscribe } from '../store.js';
+import { subscribe, refreshJobs } from '../store.js';
 
 const fileUrl = (id) => `/api/library/${id}/file`;
 const lengths = {};   // generation id -> promise of the video's length in seconds
@@ -191,7 +191,8 @@ export function render(view) {
       const made = await api('/api/timeline/export', { method: 'POST', json: { name: name.value, project_id: project || null,
         clips: clips.map(({ id, start, end }) => ({ id, start, end })) } });
       notice.className = 'notice ok';
-      notice.replaceChildren(`Exported "${made.name}" (${made.seconds.toFixed(1)} s). `, el('a', { href: '#/library' }, 'Open the library'));
+      notice.replaceChildren(`Exporting "${made.name}". It will be in the library in a moment. `, el('a', { href: '#/library' }, 'Open the library'));
+      refreshJobs();
     } catch (e) {
       notice.className = 'notice error';
       notice.textContent = e.message;

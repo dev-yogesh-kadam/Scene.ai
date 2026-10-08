@@ -140,8 +140,9 @@ A filled-in copy is a template folder with the four marks replaced and `gsap.min
 
 ## Limits
 
-- A render runs inside the web request, one at a time, and starts its own Chrome. A 5 s card takes
-  about 8 s on the studio PC; a title over a 6 s video about 9 s.
+- A render is a job in the queue's lane for work done on this machine: one at a time, never behind a
+  render on the GPU, and it can be cancelled. It starts its own Chrome and reports no steps while it
+  runs. A 5 s card takes about 8 s on the studio PC; a title over a 6 s video about 9 s.
 - A `motion` video is text on a plain ground in one of four looks. It has no pictures, logos, icons,
   charts, music or voice yet.
 - A motion video starts on an empty frame, before its first words come on, so its thumbnail in the

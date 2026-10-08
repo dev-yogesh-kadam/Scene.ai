@@ -173,6 +173,9 @@ async def _run(command, folder):
                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, **flags)
     try:
         output, _ = await asyncio.wait_for(process.communicate(), RENDER_TIMEOUT)
+    except asyncio.CancelledError:   # the job this was for was cancelled
+        process.kill()
+        raise
     except asyncio.TimeoutError:
         process.kill()
         raise MotionError("The render took longer than {} minutes and was stopped.".format(RENDER_TIMEOUT // 60))

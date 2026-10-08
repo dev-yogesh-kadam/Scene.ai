@@ -13,7 +13,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
-from .. import __version__, audit, media
+from .. import __version__, audit, edits, media
 from ..catalog import KINDS
 from ..credits import MOTION, OVERLAY, PER_JOB, RATES
 from ..security import hash_password
@@ -641,7 +641,8 @@ async def put_workflow_pricing(body: dict, request: Request, user: dict = Depend
 @router.get("/economics")
 async def economics(request: Request, days: int = 30, user: dict = Depends(admin_user)):
     """What each workflow earned and what it cost to run, from the jobs of the last `days` days. The cost is
-    electricity only: the time a job ran, at the power of the server it ran on."""
+    electricity only: the time a job ran, at the power of the server it ran on. Edits and motion graphics are jobs
+    too, made on the machine that hosts the studio."""
     state, db = request.app.state, request.app.state.db
     days = days if days in RANGES else 30
     since = time.time() - days * DAY
@@ -664,29 +665,19 @@ async def economics(request: Request, days: int = 30, user: dict = Depends(admin
         item = found.setdefault(row["workflow"], {"id": row["workflow"], "electricity_inr": 0.0, "measured": True})
         for key in ("jobs", "done", "failed", "cancelled", "retries", "output_bytes", "run_seconds", "done_seconds", "seconds_made", "credits", "refunded"):
             item[key] = item.get(key, 0) + (row[key] or 0)
-        power = watts.get(row["server"]) or usual
+        power = watts[row["server"]] if row["server"] in watts else usual
         if power:
             item["electricity_inr"] += (row["run_seconds"] or 0) / 3600 * power / 1000 * per_kwh
         elif row["run_seconds"]:
             item["measured"] = False   # it ran on a server whose power is not known
-
-    # Motion graphics have no job: what was made is in the library, and what was paid is in the credit log.
-    motion = db.one("SELECT COUNT(*) AS done, SUM(seconds) AS run_seconds, SUM(size) AS output_bytes, "
-                    "SUM(json_extract(context, '$.duration')) AS seconds_made FROM generations WHERE workflow = ? AND created > ?", (MOTION, since))
-    paid = -(db.one("SELECT SUM(amount) n FROM credit_events WHERE note = 'Motion graphics' AND created > ?", (since,))["n"] or 0)
-    if motion["done"] or paid:
-        found[MOTION] = {"id": MOTION, "jobs": motion["done"], "done": motion["done"], "failed": 0, "cancelled": 0, "retries": 0,
-                         "output_bytes": motion["output_bytes"] or 0, "run_seconds": motion["run_seconds"] or 0,
-                         "done_seconds": motion["run_seconds"] or 0, "seconds_made": motion["seconds_made"] or 0,
-                         "credits": paid, "refunded": 0, "electricity_inr": 0.0, "measured": False}   # drawn on the host, whose power is not measured
 
     rows = []
     for item in found.values():
         known = titles.get(item["id"], {})
         done, runs = item["done"], item["done"] + item["failed"]
         item.update(
-            title="Motion graphics" if item["id"] == MOTION else known.get("title") or item["id"],
-            kind="motion" if item["id"] == MOTION else item["id"].split("/", 1)[0],
+            title=edits.TITLES.get(item["id"]) or known.get("title") or item["id"],
+            kind=item["id"].split("/", 1)[0],
             success_rate=round(100 * done / runs, 1) if runs else None,
             runs_per_success=round(runs / done, 2) if done else None,          # 1.08 means 108 runs for 100 results
             avg_seconds=item["done_seconds"] / done if done else None,

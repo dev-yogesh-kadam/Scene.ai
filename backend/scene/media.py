@@ -30,7 +30,11 @@ async def _ffmpeg(*args, check=True):
     process = await asyncio.create_subprocess_exec(
         ffmpeg_path(), "-hide_banner", "-y", *[str(a) for a in args],
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
-    _, stderr = await process.communicate()
+    try:
+        _, stderr = await process.communicate()
+    except asyncio.CancelledError:   # the job this was for was cancelled: don't leave ffmpeg running
+        process.kill()
+        raise
     text = stderr.decode("utf-8", "replace")
     if check and process.returncode != 0:
         raise MediaError("ffmpeg failed: " + text.strip()[-400:])

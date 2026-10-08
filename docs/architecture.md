@@ -18,7 +18,8 @@ Browser (frontend/)  ──HTTP + WebSocket──▶  Scene.ai server (backend/s
 | `catalog.py` | Lists the files in `workflows/<kind>/` and loads them. The kinds are video, image and audio; the `upscaler` folder is read too, for workflows that enlarge a video the user has. |
 | `comfy/workflows.py` | Reads a workflow, works out its form, builds the graph for one job, estimates time. |
 | `comfy/client.py` | Calls ComfyUI: upload, queue, history, download, cancel. |
-| `jobs.py` | The queue. One job runs at a time, for all users, in the order they were added. Also runs chained long videos. |
+| `jobs.py` | The queue, with two lanes that each run one job at a time, for all users, oldest first: renders on the render server, and edits on this machine. Also runs chained long videos. |
+| `edits.py` | The work of the second lane: joining a timeline, putting a sound on a video, drawing a motion graphic. Each is a job filed under an `edit/...` workflow that has no workflow file. |
 | `media.py` | ffmpeg helpers: last frame of a clip, a video's poster (its thumbnail), joining clips, cutting audio, joining a timeline of any clips. ffmpeg comes with the `imageio-ffmpeg` package. |
 | `credits.py` | What a job costs, charging and refunding. Every change is logged in `credit_events`. |
 | `references.py` | Uploading reference files to ComfyUI, with a size limit. |
@@ -58,7 +59,7 @@ Workflow files are never changed. Each job gets its own patched copy.
    (`sound`), or a motion render (`motion`, `overlay`). What cannot run is dropped.
 5. Nothing happens until the user presses Approve. The browser then carries out the steps one by
    one, through `POST /api/jobs`, `POST /api/timeline/export`, `POST /api/edit/sound` or
-   `POST /api/motion/render`.
+   `POST /api/motion/render`. Each of these queues a job and answers at once with its id.
    A step that starts on an earlier step's result waits for that result first.
 
 ## Long videos (chained clips)
@@ -94,8 +95,8 @@ The price follows what the user asked for, never the GPU time it took (`credits.
 - A job is charged when it is queued and refunded if it fails or is cancelled. The job keeps
   `credits_required`, `credits_reserved` (held while it waits and runs), `credits_consumed` and
   `credits_refunded`, with `seconds_requested`, `server`, `retries` and `output_size`. `cost` is still its price.
-- A motion graphic has no job: `/api/motion/render` charges it before the render and refunds it if the
-  render fails. `/api/motion/estimate` gives the price without rendering.
+- A motion graphic is a job like any other: `/api/motion/render` charges it and queues it, and the queue
+  refunds it if the render fails or is cancelled. `/api/motion/estimate` gives the price without rendering.
 - `credit_packages` and `servers` (hardware, power, depreciation figures) are kept for payments and the
   scheduler. The name of the server marked "renders" is written on each job.
 - The admin console's **Economics** section (`GET /api/admin/economics?days=`) reports, per workflow, the jobs
@@ -129,7 +130,6 @@ Plain JavaScript modules, served as static files.
 ## Known limits
 
 - One render server and one job at a time. More GPUs need a worker per server.
-- Timeline exports, agent edits and motion renders run inside the web request, not in the job queue.
 - SQLite and local files fit one machine. Moving to Postgres and object storage means replacing
   `db.py` and the file paths in `jobs.py` and `api/library.py`.
 - No email, so no verification or password reset. An admin has to help a locked-out user.

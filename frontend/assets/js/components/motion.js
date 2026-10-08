@@ -4,6 +4,7 @@
 
 import { api } from '../api.js';
 import { el, icon, field } from '../dom.js';
+import { refreshJobs } from '../store.js';
 
 const capital = (text) => String(text)[0].toUpperCase() + String(text).slice(1);
 
@@ -112,12 +113,13 @@ export function sequenceForm({ projectId = () => null, onBack = () => {} }) {
     say('');
     if (button.disabled) return;
     button.disabled = true;
-    label.replaceChildren(el('i', { class: 'cell-mark stepping' }), ' Rendering…');
+    label.replaceChildren(el('i', { class: 'cell-mark stepping' }), ' Sending…');
     try {
       // The length of each scene is left to the server, which sets it from how much there is to read.
       await api('/api/motion/render', { method: 'POST',
         json: { scenes: state.scenes, look: state.look, shape: state.shape, name: state.name, project_id: projectId() } });
-      say('Done. It is on the canvas.', true);
+      refreshJobs();
+      say('Rendering. It will appear on the canvas.', true);
     } catch (e) { say(e.message); }
     label.replaceChildren('Render');
     button.disabled = !state.scenes.length;
@@ -180,12 +182,13 @@ export function motionForm({ template, source = () => null, projectId = () => nu
     if (button.disabled) return;
     const item = template.needs === 'video' ? source() : null;
     button.disabled = true;
-    label.replaceChildren(el('i', { class: 'cell-mark stepping' }), ' Rendering…');
+    label.replaceChildren(el('i', { class: 'cell-mark stepping' }), ' Sending…');
     try {
       await api('/api/motion/render', { method: 'POST',
         json: { template: template.id, values, source: item ? item.id : null, project_id: projectId() } });
+      refreshJobs();
       note.className = 'notice ok';
-      note.textContent = 'Done. It is on the canvas.';
+      note.textContent = 'Rendering. It will appear on the canvas.';
     } catch (e) {
       note.className = 'error notice';
       note.textContent = e.message;

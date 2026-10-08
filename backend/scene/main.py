@@ -71,10 +71,11 @@ def create_app(settings=None):
 
     @asynccontextmanager
     async def lifespan(app):
-        app.state.jobs = JobManager(db, comfy, catalog, credits, app.state.outputs, notify, storage / "tmp")
-        worker = asyncio.create_task(app.state.jobs.run_forever())
+        app.state.jobs = JobManager(db, comfy, catalog, credits, app.state.outputs, notify, storage / "tmp", settings.node_path)
+        workers = [asyncio.create_task(app.state.jobs.run_forever()), asyncio.create_task(app.state.jobs.run_forever(local=True))]
         yield
-        worker.cancel()
+        for worker in workers:
+            worker.cancel()
         await comfy.http.aclose()
         await agent.http.aclose()
 

@@ -38,8 +38,6 @@ app fetch it again. It needs one real run to close.
 
 - **Thirteen endpoints accept any JSON** (`body: dict` or `settings: dict`). A wrong type can give a
   server error instead of a clear message. Only the timeline export has been made to check its clips.
-- **Timeline export runs inside the request.** A long cut keeps the request open until ffmpeg
-  finishes, and nothing limits how many exports run at once.
 - **Database and file work blocks the server.** SQLite calls and file reads run directly inside
   async handlers behind one global lock (`db.py`). Fine for a handful of users, not for many.
 - **The login throttle is keyed on email plus client address.** An attacker who changes the email on

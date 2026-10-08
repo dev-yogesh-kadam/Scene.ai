@@ -521,8 +521,11 @@ Not tested:
   tunnel. The throttle is still per email, so trying many emails from one address is not blocked.
 - **Still loading whole videos for a thumbnail**: the clip strip of the Timeline and the Assets page,
   which do not use `still()`.
-- **Renders and exports run inside the web request**: a timeline export, an agent edit and a motion
-  render each hold their request until done, one motion render at a time.
+- **Edits are jobs since 5 October.** A timeline export, a sound put on a video and a motion render are
+  queued (`edits.py`) in a lane of their own, one at a time, beside the GPU lane. They show in the
+  Queue and on the canvas as running, can be cancelled, and a failed motion render is refunded by the
+  queue. They report no step progress, only running. Two real motion renders went through the queue
+  on a test copy; the Timeline page, the motion forms and the agent's Approve were not clicked in a browser.
 - **Improve prompt can lose meaning** for a prompt that is not in English: Hindi in Latin letters came
   back in English with a detail dropped.
 - **Plain browser prompts remain** for "New project…" on the Create and Library pages, for project
@@ -557,7 +560,7 @@ Not tested:
 2. **Richer motion graphics**: pictures and clips from the library inside a scene, and more scene kinds.
    **Speech**: a text-to-speech workflow, so a voice-over can be made and put on a video with the sound tool.
 3. **Editing as quick actions**: trim, speed, reframe and convert on a selected frame, with ffmpeg.
-4. **Run renders and exports through the job queue**, so they show progress and do not hold a request.
+4. **Step progress for edits**: they are jobs now, and show as running with no bar.
 5. **Run the upscaler once for real**, on a short clip at scale 2, then find what scale and length
    the render PC can take. **Measure the new workflows** and give each a time table, so they are
    priced from the first run.

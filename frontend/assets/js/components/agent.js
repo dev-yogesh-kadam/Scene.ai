@@ -210,23 +210,14 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {} } = {}) {
       if (step.job || step.made) continue;
       step.error = null;
       try {
-        if (step.motion) {   // words and shapes drawn by HyperFrames: rendered on the spot, with no job; charged by its length
-          step.rendering = true;
-          drawLog();
-          try {
-            step.made = (await api('/api/motion/render', { method: 'POST', json: { ...step.motion, project_id: projectId() || null } })).id;
-          } finally { step.rendering = false; }
-          drawLog();
-          continue;
-        }
-        if (step.sound) {   // a sound put on a video with ffmpeg: made on the spot, with no job and no charge
-          step.made = (await api('/api/edit/sound', { method: 'POST', json: { ...step.sound, project_id: projectId() || null } })).id;
-          drawLog();
-          continue;
-        }
-        if (step.edit) {   // a cut or a join of videos the user has: made on the spot, with no job and no charge
-          step.made = (await api('/api/timeline/export', { method: 'POST',
-            json: { name: step.name, project_id: projectId() || null, clips: step.edit.clips, parent: step.edit.clips[0].id } })).id;
+        // Work done on the studio's own machine is queued like a generation, in a lane that does not wait for the GPU.
+        const local = step.motion ? ['/api/motion/render', step.motion]                 // words and shapes drawn by HyperFrames, charged by length
+          : step.sound ? ['/api/edit/sound', step.sound]                                // a sound put on a video with ffmpeg, free
+            : step.edit ? ['/api/timeline/export', { name: step.name, clips: step.edit.clips, parent: step.edit.clips[0].id }] : null;   // a cut or a join, free
+        if (local) {
+          step.job = (await api(local[0], { method: 'POST', json: { ...local[1], project_id: projectId() || null } })).job;
+          saveRuns();
+          refreshJobs();
           drawLog();
           continue;
         }

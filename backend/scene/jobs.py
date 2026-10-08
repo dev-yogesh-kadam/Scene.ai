@@ -1,4 +1,5 @@
-"""The generation queue: one job at a time on the GPU, shared by all users, with live progress.
+"""The generation queue: one job at a time on the GPU, shared by all users, with live progress. Edits and motion
+graphics, which are made on this machine, are jobs too and have a lane of their own (see edits.py).
 
 A job is either one render, or a chain: several clips where each one starts on the last frame of the
 clip before it, joined into one video at the end.
@@ -17,7 +18,7 @@ from pathlib import Path
 import httpx
 import websockets
 
-from . import media
+from . import edits, media, motion, sequence
 from .comfy import workflows
 from .comfy.client import ComfyError
 
@@ -32,8 +33,9 @@ class Cancelled(Exception):
 
 
 class JobManager:
-    def __init__(self, db, comfy, catalog, credits, outputs, notify, tmp_dir):
+    def __init__(self, db, comfy, catalog, credits, outputs, notify, tmp_dir, node_path=""):
         self.db = db
+        self.node_path = node_path      # the Node.js program that renders motion graphics
         self.comfy = comfy
         self.catalog = catalog
         self.credits = credits
@@ -52,16 +54,22 @@ class JobManager:
 
     def snapshot(self, user_id):
         now = time.time()
-        waiting = [r["id"] for r in self.db.all("SELECT id FROM jobs WHERE status = 'queued' ORDER BY created")]
-        busy = 1 if self.db.one("SELECT 1 FROM jobs WHERE status = 'running'") else 0
+        # A job waits only behind the jobs of its own lane: renders behind renders, edits behind edits.
+        waiting, busy = {True: [], False: []}, {True: 0, False: 0}
+        for r in self.db.all("SELECT id, workflow, status FROM jobs WHERE status IN ('queued', 'running') ORDER BY created"):
+            if r["status"] == "running":
+                busy[edits.is_edit(r["workflow"])] = 1
+            else:
+                waiting[edits.is_edit(r["workflow"])].append(r["id"])
         jobs = []
         for row in self.db.all(
                 "SELECT * FROM jobs WHERE user_id = ? AND hidden = 0 ORDER BY created DESC LIMIT 40", (user_id,)):
             live = self.live.get(row["id"], {})
             row["settings"] = json.loads(row["settings"])
+            lane = edits.is_edit(row["workflow"])
             row.update(step=live.get("step", 0), steps=live.get("steps", 0), node=live.get("node", ""),
                        clip=live.get("clip", 0), clips=live.get("clips", 0), eta_seconds=self._eta(row, live, now),
-                       position=waiting.index(row["id"]) + 1 + busy if row["id"] in waiting else None)
+                       position=waiting[lane].index(row["id"]) + 1 + busy[lane] if row["id"] in waiting[lane] else None)
             del row["hidden"], row["user_id"]
             jobs.append(row)
         return jobs
@@ -95,9 +103,13 @@ class JobManager:
         self.notify(user_id)
         return True
 
-    async def run_forever(self):
+    async def run_forever(self, local=False):
+        """Take the waiting jobs of one lane, oldest first, one at a time. There are two lanes, each with its own
+        worker: renders on the GPU of the render server, and edits (`local`), which are made on this machine and
+        so never wait behind a render."""
+        mine = "workflow LIKE 'edit/%'" if local else "workflow NOT LIKE 'edit/%'"
         while True:
-            job = self.db.one("SELECT * FROM jobs WHERE status = 'queued' ORDER BY created LIMIT 1")
+            job = self.db.one("SELECT * FROM jobs WHERE status = 'queued' AND {} ORDER BY created LIMIT 1".format(mine))
             if job is None:
                 self.wake.clear()
                 await self.wake.wait()
@@ -105,7 +117,7 @@ class JobManager:
             job["settings"] = json.loads(job["settings"])
             job["started"] = time.time()
             self.live[job["id"]] = {"step": 0, "steps": 0, "titles": {}}
-            server = self.db.one("SELECT name FROM servers WHERE renders = 1 AND active = 1 ORDER BY id LIMIT 1")
+            server = self.db.one("SELECT name FROM servers WHERE renders = ? AND active = 1 ORDER BY id LIMIT 1", (0 if local else 1,))
             self.db.run("UPDATE jobs SET status = 'running', started = ?, server = ? WHERE id = ?",
                         (job["started"], server["name"] if server else "", job["id"]))
             self._notify_all_waiting(job["user_id"])
@@ -114,7 +126,7 @@ class JobManager:
                 await self._run(job)
             except Cancelled:
                 status = "cancelled"
-            except (ComfyError, workflows.WorkflowError, media.MediaError) as e:
+            except (ComfyError, workflows.WorkflowError, media.MediaError, motion.MotionError, sequence.SequenceError) as e:
                 status, error = "failed", str(e)
             except httpx.HTTPError as e:
                 status, error = "failed", "Lost the connection to ComfyUI ({}).".format(e or type(e).__name__)
@@ -138,7 +150,24 @@ class JobManager:
 
     # ------------------------------------------------------------ one job
 
+    async def _run_edit(self, job):
+        """An edit or a motion graphic, made on this machine. It reports no steps; a cancel stops it within a second."""
+        live = self.live[job["id"]]
+        work = asyncio.ensure_future(edits.run(job, self.outputs.folder(job["user_id"]), self.db, self.node_path, self.tmp_dir))
+        while not work.done():
+            await asyncio.wait([work], timeout=1)
+            if live.get("cancel") and not work.done():
+                work.cancel()
+                await asyncio.gather(work, return_exceptions=True)
+                raise Cancelled()
+        target, ctx = work.result()
+        job["summary"] = "{} · {:.0f} s".format(job["summary"], ctx["duration"])
+        self.db.run("UPDATE jobs SET summary = ? WHERE id = ?", (job["summary"], job["id"]))
+        self._record(job, "video", target, ctx)
+
     async def _run(self, job):
+        if edits.is_edit(job["workflow"]):
+            return await self._run_edit(job)
         live = self.live[job["id"]]
         wf = await self.catalog.load(job["workflow"])
         schema = workflows.describe(wf)
