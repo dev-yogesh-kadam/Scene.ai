@@ -2,7 +2,7 @@
 // Images, videos and audio each open the same form, built from the workflows of that kind.
 
 import { api } from '../api.js';
-import { el, icon } from '../dom.js';
+import { el, icon, segmented } from '../dom.js';
 import { subscribe, refreshJobs } from '../store.js';
 import { pickAsset } from './assets.js';
 import { motionForm, sequenceForm } from './motion.js';
@@ -89,7 +89,7 @@ export function quickActions({ startFrom = () => null, projectId = () => null } 
       el('div', { class: 'quick-head' },
         el('button', { class: 'icon-btn', title: 'Back to quick actions', 'aria-label': 'Back to quick actions', onclick: () => show('home') }, icon('back')),
         title),
-      el('div', { class: 'quick-body' }, model, about, start, source,
+      el('div', { class: 'quick-body' }, model, about, modes, start, source,
 promptField, texts, note),
       el('div', { class: 'quick-foot' }, pills, button));
     if (form.wf && !changed) draw(); else loadCatalog().catch(showError);
@@ -101,6 +101,7 @@ promptField, texts, note),
   const title = el('b');
   const model = el('div', { class: 'field' });
   const about = el('p', { class: 'muted small' });
+  const modes = el('div');   // the choices a presets file puts first, such as which of a workflow's two modes to use
   const start = el('div', { class: 'composer-start' });
   const source = el('div', { class: 'field' });
   const prompt = el('textarea', { rows: 5, 'aria-label': 'Prompt', placeholder: 'Describe the shot',
@@ -145,6 +146,10 @@ promptField, texts, note),
 
   const byRole = (role) => form.wf && form.wf.controls.find((c) => c.role === role);
   const firstFrame = () => form.wf && form.wf.refs.find((r) => r.id === form.wf.slots.first_frame);
+  // Whether the workflow reads this slot with the choices made: some belong to one mode only. A file left in a slot
+  // that is out of use stays there for when the mode is switched back, and is not sent.
+  const inUse = (slot) => Object.entries(slot.when || {}).every(([k, v]) => [].concat(v).includes(form.options[k]));
+  const used = () => new Set(form.wf.refs.filter(inUse).map((slot) => slot.id));
   const showError = (e) => { note.textContent = e.message || String(e); };
 
   async function loadCatalog() {
@@ -153,7 +158,7 @@ promptField, texts, note),
     form.wf = null;
     button.disabled = !form.catalog.length;
     if (!form.catalog.length) {
-      for (const part of [model, about, start, source, pills]) part.replaceChildren();
+      for (const part of [model, about, modes, start, source, pills]) part.replaceChildren();
       return showError(new Error(`No ${form.kind} workflows yet. Save a ComfyUI workflow into the workflows/${form.kind} folder, then reload.`));
     }
     const wanted = localStorage.getItem('scene.workflow.' + form.kind) || list.default;
@@ -229,6 +234,9 @@ promptField, texts, note),
       el('select', { 'aria-label': 'Model', onchange: (e) => selectWorkflow(e.target.value).catch(showError) },
         form.catalog.map((w) => el('option', { value: w.id, selected: w.id === wf.id }, w.title))));
     about.textContent = wf.description;
+    modes.replaceChildren(...wf.options.filter((o) => o.top).map((o) => el('div', { class: 'field' }, el('div', { class: 'label' }, o.label),
+      segmented(o.choices, form.options[o.id], (id) => { form.options[o.id] = id; draw(); }),
+      el('div', { class: 'hint' }, (o.choices.find((c) => c.id === form.options[o.id]) || {}).hint || ''))));
     promptField.classList.toggle('hidden', !byRole('prompt'));
     drawSource();
     texts.replaceChildren(...wf.controls.filter((c) => c.primary && c.type === 'text' && !c.role).map((c) =>
@@ -253,7 +261,7 @@ promptField, texts, note),
       set.push(pill(c.label, c.choices.map((x) => ({ id: x, label: c.choices.every((y) => typeof y === 'string') ? x : `${short(c.label)}: ${x}` })),
         form.values[c.id], (x) => { form.values[c.id] = typeof c.default === 'number' ? Number(x) : x; }));
     }
-    for (const o of wf.options) {
+    for (const o of wf.options.filter((x) => !x.top)) {
       set.push(pill(o.label, o.choices.map((c) => ({ id: c.id, label: `${o.label}: ${c.label}` })), form.options[o.id], (id) => { form.options[o.id] = id; }));
     }
     if (form.kind !== 'upscaler') set.push(el('a', { class: 'opt', href: '#/create', title: 'Open the full form on the Create page' }, 'All settings'));
@@ -316,13 +324,14 @@ promptField, texts, note),
         el('input', { type: 'checkbox', checked: form.useStart, onchange: (e) => { form.useStart = e.target.checked; } }),
         (item.kind === 'video' ? 'Continue from the end of ' : 'Start on ') + item.name));
     } else start.replaceChildren();
-    source.classList.toggle('hidden', !wf.refs.length);
+    const refs = wf.refs.filter(inUse);
+    source.classList.toggle('hidden', !refs.length);
     prompt.placeholder = { image: 'Describe the image', audio: 'Describe the music' }[form.kind] || 'Describe the shot';
     // A workflow can have many optional slots; the first few, the required ones and the filled ones stay in view.
-    const shown = wf.refs.filter((r, i) => form.allRefs || i < SHOWN || !r.optional || form.refs[r.id]);
-    const more = wf.refs.length - shown.length;
+    const shown = refs.filter((r, i) => form.allRefs || i < SHOWN || !r.optional || form.refs[r.id]);
+    const more = refs.length - shown.length;
     source.replaceChildren(...[el('div', { class: 'label' }, 'Source'), el('div', { class: 'slots' }, shown.map(slotBox)),
-      (more > 0 || form.allRefs) && wf.refs.length > SHOWN && el('button', { type: 'button', class: 'btn small quiet', style: 'margin-top:6px',
+      (more > 0 || form.allRefs) && refs.length > SHOWN && el('button', { type: 'button', class: 'btn small quiet', style: 'margin-top:6px',
         onclick: () => { form.allRefs = !form.allRefs; drawSource(); } }, form.allRefs ? 'Fewer references' : `More references (${more})`)].filter(Boolean));
   }
 
@@ -332,7 +341,7 @@ promptField, texts, note),
   function settings(extra = {}, parent = null) {
     const refs = { ...extra };
     const source = upscaled() && form.refs[upscaled().id];   // the result is named after the video it is made from
-    for (const [id, r] of Object.entries(form.refs)) if (r.assetId) refs[id] = { asset_id: r.assetId };
+    for (const [id, r] of Object.entries(form.refs)) if (r.assetId && used().has(id)) refs[id] = { asset_id: r.assetId };
     return { workflow: form.wf.id, name: source ? `${source.name} upscaled` : form.wf.id.split('/')[1], values: form.values, options: form.options,
       resolution: form.resolution, orientation: form.orientation, seed_mode: 'random', clips: 1, project_id: projectId(), parent, refs,
       source_seconds: (source && source.seconds) || undefined };
@@ -369,10 +378,10 @@ promptField, texts, note),
     if (byRole('prompt') && !prompt.value.trim()) return showError(new Error('Write a prompt first.'));
     const first = firstFrame();
     const item = form.useStart && first && !form.refs[first.id] ? startFrom() : null;
-    const missing = form.wf.refs.find((r) => !r.optional && !form.refs[r.id] && !(item && r.id === first.id));
+    const missing = form.wf.refs.filter(inUse).find((r) => !r.optional && !form.refs[r.id] && !(item && r.id === first.id));
     if (missing) return showError(new Error(`Add a file for "${short(missing.label)}".`));
     const hits = warnings();
-    if (hits.length && !confirm(hits.map((h) => h.message).join('\n') + '\n\nGenerate anyway?')) return;
+    if (hits.length && !confirm(hits.map((h) => h.message).join('\n') + `\n\nEstimated time: ${time.textContent || 'unknown'}\n\nGenerate anyway?`)) return;
     button.disabled = true;
     label.textContent = 'Sending…';
     try {
@@ -382,14 +391,14 @@ promptField, texts, note),
         extra[first.id] = { comfy_name: ref.comfy_name, name: ref.name };
       }
       for (const [slot, r] of Object.entries(form.refs)) {   // library items, such as the cast, are sent to the render server now
-        if (!r.itemId) continue;
+        if (!r.itemId || !used().has(slot)) continue;
         const ref = await api(`/api/library/${r.itemId}/reference?kind=${r.takes}`, { method: 'POST' });
         extra[slot] = { comfy_name: ref.comfy_name, name: ref.name };
       }
       const data = new FormData();
       const made = upscaled() && form.refs[upscaled().id];   // an upscaled video joins the row of the video it is made from
       data.append('settings', JSON.stringify(settings(extra, item ? item.id : made && made.itemId ? made.itemId : null)));
-      for (const [id, r] of Object.entries(form.refs)) if (r.file) data.append('ref:' + id, r.file, r.name);
+      for (const [id, r] of Object.entries(form.refs)) if (r.file && used().has(id)) data.append('ref:' + id, r.file, r.name);
       await api('/api/jobs', { method: 'POST', body: data });
       refreshJobs();
       refreshEstimate();   // the balance changed. After a failure it is left alone: it would clear the message

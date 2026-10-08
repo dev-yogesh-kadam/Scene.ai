@@ -11,7 +11,10 @@ export async function api(path, options = {}) {
   }
   if (!response.ok) {
     const detail = Array.isArray(body.detail) ? 'Some fields are missing or wrong.' : body.detail;
-    throw new Error(detail || `Request failed (${response.status})`);
+    const error = new Error(detail || `Request failed (${response.status})`);
+    error.status = response.status;
+    error.data = body;   // the whole answer, for a page that needs more than the message (the sign-in's second step)
+    throw error;
   }
   return body;
 }

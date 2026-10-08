@@ -417,6 +417,10 @@ def describe(wf):
             ref_slot.update(optional=True, default=None, drop=True)
         elif ref_slot["id"] in profile.get("required_refs", []):  # the job needs a file here
             ref_slot.update(optional=False, default=None, required=True)
+    for group in profile.get("refs_when", []):   # slots the workflow only reads under some choices, such as one of two modes
+        for ref_slot in refs:
+            if ref_slot["id"] in group.get("refs", []):
+                ref_slot["when"] = group.get("when", {})
     for extra in profile.get("extra_refs", []):  # a slot with no loader node in the workflow: one is added when it is filled
         if str(extra["node"]) in nodes and extra.get("kind") in EXTRA_LOADERS:
             rid = "extra:" + extra["id"]
@@ -467,6 +471,9 @@ def context(schema, settings):
     values = settings.get("values") or {}
     chosen = settings.get("options") or {}
     ctx = {o["id"]: chosen.get(o["id"], o.get("default")) for o in schema["options"]}
+    for o in schema["options"]:   # a choice no rule knows would leave the workflow on whatever it was saved with
+        if ctx[o["id"]] not in [c["id"] for c in o["choices"]]:
+            raise WorkflowError("'{}' is not a choice for {}.".format(ctx[o["id"]], o["label"]))
     roles = {c["role"]: c for c in schema["controls"] if c["role"]}
     if "duration" in roles:
         ctx["duration"] = _cast("float", values.get(roles["duration"]["id"], roles["duration"]["default"]))
@@ -521,6 +528,13 @@ def _matches(when, ctx):
     return all(ctx.get(k) in (v if isinstance(v, list) else [v]) for k, v in when.items())
 
 
+def refs_in_use(schema, settings):
+    """The ids of the reference slots the workflow reads with these settings. A slot that belongs to a choice
+    which is not made (see "refs_when") is not one of them: a file given for it is not sent and not used."""
+    ctx = context(schema, settings)
+    return {r["id"] for r in schema["refs"] if _matches(r.get("when") or {}, ctx)}
+
+
 # ---------------------------------------------------------------- building a job
 
 def build_prompt(wf, settings):
@@ -548,7 +562,7 @@ def build_prompt(wf, settings):
     enabled, disabled = set(), set()
     given = settings.get("refs") or {}
     for r in schema["refs"]:
-        ref = given.get(r["id"])
+        ref = given.get(r["id"]) if _matches(r.get("when") or {}, ctx) else None
         if r.get("connect"):
             if ref:
                 loader, loader_input = EXTRA_LOADERS[r["kind"]]
@@ -575,6 +589,14 @@ def build_prompt(wf, settings):
             if nid not in nodes:
                 raise WorkflowError("{}.studio.json sets node {}, which is not in the workflow.".format(wf["id"], nid))
             nodes[nid]["inputs"][name] = value
+
+    # The Save node files the result on the render server under the job's name, in a folder named after its kind.
+    named, name = wf["profile"].get("output_name"), re.sub(r"[^\w.-]+", "_", str(settings.get("name") or "")).strip("._")
+    if named and name:
+        nid, key = named.split(".", 1)
+        if nid not in nodes:
+            raise WorkflowError("{}.studio.json names node {} for the output, which is not in the workflow.".format(wf["id"], nid))
+        nodes[nid]["inputs"][key] = "{}/{}".format(wf["id"].split("/", 1)[0], name)
     return finalize(nodes, wf["info"], enabled, disabled), ctx
 
 

@@ -100,6 +100,7 @@ export function composer({ startFrom = () => null, projectId = () => null, onQue
         const short = quote.credits > quote.balance;
         cost.textContent = quote.credits + ' cr';
         button.disabled = short;
+        form.estimate = quote.text;
         button.title = `${quote.text} · Generate (Ctrl or ⌘ + Enter)`;
         note.textContent = short ? `You have ${quote.balance} cr. This needs ${quote.credits} cr.` : '';
       } catch (e) { showError(e); }
@@ -122,7 +123,7 @@ export function composer({ startFrom = () => null, projectId = () => null, onQue
       return showError(new Error('This workflow needs reference files. Add them on the Create page.'));
     }
     const hits = warnings();
-    if (hits.length && !confirm(hits.map((h) => h.message).join('\n') + '\n\nGenerate anyway?')) return;
+    if (hits.length && !confirm(hits.map((h) => h.message).join('\n') + `\n\nEstimated time: ${form.estimate || 'unknown'}\n\nGenerate anyway?`)) return;
     button.disabled = true;
     label.textContent = 'Sending…';
     try {

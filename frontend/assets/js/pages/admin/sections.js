@@ -82,6 +82,9 @@ function userActions(ctx, u, after) {
     } }, u.role === 'admin' ? 'Make user' : 'Make admin'),
     u.role !== 'admin' && el('button', { class: 'btn small', title: 'The agent is "coming soon" for users who have not been given it. Admins always have it.',
       onclick: () => put({ agent: !u.agent }) }, u.agent ? 'Take agent away' : 'Give agent access'),
+    u.mfa_enabled && el('button', { class: 'btn small', onclick: () => {
+      if (confirm(`Turn off two-step sign-in for ${u.name}? Do this only when you know it is them asking, for example after a lost phone. They are signed out everywhere.`)) put({ mfa_off: true });
+    } }, 'Turn off two-step sign-in'),
     !self && el('button', { class: 'btn small quiet danger', onclick: () => {
       if (u.disabled || confirm(`Disable ${u.name}? They are signed out and can't sign in until you enable them again.`)) put({ disabled: !u.disabled });
     } }, u.disabled ? 'Enable account' : 'Disable account'));
@@ -97,6 +100,7 @@ async function openUser(ctx, id) {
         el('div', {}, el('b', {}, u.name), el('div', { class: 'muted' }, u.email)),
         el('span', { class: 'pill ' + (u.role === 'admin' ? 'running' : 'queued') }, u.role),
         u.role !== 'admin' && u.agent ? el('span', { class: 'pill done' }, 'Agent') : null,
+        u.mfa_enabled ? el('span', { class: 'pill done' }, 'Two-step') : null,
         u.disabled ? el('span', { class: 'pill failed' }, 'Disabled') : null),
       el('div', { class: 'tiles small-tiles' },
         tile('Credits', number(u.credits), `${number(u.spent)} spent`),

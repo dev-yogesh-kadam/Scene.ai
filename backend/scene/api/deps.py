@@ -1,10 +1,10 @@
-"""Shared request helpers: who is signed in."""
+"""Shared request helpers: who is signed in, and how often they may ask."""
 
 import time
 
 from fastapi import Depends, HTTPException, Request
 
-from ..security import token_hash
+from ..security import client_address, token_hash
 
 COOKIE = "scene_session"
 
@@ -42,3 +42,16 @@ def admin_user(user: dict = Depends(current_user)):
     if user["role"] != "admin":
         raise HTTPException(403, "Only an admin can do this.")
     return user
+
+
+def limited(name, limit, seconds, by="user"):
+    """A dependency that refuses a request over `limit` in `seconds`, counted per signed-in user (`by="user"`) or
+    per visitor address (`by="address"`, for the routes used before signing in)."""
+    def check(request: Request):
+        who = client_address(request) if by == "address" else current_user(request)["id"]
+        key = "{}|{}".format(name, who)
+        limits = request.app.state.limits
+        if not limits.allow(key, limit, seconds):
+            raise HTTPException(429, "Too many requests. Wait a little and try again.",
+                                headers={"Retry-After": str(limits.retry_after(key, seconds))})
+    return Depends(check)

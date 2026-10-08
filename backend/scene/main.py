@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import time
 from contextlib import asynccontextmanager
 
@@ -21,7 +22,7 @@ from .credits import Credits
 from .db import Database
 from .jobs import JobManager
 from .outputs import Outputs
-from .security import LoginThrottle
+from .security import LoginThrottle, RateLimit, is_https, same_origin
 
 
 class Hub:
@@ -89,7 +90,8 @@ def create_app(settings=None):
         await comfy.http.aclose()
         await agent.http.aclose()
 
-    app = FastAPI(title="Scene.ai", lifespan=lifespan)
+    # No /docs, /redoc or /openapi.json: a map of every route is of no use to the studio's users, only to an attacker.
+    app = FastAPI(title="Scene.ai", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
     app.state.db = db
     app.state.comfy = comfy
@@ -101,6 +103,7 @@ def create_app(settings=None):
     app.state.live_message = live_message
     app.state.assets_dir = storage / "assets"
     app.state.throttle = LoginThrottle()
+    app.state.limits = RateLimit()
     app.state.started = time.time()
     app.state.storage_dir = storage
     app.state.output_dir = settings.path("output_dir") if settings.output_dir else storage / "outputs"
@@ -131,6 +134,30 @@ def create_app(settings=None):
             response.headers["Cache-Control"] = "no-cache"
         return response
 
+    @app.middleware("http")
+    async def guarded(request, call_next):
+        """Refuse a change sent from another site's page (cross-site request forgery), and send every answer with the
+        headers that tell the browser what the page may do."""
+        if request.url.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS") and not same_origin(request):
+            return JSONResponse({"detail": "This request came from another site and was refused."}, status_code=403)
+        response = await call_next(request)
+        host = re.sub(r"[^\w.:\[\]-]", "", request.headers.get("host", ""))[:255]   # nothing that could end the policy early
+        headers = response.headers
+        # Scripts, styles, pictures, sounds and connections only from this site; nothing may frame the studio.
+        # Styles allow inline, because the page sets sizes and colours in style attributes (charts, progress bars).
+        headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+            "media-src 'self' blob:; font-src 'self'; connect-src 'self' ws://{0} wss://{0}; object-src 'none'; "
+            "base-uri 'self'; form-action 'self'; frame-ancestors 'none'".format(host))
+        headers["X-Content-Type-Options"] = "nosniff"   # a file is only ever read as the type it is served as
+        headers["X-Frame-Options"] = "DENY"
+        headers["Referrer-Policy"] = "same-origin"
+        headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+        if is_https(request):
+            headers["Strict-Transport-Security"] = "max-age=31536000"
+        return response
+
     for module in (auth, studio, library, workspace, assets, admin):
         app.include_router(module.router)
 
@@ -147,7 +174,7 @@ def create_app(settings=None):
         other way round."""
         changed = max((f.stat().st_mtime for f in (frontend / "assets").rglob("*") if f.suffix in (".js", ".css")), default=0)
         html = (frontend / "index.html").read_text(encoding="utf-8")
-        for name in ("/assets/css/app.css", "/assets/js/main.js"):
+        for name in ("/assets/css/app.css", "/assets/js/theme.js", "/assets/js/main.js"):
             html = html.replace(name, "/v/{}{}".format(int(changed), name))
         return HTMLResponse(html)
 
