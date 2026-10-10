@@ -56,6 +56,26 @@ export function still(url, kind, name = '') {
   return el('img', { src: url, alt: name, loading: 'lazy', draggable: 'false' });
 }
 
+// The spill: a made item, far out of focus, lighting the top of a page. show() takes a library item id and kind,
+// or nothing for the studio's own faint light. The picture is loaded first, so the light fades in instead of popping.
+export function spill() {
+  const node = el('div', { class: 'spill wait', 'aria-hidden': 'true' });
+  let shown = null;
+  const show = (id, kind) => {
+    const url = id && kind !== 'audio' ? `/api/library/${id}/${kind === 'video' ? 'poster' : 'file'}` : '';
+    if (url === shown) return;
+    shown = url;
+    node.classList.add('wait');
+    const lit = () => { if (shown !== url) return; node.style.setProperty('--spill-image', url ? `url("${url}")` : ''); node.classList.remove('wait'); };
+    if (!url) return lit();
+    const picture = new Image();
+    picture.onload = lit;
+    picture.onerror = () => { shown = null; show(); };
+    picture.src = url;
+  };
+  return { node, show };
+}
+
 // The running Gate: two brackets circling a frame while it is being made.
 export function runningGate() {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');

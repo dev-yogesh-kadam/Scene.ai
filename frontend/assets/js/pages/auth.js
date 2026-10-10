@@ -86,6 +86,7 @@ export async function renderAuth(root, onSignedIn) {
   const page = (...card) => {
     root.replaceChildren(el('div', { class: 'auth' },
       el('div', { class: 'auth-hero' },
+        el('div', { class: 'auth-frame', 'aria-hidden': 'true' }),
         el('div', { class: 'brand' }, el('img', { src: '/assets/img/logo.svg', alt: '' }), 'Scene.ai'),
         el('div', {},
           el('h2', {}, 'Direct your scene.'),

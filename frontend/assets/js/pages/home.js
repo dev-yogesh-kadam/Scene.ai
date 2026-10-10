@@ -1,7 +1,7 @@
 // The Home page: a bar to start something, the projects worked on lately, and everything made so far.
 
 import { api } from '../api.js';
-import { el, segmented, ago, initials, still } from '../dom.js';
+import { el, segmented, ago, initials, still, spill } from '../dom.js';
 import { store, subscribe } from '../store.js';
 import { openViewer } from '../components/media.js';
 import { composer } from '../components/composer.js';
@@ -21,8 +21,10 @@ export function render(view) {
   const recent = el('section', { class: 'home-section hidden' });
   const filter = el('div');
   const grid = el('div', { class: 'made-grid' });
+  const light = spill();   // the newest picture or video lights the top of the page
 
   view.replaceChildren(
+    light.node,
     el('div', { class: 'home-hero' }, el('h1', {}, 'What are you making today?')),
     el('div', { class: 'home-bar' }, dock.node, queued),
     recent,
@@ -59,6 +61,8 @@ export function render(view) {
     const request = ++asked;
     const items = (await api('/api/library' + (kind ? '?kind=' + kind : ''))).items.slice(0, MADE);
     if (request !== asked) return;
+    const newest = items.find((i) => i.kind !== 'audio');
+    if (!kind) light.show(newest && newest.id, newest && newest.kind);
     grid.classList.toggle('made-grid', items.length > 0);
     grid.replaceChildren(...(items.length ? items.map((item) => {
       const c = item.context || {};
