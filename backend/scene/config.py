@@ -13,6 +13,7 @@ class Settings:
     comfy_url: str = "http://127.0.0.1:8188"
     ollama_url: str = "http://127.0.0.1:11434"  # the language model server the agent uses
     agent_model: str = ""         # the model the agent uses unless the user picks another; empty = the first one there is
+    ollama_models: str = ""       # the local models to offer, comma separated, for example "qwen3.6:35b"; empty = all of them
     # Hosted models beside the local ones. Each service is offered once its key is set. Keep keys in config.json
     # (which git ignores) or in SCENE_API_KEY / SCENE_GEMINI_KEY, never in a file that is committed.
     api_name: str = "Kimi"        # what the first service is called in the model picker

@@ -186,6 +186,21 @@ COLUMNS = [
     ("users", "mfa_enabled", "INTEGER NOT NULL DEFAULT 0"),
     ("users", "mfa_step", "INTEGER NOT NULL DEFAULT 0"),
     ("users", "mfa_recovery", "TEXT NOT NULL DEFAULT '[]'"),
+    # The most credits a user may spend in 24 hours: NULL follows the studio's limit, 0 means no limit for them.
+    ("users", "daily_cap", "INTEGER"),
+    # A job an admin moved to the front of the queue is taken before older ones: higher first, then oldest first.
+    ("jobs", "priority", "INTEGER NOT NULL DEFAULT 0"),
+    # The asset book of the agent: what a saved asset or a library item shows, written by the agent's model looking at
+    # it, and the user's own note on when and how to use a saved asset.
+    ("assets", "about", "TEXT NOT NULL DEFAULT ''"),
+    ("assets", "use_note", "TEXT NOT NULL DEFAULT ''"),
+    ("generations", "about", "TEXT NOT NULL DEFAULT ''"),
+    # Shared memory: a reference file dropped into a job is kept as an asset of the project it was used in
+    # (origin "upload"), beside the ones saved on purpose (origin "saved", which belong to no one project).
+    ("assets", "origin", "TEXT NOT NULL DEFAULT 'saved'"),
+    ("assets", "project_id", "INTEGER"),
+    # Review: the agent's verdict on a library item it looked at after it was made (JSON, see review.py).
+    ("generations", "review", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 # The studio's two machines, added to an installation that has no servers yet. Every value can be changed in the

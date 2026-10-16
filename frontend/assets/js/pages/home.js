@@ -67,7 +67,7 @@ export function render(view) {
     grid.replaceChildren(...(items.length ? items.map((item) => {
       const c = item.context || {};
       return el('button', { class: 'made', title: item.name, style: c.width ? `aspect-ratio:${c.width}/${c.height}` : '',
-        onclick: () => openViewer(item, { actions: item.workflow.startsWith('edit/') ? []
+        onclick: () => openViewer(item, { actions: /^(edit|upload)\//.test(item.workflow) ? []
           : [{ label: 'Re-run', run: (dialog) => { dialog.close(); store.rerun = item; location.hash = '#/create'; } }] }) },
         cover(item.id, item.kind, item.name), el('span', {}, item.name));
     }) : [el('div', { class: 'empty' }, kind ? 'Nothing of this kind yet.' : 'Nothing made yet. Describe a shot in the bar above and it will appear here.')]));

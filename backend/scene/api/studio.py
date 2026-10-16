@@ -1,6 +1,8 @@
 """Creating: workflows, estimates, jobs and the live event stream."""
 
 import json
+import re
+import time
 import uuid
 from pathlib import Path
 
@@ -9,7 +11,7 @@ from fastapi.responses import StreamingResponse
 
 import httpx
 
-from .. import media
+from .. import media, memory
 from ..catalog import KINDS
 from ..comfy import workflows
 from ..agent import AgentError
@@ -18,6 +20,17 @@ from ..security import same_origin
 from .deps import COOKIE, current_user, limited, user_for_token
 
 router = APIRouter(prefix="/api", tags=["studio"])
+PAGE = re.compile(r"^#/[a-z]{1,20}$")   # a page of the studio, as the browser names it: "#/canvas"
+
+
+def current_announcement(db):
+    try:
+        found = json.loads(db.setting("announcement", "{}") or "{}")
+    except ValueError:
+        return {}
+    if not found.get("text") or (found.get("until") and found["until"] < time.time()):
+        return {}
+    return {"text": found["text"], "level": found.get("level", "info"), "until": found.get("until")}
 
 
 async def billed_seconds(state, wf, schema, settings, user_id=None):
@@ -67,12 +80,20 @@ def switched_on(state, workflow_id):
 
 @router.get("/status")
 async def status(request: Request, user: dict = Depends(current_user)):
-    comfy = request.app.state.comfy
+    state = request.app.state
     try:
-        stats = await comfy.stats()
+        stats = await state.comfy.stats()
+        state.saw_server(True)
         return {"online": True, "version": stats.get("system", {}).get("comfyui_version")}
     except (httpx.HTTPError, ValueError):
+        state.saw_server(False)
         return {"online": False}
+
+
+@router.get("/announcement")
+async def announcement(request: Request, user: dict = Depends(current_user)):
+    """The message an admin wants every user to see, while it lasts. Empty when there is none."""
+    return current_announcement(request.app.state.db)
 
 
 @router.get("/workflows")
@@ -196,6 +217,7 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
                 raise HTTPException(400, "A reference file used here is not one of yours. Add it again.")
             refs[slot] = {"comfy_name": str(ref["comfy_name"]), "name": str(ref.get("name", ""))[:200]}
     kinds = {r["id"]: r["kind"] for r in schema["refs"]}
+    labels = {r["id"]: r["label"] for r in schema["refs"]}
     for key, upload in form.multi_items():
         if not key.startswith("ref:") or key[4:] not in slots or not hasattr(upload, "filename"):
             continue
@@ -206,6 +228,12 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
         await measure(key[4:], data, upload.filename)
         name = await upload_reference(state.comfy, upload.filename, data, upload.content_type, db=state.db, user_id=user["id"])
         refs[key[4:]] = {"comfy_name": name, "name": upload.filename[:200]}
+        # Shared memory keeps every file dropped into a job, as an upload of this project, so it can be used again by name.
+        try:
+            memory.keep_upload(state.db, state.assets_dir / str(user["id"]), user["id"], project_id, upload.filename,
+                               data, given or wanted or "image", labels.get(key[4:], ""))
+        except OSError:
+            pass   # the job does not depend on the copy
     settings["refs"] = refs
 
     _, ctx = workflows.build_prompt(wf, dict(settings, clips=1))  # fails here, not in the queue, if a setting is wrong
@@ -220,6 +248,9 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     settings["workflow_title"] = schema["title"]
     quote = await price(state, wf, settings, user["id"])
     name = str(settings.get("name") or wf["id"].split("/", 1)[1]).strip()[:80]
+    over = state.credits.cap_problem(user["id"], quote["credits"])
+    if over:
+        raise HTTPException(429, over)
     if not state.credits.charge(user["id"], quote["credits"], "generation"):
         raise HTTPException(402, "This needs {} credits and you have {}. Ask an admin for more.".format(
             quote["credits"], state.credits.balance(user["id"])))
@@ -262,11 +293,17 @@ async def events(ws: WebSocket):
         await ws.close(code=4401)
         return
     await ws.accept()
-    state.hub.add(user["id"], ws)
+    state.hub.add(user["id"], ws, admin=user["role"] == "admin")
     try:
         await ws.send_text(state.live_message(user["id"]))
         while True:
-            await ws.receive_text()
+            # The page tells which part of the studio it shows, for the admin's list of who is online.
+            try:
+                page = str(json.loads(await ws.receive_text()).get("page", ""))
+            except (ValueError, AttributeError):
+                continue
+            if PAGE.match(page):
+                state.hub.set_page(ws, page)
     except WebSocketDisconnect:
         pass
     finally:

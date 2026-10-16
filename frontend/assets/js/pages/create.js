@@ -38,8 +38,13 @@ export function render(view) {
   const queue = el('div');
   const recent = el('div', { class: 'media-grid compact' });
 
+  // Opened from the canvas (All settings, Re-run): a way back to it, like the Timeline's.
+  const from = store.from;
+  store.from = null;
   view.replaceChildren(
-    el('div', { class: 'page-head' }, el('h1', {}, 'Create'), tabs),
+    el('div', { class: 'page-head' },
+      from === '#/canvas' && el('a', { class: 'btn', href: '#/canvas', title: 'Back to the canvas of this project' }, '← Canvas'),
+      el('h1', {}, 'Create'), tabs),
     el('div', { class: 'create' },
       el('div', { class: 'card create-form' },
         el('div', { class: 'card-head' }, el('h2', {}, 'Workflow'), picker,

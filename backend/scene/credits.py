@@ -70,6 +70,33 @@ class Credits:
         seconds = ASSUMED_SECONDS if seconds is None else seconds
         return math.ceil(round((base + per_second * seconds) * multiplier, 6))
 
+    @property
+    def daily_cap(self):
+        """The most credits one user may spend in 24 hours, unless an admin set their own. 0 means no limit."""
+        return int(float(self.db.setting("daily_cap", 0)))
+
+    def cap_for(self, user):
+        own = user.get("daily_cap")
+        return self.daily_cap if own is None else own
+
+    def spent_today(self, user_id):
+        """Credits spent in the last 24 hours: charges, less what was refunded."""
+        row = self.db.one("SELECT SUM(amount) n FROM credit_events WHERE user_id = ? AND reason IN ('generation', 'refund') "
+                          "AND created > ?", (user_id, time.time() - 86400))
+        return max(0, -(row["n"] or 0))
+
+    def cap_problem(self, user_id, amount):
+        """Why a charge of `amount` would go over the user's daily limit, or None. Admins have no limit."""
+        user = self.db.one("SELECT role, daily_cap FROM users WHERE id = ?", (user_id,))
+        if not user or user["role"] == "admin" or amount <= 0:
+            return None
+        cap = self.cap_for(user)
+        spent = self.spent_today(user_id)
+        if cap and spent + amount > cap:
+            return ("This needs {} credits. Your account can spend {} in 24 hours and has spent {} already. "
+                    "Try again later, or ask an admin.".format(amount, cap, spent))
+        return None
+
     def balance(self, user_id):
         row = self.db.one("SELECT credits FROM users WHERE id = ?", (user_id,))
         return row["credits"] if row else 0

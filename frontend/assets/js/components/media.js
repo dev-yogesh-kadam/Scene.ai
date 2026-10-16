@@ -54,7 +54,10 @@ export function openViewer(item, { base = '/api/library', owner = false, actions
     setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
   } }, 'Copy');
   const download = el('a', { class: 'btn primary', href: url + '?download=true', download: item.filename, title: 'Download (D)' }, 'Download');
+  // Cinema: the studio goes dark and the picture's own colours glow around it, like light off a screen.
+  const glow = item.kind === 'audio' ? '' : item.kind === 'video' ? `${base}/${item.id}/poster` : url;
   const dialog = el('dialog', { class: 'viewer' },
+    glow && el('div', { class: 'viewer-glow', 'aria-hidden': 'true', style: `--spill-image:url("${glow}")` }),
     el('div', { class: 'viewer-grid' },
       el('div', { class: 'viewer-media' }, media),
       el('aside', { class: 'viewer-panel' },
@@ -72,7 +75,8 @@ export function openViewer(item, { base = '/api/library', owner = false, actions
     e.preventDefault();
     download.click();
   });
-  dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+  // A click in the dark around the picture closes it, as a click outside a smaller dialog would.
+  dialog.addEventListener('click', (e) => { if (e.target === dialog || e.target.classList.contains('viewer-media')) dialog.close(); });
   document.body.append(dialog);
   dialog.showModal();
   return dialog;
@@ -106,7 +110,7 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
       onChanged();
     } catch (err) { alert(err.message); }
   };
-  const edited = item.workflow.startsWith('edit/');   // a timeline export: there is no form to re-run
+  const edited = /^(edit|upload)\//.test(item.workflow);   // a timeline export or an upload: there is no form to re-run
   const view = () => openViewer(item, { actions: [
     !edited && { label: 'Re-run', run: (dialog) => { dialog.close(); rerun(); } },
     !sound && { label: next, run: async (dialog) => { if (await useAsFirstFrame(item)) dialog.close(); } },

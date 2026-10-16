@@ -3,7 +3,7 @@
 
 import { api } from '../api.js';
 import { el, icon, segmented } from '../dom.js';
-import { subscribe, refreshJobs } from '../store.js';
+import { store, subscribe, refreshJobs } from '../store.js';
 import { pickAsset } from './assets.js';
 import { motionForm, sequenceForm } from './motion.js';
 
@@ -264,7 +264,7 @@ promptField, texts, note),
     for (const o of wf.options.filter((x) => !x.top)) {
       set.push(pill(o.label, o.choices.map((c) => ({ id: c.id, label: `${o.label}: ${c.label}` })), form.options[o.id], (id) => { form.options[o.id] = id; }));
     }
-    if (form.kind !== 'upscaler') set.push(el('a', { class: 'opt', href: '#/create', title: 'Open the full form on the Create page' }, 'All settings'));
+    if (form.kind !== 'upscaler') set.push(el('a', { class: 'opt', href: '#/create', title: 'Open the full form on the Create page', onclick: () => { store.from = '#/canvas'; } }, 'All settings'));
     pills.replaceChildren(...set);
     refreshEstimate();
   }

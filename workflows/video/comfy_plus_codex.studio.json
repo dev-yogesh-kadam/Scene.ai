@@ -1,0 +1,15 @@
+{
+  "title": "H3 Text to Video",
+  "description": "A video with its sound from a prompt alone, in 10 steps. No references.",
+  "output_name": "15.filename_prefix",
+  "labels": {
+    "5:prompt": "Describe the shot: what happens, the camera and the sound.",
+    "7:noise_seed": "Seed",
+    "10:steps": "Steps"
+  },
+  "defaults": {"5:prompt": ""},
+  "hints": [
+    "Say what happens, how the camera moves and what is heard.",
+    "5-6 s clips, one action each, give the best results."
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "title": "H3 Reference to Video, 4-step",
+  "description": "A fast draft from one reference image: 4 steps with the turbo LoRA. Good for trying out a prompt before a full render.",
+  "output_name": "16.filename_prefix",
+  "labels": {
+    "50:image": "Reference image (<Picture 1> in the prompt)",
+    "6:prompt": "Say what happens. Refer to your image as <Picture 1>.",
+    "8:noise_seed": "Seed",
+    "10:steps": "Steps (4 with the turbo LoRA)"
+  },
+  "defaults": {"6:prompt": ""},
+  "required_refs": ["50:image"],
+  "controls": [
+    {"node": "6", "input": "length", "type": "int", "choices": [124, 243, 362], "primary": true,
+     "label": "Length in frames at 24 fps (124 = 5 s, 243 = 10 s, 362 = 15 s)"}
+  ],
+  "hints": [
+    "A draft: expect softer detail than MiniMax H3 at medium quality.",
+    "Refer to your image in the prompt as <Picture 1>.",
+    "Use a reference image of at least 1024 px with no watermark or text on it."
+  ]
+}

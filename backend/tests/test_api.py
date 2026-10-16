@@ -350,7 +350,6 @@ def test_video_thumbnails_are_small_posters_the_browser_keeps(client):
 
 def test_agent_plans_are_checked_and_priced_and_nothing_is_queued(client, monkeypatch):
     register(client)
-    client.put("/api/boards/brief", json={"data": {"text": "Warm evening light. The main character wears a red coat."}})
     asked = {}
 
     async def fake_ask(system, message, workflow_ids, history=()):
@@ -365,7 +364,7 @@ def test_agent_plans_are_checked_and_priced_and_nothing_is_queued(client, monkey
     earlier = [{"instruction": "hi", "reply": "Hello. What are we making?", "steps": []}, "junk", {"instruction": "", "reply": "x"}]
     plan = client.post("/api/agent/plan", json={"instruction": "Make a street shot", "history": earlier}).json()
     assert "oldest first:\nUser: hi\nYou: Hello. What are we making?\n\n" in asked["message"]      # junk and empty turns are left out
-    assert "red coat" in asked["message"] and "video/h3_master" in asked["ids"]
+    assert "Project brief" not in asked["message"] and "video/h3_master" in asked["ids"]
     assert [s["name"] for s in plan["steps"]] == ["Street walk"]      # the unknown workflow and the empty prompt are dropped
     step = plan["steps"][0]
     assert step["credits"] > 0 and plan["total"] == step["credits"] and plan["balance"] == 500
@@ -485,9 +484,8 @@ def test_agent_puts_attached_items_into_the_slots_named_for_them(client, monkeyp
     assert refused.status_code in (400, 404)
 
 
-def test_agent_improves_a_prompt_with_the_brief_and_charges_nothing(client, monkeypatch):
+def test_agent_improves_a_prompt_in_the_prompt_structure_and_charges_nothing(client, monkeypatch):
     register(client)
-    client.put("/api/boards/brief", json={"data": {"text": "Warm evening light."}})
     asked = {}
 
     async def fake_chat(messages, answer_format):
@@ -498,7 +496,7 @@ def test_agent_improves_a_prompt_with_the_brief_and_charges_nothing(client, monk
     assert client.post("/api/agent/improve", json={"prompt": " "}).status_code == 400
     better = client.post("/api/agent/improve", json={"prompt": "a fox", "kind": "image"}).json()
     assert better == {"prompt": "A fox sits on a mossy rock in warm evening light."}
-    assert "image model" in asked["system"] and "Warm evening light." in asked["message"] and "a fox" in asked["message"]
+    assert "image model" in asked["system"] and "SCENE CONTEXT:" in asked["system"] and "a fox" in asked["message"]
     assert client.get("/api/auth/me").json()["credits"] == 500
 
 
@@ -589,7 +587,8 @@ def test_the_agent_uses_the_model_the_user_picked_when_the_server_has_it(client,
     monkeypatch.setattr(brain, "models", fake_models)
     monkeypatch.setattr(brain, "ask", fake_ask)
     monkeypatch.setattr(brain, "model", "small:9b")
-    assert client.get("/api/agent/status").json() == {"online": True, "model": "small:9b", "models": ["small:9b", "large:27b"], "hosted": []}
+    found = client.get("/api/agent/status").json()
+    assert found == {"online": True, "model": "small:9b", "models": ["small:9b", "large:27b"], "hosted": []}
     for picked in ("large:27b", "not-installed", "", None):
         client.post("/api/agent/plan", json={"instruction": "hi", "model": picked})
     assert used == ["large:27b", "small:9b", "small:9b", "small:9b"]
@@ -823,7 +822,6 @@ def test_agent_plans_a_motion_graphics_video_as_scenes_of_words(client, monkeypa
 
 def test_a_whole_motion_video_is_written_as_scenes_from_what_it_is_about(client, monkeypatch):
     register(client)
-    client.put("/api/boards/brief", json={"data": {"text": "Friendly and plain."}})
     asked = {}
 
     async def fake_chat(messages, answer_format):
@@ -840,7 +838,7 @@ def test_a_whole_motion_video_is_written_as_scenes_from_what_it_is_about(client,
     written = client.post("/api/motion/scenes", json={"about": "an intro to Scene.ai"}).json()
     assert (written["name"], written["look"], written["shape"]) == ("Scene.ai intro", "dark", "portrait")
     assert [(s["kind"], s["items"]) for s in written["scenes"]] == [("title", []), ("list", ["Images", "Video"])]
-    assert "Friendly and plain." in asked["message"] and "an intro to Scene.ai" in asked["message"]
+    assert "an intro to Scene.ai" in asked["message"]
 
     async def nothing(messages, answer_format):
         return {"name": "", "look": "dark", "orientation": "landscape", "scenes": []}
@@ -1088,15 +1086,34 @@ def test_the_database_is_backed_up_at_every_start_and_old_copies_are_dropped(cli
     assert backup.attempt(db, folder) is None and made.read_bytes() == kept
 
 
-def test_work_made_with_a_replaced_workflow_goes_to_the_one_that_replaced_it(client, monkeypatch):
-    import json
+def test_every_workflow_is_listed_in_the_section_of_its_kind(client):
     register(client)
-    catalog, state = client.get("/api/workflows").json(), client.app.state
-    listed = {w["id"]: w for w in catalog["workflows"]}
-    assert [w for w in listed if w.startswith("video/")] == ["video/h3_master"] and "video/h3_director" in listed["video/h3_master"]["replaces"]
+    listed = {w["id"]: w for w in client.get("/api/workflows").json()["workflows"]}
+    assert not [w for w in listed.values() if w["kind"] == "video" and w.get("error")]   # the fixture has the video nodes only
+    assert {w for w in listed if w.startswith("video/")} == {
+        "video/h3_master", "video/h3_director", "video/video_minimax_h3_i2v", "video/video_minimax_h3_r2v", "video/ai_influencer",
+        "video/MiniMax_H3_AI_Influencer", "video/MiniMax_H3_AI_Influencer_v2", "video/ref2va_vsa_4step_rtx4090_v2", "video/comfy_plus_codex"}
+    assert {w["kind"] for w in listed.values()} == {"video", "image", "audio", "upscaler"}
+    assert client.get("/api/workflows/video/h3_director").json()["id"] == "video/h3_director"
+
+
+def test_work_made_with_a_replaced_workflow_goes_to_the_one_that_replaced_it(client, monkeypatch, tmp_path):
+    import json
+    import shutil
+    from conftest import ROOT
+    register(client)
+    state = client.app.state
+    # A workflow folder where h3_master has taken the place of h3_director, whose file has gone.
+    (tmp_path / "flows" / "video").mkdir(parents=True)
+    shutil.copy(ROOT / "workflows" / "video" / "h3_master.json", tmp_path / "flows" / "video")
+    profile = json.loads((ROOT / "workflows" / "video" / "h3_master.studio.json").read_text(encoding="utf-8"))
+    (tmp_path / "flows" / "video" / "h3_master.studio.json").write_text(json.dumps(dict(profile, replaces=["video/h3_director"])), encoding="utf-8")
+    monkeypatch.setattr(state.catalog, "directory", tmp_path / "flows")
+    listed = {w["id"]: w for w in client.get("/api/workflows").json()["workflows"]}
+    assert list(listed) == ["video/h3_master"] and listed["video/h3_master"]["replaces"] == ["video/h3_director"]
     # an old id (a saved default, a re-run, a job still waiting) is served by the workflow that took its place
-    assert client.get("/api/workflows/video/video_minimax_h3_i2v").json()["id"] == "video/h3_master"
-    monkeypatch.setattr(state.settings, "default_workflow", "video/video_minimax_h3_i2v")
+    assert client.get("/api/workflows/video/h3_director").json()["id"] == "video/h3_master"
+    monkeypatch.setattr(state.settings, "default_workflow", "video/h3_director")
     assert client.get("/api/workflows").json()["default"] == "video/h3_master"
     job = client.post("/api/jobs", data={"settings": json.dumps({"workflow": "video/h3_director", "values": {"100:value": "She waves."}})}).json()["id"]
     row = state.db.one("SELECT workflow, settings FROM jobs WHERE id = ?", (job,))
@@ -1124,3 +1141,75 @@ def test_a_file_for_a_slot_the_mode_does_not_read_is_not_sent(client, monkeypatc
         return sorted(refs), len(sent)
     assert queued("reference") == (["201:image", "209:image"], 2)
     assert queued("first_frame") == (["209:image"], 1)
+
+
+def test_a_step_can_be_changed_on_its_approval_card(client, monkeypatch):
+    register(client)
+    asked = {}
+
+    async def fake_ask(system, message, workflow_ids, history=()):
+        asked.update(message=message)
+        return {"reply": "One shot.", "steps": [{"tool": "generate", "workflow": "video/h3_master", "name": "Street walk",
+                                                 "prompt": "She walks down a wet street.", "duration": 6, "resolution": 480, "orientation": "portrait"}]}
+
+    monkeypatch.setattr(client.app.state.agent, "ask", fake_ask)
+    # every prompt follows the studio's one prompt structure; there is no brief and no other style to choose
+    step = client.post("/api/agent/plan", json={"instruction": "Make a street shot"}).json()["steps"][0]
+    assert "Prompt structure." in asked["message"] and "SCENE CONTEXT:" in asked["message"]
+    assert client.put("/api/boards/style", json={"project": None, "data": {"text": "WHO: a fox."}}).status_code == 404
+    assert client.put("/api/boards/brief", json={"data": {"text": "Warm light."}}).status_code == 404
+
+    assert step["current"] == {"orientation": "portrait", "resolution": 480, "duration": 6}
+    assert step["menu"]["durations"][0] == 4 and 720 in step["menu"]["resolutions"] and step["menu"]["shapes"]
+    assert {"video/h3_master", "video/h3_director"} <= {w["id"] for w in step["menu"]["workflows"]}
+    assert all(w["kind"] == "video" for w in step["menu"]["workflows"])
+    quality = step["settings"]["options"]["quality"]
+
+    changed = client.post("/api/agent/step", json={"step": step, "change": {"duration": 10, "orientation": "landscape", "resolution": 720}}).json()
+    assert changed["current"] == {"orientation": "landscape", "resolution": 720, "duration": 10}
+    assert changed["settings"]["options"]["quality"] == quality and changed["prompt"] == "She walks down a wet street."
+    assert changed["credits"] >= step["credits"]
+    edited = client.post("/api/agent/step", json={"step": changed, "change": {"prompt": "He runs up a dry street."}}).json()
+    assert edited["prompt"] == "He runs up a dry street." and edited["current"]["duration"] == 10
+    other = client.post("/api/agent/step", json={"step": edited, "change": {"workflow": "video/comfy_plus_codex"}}).json()
+    assert other["settings"]["workflow"] == "video/comfy_plus_codex" and other["prompt"] == "He runs up a dry street."
+    # what can't be: another kind of workflow, an empty prompt, a workflow that needs files the step doesn't have
+    assert client.post("/api/agent/step", json={"step": step, "change": {"workflow": "image/image_sdxl_simple"}}).status_code == 400
+    assert client.post("/api/agent/step", json={"step": step, "change": {"prompt": "  "}}).status_code == 400
+    assert client.post("/api/agent/step", json={"step": step, "change": {"workflow": "video/video_minimax_h3_r2v"}}).status_code == 400
+    assert client.get("/api/jobs").json()["jobs"] == []   # nothing is queued or charged
+
+
+def test_a_file_uploaded_on_the_canvas_joins_the_library_and_its_project(client):
+    register(client)
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+    project = client.post("/api/projects", json={"name": "Ad"}).json()["id"]
+    made = client.post("/api/library/upload", data={"project_id": str(project)}, files={"file": ("dog in park.png", png, "image/png")})
+    assert made.status_code == 200, made.text
+    item = made.json()
+    assert item["kind"] == "image" and item["name"] == "dog in park" and item["project_id"] == project and item["workflow"] == "upload/file"
+    listed = client.get("/api/library?project=%d" % project).json()["items"]
+    assert [i["id"] for i in listed] == [item["id"]] and client.get("/api/library/%d/file" % item["id"]).content == png
+    # what is not the image, video or sound it says it is, and a project of someone else's, are refused
+    assert client.post("/api/library/upload", files={"file": ("page.png", b"<html>", "image/png")}).status_code == 400
+    assert client.post("/api/library/upload", files={"file": ("notes.txt", b"hello", "text/plain")}).status_code == 400
+    assert client.post("/api/library/upload", data={"project_id": "999"}, files={"file": ("a.png", png, "image/png")}).status_code == 404
+    loose = client.post("/api/library/upload", files={"file": ("a.png", png, "image/png")}).json()
+    assert loose["project_id"] is None and client.get("/api/auth/me").json()["credits"] == 500   # nothing is charged
+
+
+def test_each_agent_tab_keeps_its_own_conversation(client):
+    register(client)
+    project = client.post("/api/projects", json={"name": "Ad"}).json()["id"]
+    index = {"tabs": [{"id": "abc1", "name": "Agent 1"}, {"id": "abc2", "name": "Hero shots"}], "open": ["abc1", "abc2"], "active": "abc2"}
+    assert client.put("/api/boards/agent", json={"project": project, "data": index}).status_code == 200
+    for tab, said in (("abc1", "a fox"), ("abc2", "a perfume bottle")):
+        client.put("/api/boards/agent-" + tab, json={"project": project, "data": {"runs": [{"instruction": said}]}})
+    assert client.get("/api/boards/agent-abc2?project=%d" % project).json()["data"]["runs"][0]["instruction"] == "a perfume bottle"
+    assert client.get("/api/boards/agent?project=%d" % project).json()["data"]["tabs"][1]["name"] == "Hero shots"
+    # a deleted conversation is gone; the other one and the other boards stay, and only agent tabs can be deleted this way
+    assert client.delete("/api/boards/agent-abc1?project=%d" % project).status_code == 200
+    assert client.get("/api/boards/agent-abc1?project=%d" % project).json()["data"] == {}
+    assert client.get("/api/boards/agent-abc2?project=%d" % project).json()["data"]["runs"]
+    assert client.delete("/api/boards/canvas?project=%d" % project).status_code == 404
+    assert client.get("/api/boards/agent-NOT_OK").status_code == 404 and client.get("/api/boards/agent-" + "x" * 40).status_code == 404

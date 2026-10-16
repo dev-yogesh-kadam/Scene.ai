@@ -26,22 +26,57 @@ from .security import LoginThrottle, RateLimit, is_https, same_origin
 
 
 class Hub:
-    """The open browser connections of each user, for live queue updates."""
+    """The open browser connections of each user, for live queue updates, and the page each one has open."""
 
     def __init__(self):
         self.sockets = {}
+        self.pages = {}   # connection -> {"page": "#/canvas", "since": when it connected}
+        self.admins = set()   # the connections of admins, who are told the number of people online as it changes
 
-    def add(self, user_id, ws):
+    def add(self, user_id, ws, admin=False):
+        arrived = user_id not in self.sockets
         self.sockets.setdefault(user_id, set()).add(ws)
+        self.pages[ws] = {"page": "", "since": time.time()}
+        if admin:
+            self.admins.add(ws)
+        if arrived:
+            self.tell_admins()
+        elif admin:   # an admin's new tab is told the number at once
+            asyncio.ensure_future(self._send(user_id, ws, self.headcount()))
 
     def discard(self, user_id, ws):
         self.sockets.get(user_id, set()).discard(ws)
-        if not self.sockets.get(user_id):
+        self.pages.pop(ws, None)
+        self.admins.discard(ws)
+        if user_id in self.sockets and not self.sockets[user_id]:
             self.sockets.pop(user_id, None)   # nobody with no connection left counts as online
+            self.tell_admins()
+
+    def headcount(self):
+        return json.dumps({"online_users": self.online()})
+
+    def tell_admins(self):
+        message = self.headcount()
+        for user_id, sockets in list(self.sockets.items()):
+            for ws in sockets & self.admins:
+                asyncio.ensure_future(self._send(user_id, ws, message))
+
+    def set_page(self, ws, page):
+        if ws in self.pages:
+            self.pages[ws]["page"] = page
 
     def online(self):
         """How many users have the app open: someone with three tabs is one user."""
         return len(self.sockets)
+
+    def people(self):
+        """Who has the app open: user id -> the pages of their open tabs and when the first one opened."""
+        found = {}
+        for user_id, sockets in self.sockets.items():
+            tabs = [self.pages[ws] for ws in sockets if ws in self.pages]
+            found[user_id] = {"pages": sorted({t["page"] for t in tabs if t["page"]}),
+                              "since": min((t["since"] for t in tabs), default=time.time()), "tabs": len(tabs)}
+        return found
 
     def send(self, user_id, message):
         for ws in list(self.sockets.get(user_id, ())):
@@ -61,7 +96,7 @@ def create_app(settings=None):
     comfy = Comfy(lambda: db.setting("comfy_url", settings.comfy_url))
     catalog = Catalog(settings.path("workflows_dir"), comfy, storage / "cache" / "node_definitions.json")
     credits = Credits(db, settings)
-    agent = Agent(settings.ollama_url, settings.agent_model, [
+    agent = Agent(settings.ollama_url, settings.agent_model, local=settings.ollama_models, services=[
         service(settings.api_name.strip().lower().replace(" ", "-") or "api", settings.api_name, settings.api_url, settings.api_key, settings.api_models),
         service("gemini", "Gemini", settings.gemini_url, settings.gemini_key, settings.gemini_models,
                 only=r"^gemini-[\d.]+-(pro|flash)(-lite)?(-preview)?$"),
@@ -110,6 +145,14 @@ def create_app(settings=None):
     app.state.output_dir = settings.path("output_dir") if settings.output_dir else storage / "outputs"
     app.state.outputs = Outputs(app.state.output_dir, db)
     app.state.backup_dir = settings.path("backup_dir") if settings.backup_dir else storage / "backups"
+    # Whether the render server answered the last time anyone asked, and since when that has been so.
+    app.state.server_seen = {"online": None, "since": time.time()}
+
+    def saw_server(online):
+        seen = app.state.server_seen
+        if seen["online"] is not online:
+            seen.update(online=online, since=time.time())
+    app.state.saw_server = saw_server
 
     @app.exception_handler(workflows.WorkflowError)
     @app.exception_handler(media.MediaError)

@@ -14,7 +14,7 @@ def user_for_token(db, token):
     if not token:
         return None
     user = db.one(
-        "SELECT u.id, u.email, u.name, u.role, u.credits, u.created, u.agent FROM sessions s JOIN users u ON u.id = s.user_id "
+        "SELECT u.id, u.email, u.name, u.role, u.credits, u.created, u.agent, u.mfa_enabled FROM sessions s JOIN users u ON u.id = s.user_id "
         "WHERE s.token_hash = ? AND s.expires > ? AND u.disabled = 0", (token_hash(token), time.time()))
     if user:
         user["agent"] = may_use_agent(user)
@@ -42,10 +42,14 @@ async def agent_user(user: dict = Depends(current_user)):
     return user
 
 
-async def admin_user(user: dict = Depends(current_user)):
+async def admin_user(request: Request, user: dict = Depends(current_user)):
     """An admin, whose requests see every user's rows: the admin console is about all of them."""
     if user["role"] != "admin":
         raise HTTPException(403, "Only an admin can do this.")
+    # When the studio asks it of admins, an admin without two-step sign-in can't use the console until they turn it on.
+    if not user["mfa_enabled"] and request.app.state.db.setting("admin_mfa", "0") == "1":
+        raise HTTPException(403, "This studio asks admins to use two-step sign-in. Turn it on in Settings, "
+                                 "then open the admin console again.")
     act_for_everyone()
     return user
 

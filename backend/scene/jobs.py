@@ -58,7 +58,7 @@ class JobManager:
         # A job waits only behind the jobs of its own lane: renders behind renders, edits behind edits.
         waiting, busy = {True: [], False: []}, {True: 0, False: 0}
         with as_everyone():   # where the user's jobs stand in the queue depends on everyone's
-            queue = self.db.all("SELECT id, workflow, status FROM jobs WHERE status IN ('queued', 'running') ORDER BY created")
+            queue = self.db.all("SELECT id, workflow, status FROM jobs WHERE status IN ('queued', 'running') ORDER BY priority DESC, created")
         for r in queue:
             if r["status"] == "running":
                 busy[edits.is_edit(r["workflow"])] = 1
@@ -112,7 +112,15 @@ class JobManager:
         so never wait behind a render."""
         mine = "workflow LIKE 'edit/%'" if local else "workflow NOT LIKE 'edit/%'"
         while True:
-            job = self.db.one("SELECT * FROM jobs WHERE status = 'queued' AND {} ORDER BY created LIMIT 1".format(mine))
+            # An admin can pause the renders (while the render server is being restarted, say). Edits keep running.
+            if not local and self.paused():
+                self.wake.clear()
+                try:
+                    await asyncio.wait_for(self.wake.wait(), 5)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+            job = self.db.one("SELECT * FROM jobs WHERE status = 'queued' AND {} ORDER BY priority DESC, created LIMIT 1".format(mine))
             if job is None:
                 self.wake.clear()
                 await self.wake.wait()
@@ -145,6 +153,21 @@ class JobManager:
                 self._refund(job)
             self.notify(job["user_id"], library_changed=status == "done")
             self._notify_all_waiting(None)
+
+    def paused(self):
+        return self.db.setting("queue_paused", "0") == "1"
+
+    def pause(self, paused):
+        self.db.set_setting("queue_paused", "1" if paused else "0")
+        self.wake.set()
+        self._notify_all_waiting(None)
+
+    def to_front(self, job_id):
+        """Put a waiting job ahead of every other waiting job."""
+        with as_everyone():
+            top = self.db.one("SELECT MAX(priority) n FROM jobs WHERE status = 'queued'")["n"] or 0
+            self.db.run("UPDATE jobs SET priority = ? WHERE id = ? AND status = 'queued'", (top + 1, job_id))
+        self._notify_all_waiting(None)
 
     def _refund(self, job):
         """Give back what was held for a job that did not finish."""

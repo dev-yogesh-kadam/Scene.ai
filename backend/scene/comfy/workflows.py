@@ -562,7 +562,8 @@ def build_prompt(wf, settings):
     enabled, disabled = set(), set()
     given = settings.get("refs") or {}
     for r in schema["refs"]:
-        ref = given.get(r["id"]) if _matches(r.get("when") or {}, ctx) else None
+        in_use = _matches(r.get("when") or {}, ctx)
+        ref = given.get(r["id"]) if in_use else None
         if r.get("connect"):
             if ref:
                 loader, loader_input = EXTRA_LOADERS[r["kind"]]
@@ -572,9 +573,9 @@ def build_prompt(wf, settings):
         elif ref:
             nodes[r["node"]]["inputs"][r["input"]] = ref["comfy_name"]
             enabled.add(r["node"])
-        elif r.get("required"):
+        elif r.get("required") and in_use:
             raise WorkflowError("Add a file for \"{}\".".format(r["label"]))
-        elif r.get("drop"):
+        elif r.get("drop") or r.get("required"):   # a required slot of another mode is left out, like an empty optional one
             disabled.add(r["node"])
         elif r["empty"] is not None:
             nodes[r["node"]]["inputs"][r["input"]] = r["empty"]

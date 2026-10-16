@@ -23,7 +23,7 @@ def test_ui_workflow_converts_to_the_api_export():
 
 
 def test_h3_director_controls_and_reference_slots():
-    schema = workflows.describe(workflows.load_workflow(ARCHIVE / "h3_director.json"))
+    schema = workflows.describe(workflows.load_workflow(VIDEO / "h3_director.json"))
     roles = {c["role"] for c in schema["controls"]}
     assert {"prompt", "duration", "width", "height", "seed"} <= roles
     assert len(schema["refs"]) == 11 and all(r["optional"] for r in schema["refs"])
@@ -31,7 +31,7 @@ def test_h3_director_controls_and_reference_slots():
 
 
 def build(mode, quality, **extra):
-    wf = workflows.load_workflow(ARCHIVE / "h3_director.json")
+    wf = workflows.load_workflow(VIDEO / "h3_director.json")
     settings = {"values": {"100:value": "She waves."}, "options": {"mode": mode, "quality": quality}, **extra}
     return workflows.build_prompt(wf, settings)
 
@@ -61,15 +61,16 @@ def test_size_seed_and_references():
 
 
 def test_a_filled_slot_switches_on_a_bypassed_loader():
-    wf = workflows.load_workflow(ARCHIVE / "MiniMax_H3_AI_Influencer.json")
-    without, _ = workflows.build_prompt(wf, {})
-    with_video, _ = workflows.build_prompt(wf, {"refs": {"25:file": {"comfy_name": "scene_x_move.mp4"}}})
+    wf = workflows.load_workflow(VIDEO / "MiniMax_H3_AI_Influencer.json")
+    asked = {"values": {"1:value": "She dances."}, "refs": {"21:image": {"comfy_name": "scene_x_face.png"}}}
+    without, _ = workflows.build_prompt(wf, asked)
+    with_video, _ = workflows.build_prompt(wf, dict(asked, refs=dict(asked["refs"], **{"25:file": {"comfy_name": "scene_x_move.mp4"}})))
     assert "25" not in without
     assert "25" in with_video and "27" in with_video  # the loader and the splitter behind it
 
 
 def test_estimates_come_from_the_table_then_from_history():
-    wf = workflows.load_workflow(ARCHIVE / "h3_director.json", workflow_id="video/h3_director")
+    wf = workflows.load_workflow(VIDEO / "h3_director.json", workflow_id="video/h3_director")
     settings = {"options": {"mode": "normal", "quality": "high"}, "values": {"102:value": 10}}
     assert workflows.estimate(wf, settings)["minutes"] == 27.0
     ctx = workflows.context(workflows.describe(wf), settings)
@@ -78,7 +79,7 @@ def test_estimates_come_from_the_table_then_from_history():
 
 
 def test_chain_slots_are_found_and_clip_count_is_in_the_summary():
-    wf = workflows.load_workflow(ARCHIVE / "h3_director.json")
+    wf = workflows.load_workflow(VIDEO / "h3_director.json")
     schema = workflows.describe(wf)
     assert schema["chain"] and schema["slots"] == {"first_frame": "209:image", "last_frame": "210:image", "voice_track": "211:audio"}
     ctx = workflows.context(schema, {"clips": 3})
@@ -111,7 +112,7 @@ def test_media_join_and_last_frame(tmp_path):
 
 def test_a_subgraph_is_unpacked_into_its_inner_nodes():
     """The image-to-video template keeps its whole pipeline inside one subgraph node (id 105)."""
-    wf = workflows.load_workflow(ARCHIVE / "video_minimax_h3_i2v.json", NODES)
+    wf = workflows.load_workflow(VIDEO / "video_minimax_h3_i2v.json", NODES)
     nodes = wf["nodes"]
     assert "105" not in nodes and nodes["105:104"]["class_type"] == "MiniMaxH3ImageToVideo"
     inside = nodes["105:104"]["inputs"]
@@ -123,7 +124,7 @@ def test_a_subgraph_is_unpacked_into_its_inner_nodes():
 
 def test_a_dynamic_combo_keeps_the_settings_of_its_chosen_option():
     """SaveVideo's "format" is a dynamic combo: its codec is sent as "format.codec". Without it the render fails at the save."""
-    saved = workflows.load_workflow(ARCHIVE / "video_minimax_h3_i2v.json", NODES)["nodes"]["92"]["inputs"]
+    saved = workflows.load_workflow(VIDEO / "video_minimax_h3_i2v.json", NODES)["nodes"]["92"]["inputs"]
     assert saved["format"] == "auto" and saved["format.codec"] == "auto" and saved["filename_prefix"] == "video/MiniMax_H3"
     widgets = [("format", [{"key": "mp4", "inputs": {"required": {"crf": ["FLOAT", {}]}}}, {"key": "auto", "inputs": {"required": {}}}]), ("after", "INT")]
     assert workflows._assign(widgets, ["mp4", 16, 3])[0] == {"format": "mp4", "format.crf": 16, "after": 3}
@@ -131,7 +132,7 @@ def test_a_dynamic_combo_keeps_the_settings_of_its_chosen_option():
 
 
 def test_presets_add_optional_and_extra_reference_slots():
-    wf = workflows.load_workflow(ARCHIVE / "video_minimax_h3_i2v.json", NODES)
+    wf = workflows.load_workflow(VIDEO / "video_minimax_h3_i2v.json", NODES)
     schema = workflows.describe(wf)
     assert schema["chain"] and schema["slots"] == {"first_frame": "114:image", "last_frame": "extra:last_frame"}
     values = {"105:104:prompt": "She waves."}
@@ -146,7 +147,7 @@ def test_presets_add_optional_and_extra_reference_slots():
 
 def test_a_required_reference_slot_must_be_filled():
     import pytest
-    wf = workflows.load_workflow(ARCHIVE / "video_minimax_h3_r2v.json", NODES)
+    wf = workflows.load_workflow(VIDEO / "video_minimax_h3_r2v.json", NODES)
     with pytest.raises(workflows.WorkflowError, match="Add a file"):
         workflows.build_prompt(wf, {"values": {"138:value": "A dragon lands."}})
     graph, _ = workflows.build_prompt(wf, {"values": {"138:value": "A dragon lands."}, "refs": {"137:image": {"comfy_name": "scene_a.png"}}})
@@ -160,12 +161,41 @@ def master(**settings):
     return workflows.build_prompt(wf, {"values": {"100:value": "She waves."}, **settings})
 
 
-def test_h3_master_is_the_only_video_workflow_and_names_the_ones_it_replaced():
-    assert sorted(p.name for p in VIDEO.glob("*.json")) == ["h3_master.json", "h3_master.studio.json"]
-    profile = json.loads((VIDEO / "h3_master.studio.json").read_text(encoding="utf-8"))
-    for old in profile["replaces"]:      # each is kept in the archive, not deleted
-        assert (ARCHIVE / (old.split("/")[1] + ".json")).is_file(), old
-    assert (ARCHIVE / "h3_director_draft_api.json").is_file()
+def test_every_video_workflow_has_a_presets_file_and_only_drafts_stay_archived():
+    flows = sorted(p.stem for p in VIDEO.glob("*.json") if not p.name.endswith(".studio.json"))
+    assert len(flows) == 9 and "h3_master" in flows
+    for name in flows:
+        profile = json.loads((VIDEO / (name + ".studio.json")).read_text(encoding="utf-8"))
+        assert profile["title"] and not profile.get("replaces"), name
+    assert sorted(p.name for p in ARCHIVE.glob("*.json")) == [
+        "ai_influencer_seedvr2_backup.json", "h3_director_draft_api.json", "h3_director_draft_backup.json"]
+
+
+def influencer(name, **settings):
+    wf = workflows.load_workflow(VIDEO / (name + ".json"), NODES, "video/" + name)
+    return workflows.build_prompt(wf, settings)[0]
+
+
+def test_ai_influencer_voice_track_is_a_choice():
+    face = {"1:image": {"comfy_name": "scene_x_face.png"}}
+    off = influencer("ai_influencer", values={"100:value": "She talks."}, refs=face)
+    # off: the switch takes the plain conditioning and the voice loader is left out, so no file is needed
+    assert off["130"]["inputs"]["value"] is False and off["72"]["inputs"]["on_true"] == ["34", 0] and "70" not in off
+    import pytest
+    with pytest.raises(workflows.WorkflowError, match="Voice track"):
+        influencer("ai_influencer", values={"100:value": "She talks."}, options={"voice": "on"}, refs=face)
+    on = influencer("ai_influencer", values={"100:value": "She talks."}, options={"voice": "on"},
+                    refs=dict(face, **{"70:audio": {"comfy_name": "scene_x_voice.wav"}}))
+    assert on["130"]["inputs"]["value"] is True and on["70"]["inputs"]["audio"] == "scene_x_voice.wav" and on["71"]["inputs"]["audio"] == ["70", 0]
+
+
+def test_a_required_slot_of_the_other_mode_is_not_asked_for():
+    # first-frame mode does not read the character image, which reference mode requires
+    graph = influencer("MiniMax_H3_AI_Influencer", values={"1:value": "She dances."}, options={"engine": "first_frame"})
+    assert graph["5"]["inputs"]["value"] is False and "21" not in graph
+    import pytest
+    with pytest.raises(workflows.WorkflowError, match="Character 1"):
+        influencer("MiniMax_H3_AI_Influencer", values={"1:value": "She dances."}, options={"engine": "reference"})
 
 
 def test_h3_master_speed_and_quality_set_the_three_switches():
