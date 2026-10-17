@@ -21,6 +21,14 @@ const PERMISSIONS = [
   { id: 'videos', icon: 'handvideo', label: 'Ask before videos', about: 'Runs images and audio. Asks before videos.' },
   { id: 'always', icon: 'hand', label: 'Always ask', about: 'Asks before every generation.' },
 ];
+// Feel-good words shown under the dots while the agent is just thinking, shuffled every few seconds. A real phase the
+// server names ("Looking at new pictures…") takes their place; these fill the plain "Thinking…" wait.
+const WHIMSY = [
+  'Imagining…', 'Daydreaming…', 'Dreaming up shots…', 'Sketching ideas…', 'Chasing the muse…', 'Brewing something good…',
+  'Framing the scene…', 'Finding the light…', 'Scribbling storyboards…', 'Picturing it…', 'Warming up the lens…',
+  'Mixing a little magic…', 'Letting it marinate…', 'Rolling the reels…', 'Casting the shot…', 'Painting with pixels…',
+  'Humming a tune…', 'Tuning the vibe…', 'Thinking happy thoughts…', 'Connecting the dots…', 'Setting the stage…',
+];
 const SHAPES = [{ id: 'landscape', label: '16:9' }, { id: 'square', label: '1:1' }, { id: 'portrait', label: '9:16' }];
 const SHAPE_NAMES = { landscape: '16:9', portrait: '9:16', square: '1:1' };
 const KIND_ICONS = { video: 'video', image: 'image', audio: 'audio' };
@@ -135,6 +143,151 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   }
   drawPermission();
 
+  // Skills: the square box opens a picker with a search field; typing /name in the message filters the same list
+  // inline. Choosing one puts /<id> at the start of the message, where the agent reads it. Fetched once.
+  let skillList = null;
+  let skillMenu = null;    // the floating panel element, or null while closed
+  let skillMode = null;    // 'box' (opened from the button, has its own search) or 'slash' (filtered by the message)
+  let skillSearch = '';    // the box's search text
+  let skillRows = [];      // the skills shown now, in order, for moving with the keyboard
+  let skillAt = 0;         // the highlighted row
+  const RECENT_KEY = 'scene.agent.skills.recent';
+  const recentIds = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch { return []; } };
+  const pushRecent = (id) => { try { localStorage.setItem(RECENT_KEY, JSON.stringify([id, ...recentIds().filter((x) => x !== id)].slice(0, 5))); } catch { /* storage off */ } };
+
+  const skillsButton = el('button', { type: 'button', class: 'icon-btn agent-skills', 'aria-haspopup': 'listbox',
+    title: 'Skills — or type /name', 'aria-label': 'Skills', onclick: () => toggleSkillBox() }, icon('skill'));
+
+  async function ensureSkills() {
+    if (!skillList) { try { skillList = (await api('/api/skills')).skills || []; } catch { skillList = []; } }
+    return skillList;
+  }
+  // What the user is typing after a leading "/", or null when the message is not (any longer) a skill command.
+  function slashQuery() {
+    const m = /^\s*\/(\S*)$/.exec(input.textContent || '');   // a slash, some non-space, nothing after: still choosing
+    return m ? m[1].toLowerCase() : null;
+  }
+  // The skills to show for a query, in groups. No query: recently used, then the rest.
+  function skillGroups(query) {
+    const all = skillList || [];
+    const q = (query || '').trim().toLowerCase();
+    if (q) {
+      const hit = (s) => s.id.includes(q) || s.title.toLowerCase().includes(q) || (s.desc || '').toLowerCase().includes(q);
+      return [{ label: 'Results', skills: all.filter(hit) }];
+    }
+    const recent = recentIds().map((id) => all.find((s) => s.id === id)).filter(Boolean);
+    const groups = recent.length ? [{ label: 'Recently used', skills: recent }] : [];
+    groups.push({ label: 'All skills', skills: all.filter((s) => !recent.includes(s)) });
+    return groups;
+  }
+  function skillMenuBody(query) {
+    const groups = skillGroups(query);
+    skillRows = groups.flatMap((g) => g.skills);
+    if (skillAt >= skillRows.length) skillAt = Math.max(0, skillRows.length - 1);
+    const body = [];
+    let i = 0;
+    for (const g of groups) {
+      body.push(el('div', { class: 'skillmenu-label' }, g.label));
+      if (!g.skills.length) body.push(el('div', { class: 'skillmenu-empty muted small' }, 'No matches.'));
+      for (const s of g.skills) {
+        const idx = i++;
+        body.push(el('button', { type: 'button', class: 'skillmenu-item' + (idx === skillAt ? ' on' : ''), role: 'option',
+          'data-idx': String(idx), 'aria-selected': String(idx === skillAt),
+          onmouseenter: () => { skillAt = idx; markSkill(); },
+          onmousedown: (e) => { e.preventDefault(); activateSkill(s.id); } },
+          el('span', { class: 'skillmenu-mark' }, icon('skill')),
+          el('span', { class: 'skillmenu-text' }, el('b', {}, s.title), el('span', { class: 'skillmenu-desc' }, s.desc || ('/' + s.id))),
+          el('code', { class: 'skillmenu-id' }, '/' + s.id)));
+      }
+    }
+    body.push(el('a', { class: 'skillmenu-item skillmenu-foot', href: '#/skills',
+      onmousedown: (e) => { e.preventDefault(); location.hash = '#/skills'; hideSkillMenu(); } },
+      el('span', { class: 'skillmenu-mark' }, icon('grid')), el('span', { class: 'skillmenu-text' }, el('b', {}, 'See all skills'))));
+    return body;
+  }
+  function markSkill() {
+    if (!skillMenu) return;
+    skillMenu.querySelectorAll('.skillmenu-item').forEach((n) => {
+      const on = Number(n.dataset.idx) === skillAt;
+      n.classList.toggle('on', on);
+      n.setAttribute('aria-selected', String(on));
+      if (on) n.scrollIntoView({ block: 'nearest' });
+    });
+  }
+  function skillKey(e) {   // arrows, Enter/Tab, Escape while the menu is open; true when it handled the key
+    if (!skillMenu) return false;
+    if (e.key === 'ArrowDown') { e.preventDefault(); skillAt = Math.min(skillRows.length - 1, skillAt + 1); markSkill(); return true; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); skillAt = Math.max(0, skillAt - 1); markSkill(); return true; }
+    if ((e.key === 'Enter' || e.key === 'Tab') && skillRows[skillAt]) { e.preventDefault(); activateSkill(skillRows[skillAt].id); return true; }
+    if (e.key === 'Escape') { e.preventDefault(); hideSkillMenu(); return true; }
+    return false;
+  }
+  const skillOutside = (e) => {
+    if (skillMenu && !skillMenu.contains(e.target) && !skillsButton.contains(e.target) && !input.contains(e.target)) hideSkillMenu();
+  };
+  function openSkillMenu(mode) {
+    hideSkillMenu();
+    skillMode = mode;
+    skillAt = 0;
+    const list = el('div', { class: 'skillmenu-list' });
+    // The search field is in both modes. In the box it is where you type; with /name the message drives it, and the
+    // field shows and mirrors that text (still editable here too). skillSearch is the one filter either way.
+    const search = el('input', { class: 'skillmenu-search', type: 'text', placeholder: 'Search all skills…', value: skillSearch,
+      oninput: (e) => { skillSearch = e.target.value; skillAt = 0; list.replaceChildren(...skillMenuBody(skillSearch)); },
+      onkeydown: (e) => skillKey(e) });
+    const redraw = () => { if (search.value !== skillSearch) search.value = skillSearch; list.replaceChildren(...skillMenuBody(skillSearch)); };
+    skillMenu = el('div', { class: 'agent-skillmenu', role: 'listbox' },
+      el('div', { class: 'skillmenu-head' }, icon('search'), search), list);
+    skillMenu._redraw = redraw;
+    composer.prepend(skillMenu);
+    redraw();
+    if (mode === 'box') search.focus();   // with /name the message keeps focus, so you go on typing there
+    document.addEventListener('pointerdown', skillOutside, true);
+  }
+  function hideSkillMenu() {
+    if (!skillMenu) return;
+    skillMenu.remove();
+    skillMenu = null;
+    skillMode = null;
+    document.removeEventListener('pointerdown', skillOutside, true);
+  }
+  async function toggleSkillBox() {
+    if (skillMenu && skillMode === 'box') { hideSkillMenu(); return; }
+    await ensureSkills();
+    skillSearch = '';
+    openSkillMenu('box');
+  }
+  // Called as the message changes: open or refresh the inline menu while it reads like "/name", close it otherwise.
+  async function onInputChanged() {
+    const q = slashQuery();
+    if (q === null) { if (skillMode === 'slash') hideSkillMenu(); return; }
+    await ensureSkills();
+    skillSearch = q;   // the text after the slash is the filter; the menu's search field mirrors it
+    if (skillMode === 'slash' && skillMenu) skillMenu._redraw();
+    else { skillAt = 0; openSkillMenu('slash'); }
+  }
+  function activateSkill(id) {
+    useSkill(id);
+    pushRecent(id);
+    hideSkillMenu();
+    input.focus();
+  }
+  // Put "/<id> " at the very start of the message (where the agent reads it) and leave the cursor after it.
+  function useSkill(id) {
+    const tag = '/' + id + ' ';
+    const first = input.firstChild;
+    if (first && first.nodeType === Node.TEXT_NODE) first.textContent = first.textContent.replace(/^\s*\/[a-z0-9-]*\s*/i, '');
+    input.prepend(document.createTextNode(tag));
+    input.focus();
+    const range = document.createRange();
+    range.setStart(input.firstChild, tag.length);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    rememberCaret();
+  }
+
   const log = el('div', { class: 'agent-log' });
   // A button to the newest message, while the conversation is scrolled up.
   const toEnd = el('button', { type: 'button', class: 'agent-to-end hidden', title: 'Go to the newest', 'aria-label': 'Go to the newest message',
@@ -148,10 +301,12 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   const input = el('div', { class: 'agent-input', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Message',
     'data-placeholder': 'Ask the agent, or tell it what to make. Click a frame to attach it.',
     onkeydown: (e) => {
+      if (skillMode === 'slash' && skillKey(e)) return;   // while typing /name, the keys drive the inline menu
       if (e.key !== 'Enter') return;
       e.preventDefault();
       if (e.shiftKey) document.execCommand('insertLineBreak'); else send();
     },
+    oninput: () => onInputChanged(),
     onpaste: (e) => {   // only the words of what is pasted, never its markup
       e.preventDefault();
       document.execCommand('insertText', false, (e.clipboardData || window.clipboardData).getData('text/plain'));
@@ -171,10 +326,10 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     input.dataset.placeholder = pending ? 'Waiting for response…' : 'Ask the agent, or tell it what to make. Click a frame to attach it.';
   };
   drawSend();
+  const composer = el('div', { class: 'agent-composer', onclick: (e) => { if (e.target === e.currentTarget) input.focus(); } }, input,
+    el('div', { class: 'agent-composer-bar' }, el('span', { style: 'flex:1' }), status, skillsButton, modelPicker, permButton, sendButton));
   const node = el('div', { class: 'agent-panel' },
-    el('div', { class: 'agent-log-wrap' }, log, toEnd),
-    el('div', { class: 'agent-composer', onclick: (e) => { if (e.target === e.currentTarget) input.focus(); } }, input,
-      el('div', { class: 'agent-composer-bar' }, el('span', { style: 'flex:1' }), status, modelPicker, permButton, sendButton)));
+    el('div', { class: 'agent-log-wrap' }, log, toEnd), composer);
   node.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pending) pending.stop(); });
 
   const board = (kind) => `/api/boards/${kind}?project=${projectId()}`;
@@ -605,6 +760,21 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       if (allowRetake) step.retake = found.retake;
       const which = take === step ? `“${step.name}”` : `the retake of “${step.name}”`;
       work(run, 'check', found.verdict.passed ? `Checked ${which}: it is what was asked for` : `Checked ${which}: ${found.verdict.problem}`);
+      // The retake runs under the same permission the plan ran under: "Allow all" fixes a failed shot on its
+      // own; "Ask before videos" fixes stills and audio on its own but asks before a video; "Always ask" shows
+      // the Retake button and waits. Still one retake per shot, and never beyond the credits in hand.
+      if (allowRetake && !found.verdict.passed && found.retake && !step.kept && !step.take2) {
+        const mode = permission().id;
+        const auto = mode === 'all' || (mode === 'videos' && step.kind !== 'video');
+        // Reviews of a plan's shots run at once, so count credits already promised to other auto-retakes in this
+        // burst (reservedCredits) as spent. retake() releases the reservation once it has lowered the real balance.
+        const available = Number(store.user.credits ?? 0) - reservedCredits;
+        if (auto && found.retake.credits <= available) {
+          reservedCredits += found.retake.credits;
+          work(run, 'retry', `Retaking ${which} on its own · ${found.retake.credits} cr`);
+          retake(run, step, true);
+        }
+      }
     } catch (e) {
       take.reviewError = e.message;
     }
@@ -664,9 +834,12 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     collecting = false;
   }
 
-  // The retake of a failed shot, approved by the user: the same workflow and settings with the prompt the review fixed.
-  // One retake per shot.
-  async function retake(run, step) {
+  // Credits promised to auto-retakes queued in the current review burst but not yet reflected in store.user.credits.
+  let reservedCredits = 0;
+
+  // The retake of a failed shot: the same workflow and settings with the prompt the review fixed. One retake per shot.
+  // `reserved` is true when this retake was already counted against reservedCredits by the auto path above.
+  async function retake(run, step, reserved = false) {
     const plan = step.retake;
     step.take2 = { prompt: plan.prompt, queuedAt: Date.now() };
     drawLog();
@@ -679,11 +852,17 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       const data = new FormData();
       data.append('settings', JSON.stringify(settings));
       step.take2.job = (await api('/api/jobs', { method: 'POST', body: data })).id;
+      // The server has now charged for this retake. Drop the local balance by the same amount so that another shot
+      // reviewed in the same burst (under "Allow all") sees what is really left and does not over-commit; the next
+      // store sync reconciles to the server's figure, and a failed job refunds as usual.
+      if (store.user && Number.isFinite(plan.credits)) store.user.credits = Math.max(0, Number(store.user.credits ?? 0) - plan.credits);
+      if (reserved && Number.isFinite(plan.credits)) reservedCredits = Math.max(0, reservedCredits - plan.credits);
       work(run, 'retry', `Queued a retake of “${step.name}”`);
       onJobs(startedJobs());
       refreshJobs().catch(() => {});
     } catch (e) {
       step.take2.error = e.message;
+      if (reserved && Number.isFinite(plan.credits)) reservedCredits = Math.max(0, reservedCredits - plan.credits);   // queue failed: release the hold
     }
     saveRuns();
     drawLog();
@@ -772,6 +951,19 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
           onclick: (e) => { navigator.clipboard.writeText(plain(run)).then(() => { e.currentTarget.classList.add('done'); }).catch(() => {}); } }, icon('copy'))));
   }
 
+  // The word under the dots: a phase the server named, or, for a plain "Thinking" wait, a feel-good word that shuffles.
+  let whimsyAt = Math.floor(Math.random() * WHIMSY.length);
+  let whimsyTimer = null;
+  function thinkingWord(p) {
+    if (p.status && !/^thinking/i.test(p.status)) return p.status;   // a real phase the server named wins
+    return WHIMSY[whimsyAt % WHIMSY.length];
+  }
+  function startWhimsy() {
+    stopWhimsy();
+    whimsyTimer = setInterval(() => { whimsyAt += 1; drawLive(); }, 2600);
+  }
+  function stopWhimsy() { if (whimsyTimer) { clearInterval(whimsyTimer); whimsyTimer = null; } }
+
   // The turn being answered: the message, the agent's work as it happens, and what it is doing now.
   let live = null;
   function liveTurn() {
@@ -786,7 +978,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       ...thoughts.map((t) => fold({ glyph: 'bulb', title: `Thought for ${span(t.seconds)}`, className: 'thought' })),
       el('div', { class: 'agent-thinking', role: 'status', 'aria-live': 'polite' },
         el('span', { class: 'thinking-dots', 'aria-hidden': 'true' }, el('i'), el('i'), el('i')),
-        el('span', { class: 'thinking-word' }, (p.status || 'Thinking').replace(/…$/, ''))));
+        el('span', { class: 'thinking-word' }, thinkingWord(p).replace(/…$/, ''))));
   }
   function drawLive() {
     if (!pending || !live || !live.isConnected) return;
@@ -849,6 +1041,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     const typed = [...input.childNodes].map((n) => n.cloneNode(true));
     const controller = new AbortController();
     pending = { instruction, parts, stop: () => controller.abort(), events: [], status: 'Thinking', started: Date.now() };
+    startWhimsy();
     input.replaceChildren();
     input.contentEditable = 'false';
     caret = null;
@@ -877,6 +1070,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       if (e.name === 'AbortError') input.replaceChildren(...typed);   // stopped: the message comes back to be changed or sent again
       else runs.push({ instruction, parts, reply: e.message, error: true, activity: pending.events, steps: [], total: 0, state: 'answered', at: Date.now(), ui: {} });
     }
+    stopWhimsy();
     busy = false;
     pending = null;
     input.contentEditable = 'true';
@@ -1023,5 +1217,5 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   // attach(item): put a library item into the message. reload(): the project changed. redraw(): the canvas moved
   // things, so where each result is ("Shot 3 › Take 2") is drawn again.
   return { node, attach, reload: load, redraw: () => drawLog(), focus: () => input.focus(),
-    destroy: () => { unsubscribe(); clearInterval(ticker); document.removeEventListener('selectionchange', rememberCaret); } };
+    destroy: () => { unsubscribe(); clearInterval(ticker); stopWhimsy(); hideSkillMenu(); document.removeEventListener('selectionchange', rememberCaret); } };
 }

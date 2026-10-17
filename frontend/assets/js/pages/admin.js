@@ -6,6 +6,7 @@ import { overview } from './admin/overview.js';
 import { users, jobs, library, credits, workflows, system, audit, settings } from './admin/sections.js';
 import { pricing } from './admin/pricing.js';
 import { economics } from './admin/economics.js';
+import { skills } from './admin/skills.js';
 
 const TABS = [
   { id: 'overview', label: 'Overview', draw: overview, live: 15000 },
@@ -16,6 +17,7 @@ const TABS = [
   { id: 'pricing', label: 'Pricing', draw: pricing },
   { id: 'economics', label: 'Economics', draw: economics },
   { id: 'workflows', label: 'Workflows', draw: workflows },
+  { id: 'skills', label: 'Skills', draw: skills },
   { id: 'system', label: 'System', draw: system, live: 10000 },
   { id: 'audit', label: 'Audit log', draw: audit },
   { id: 'settings', label: 'Settings', draw: settings },

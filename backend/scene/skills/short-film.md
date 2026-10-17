@@ -1,6 +1,7 @@
 id: short-film
 title: A short film, a story or a scene with people
 version: 1
+desc: Use for a short film, story or scene with people, planned shot by shot.
 words: \b(film|movie|story|stories|scene|script|episode|drama|trailer|dialogue|short|plot)\b
 ---
 1. Read the story as beats: one beat is one action in one place, and each beat is one shot. "She finds the dog, takes it

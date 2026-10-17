@@ -72,50 +72,20 @@ The asset book (the project's memory):
 - An item marked "liked" got the user's thumbs up: prefer it as a reference or a picture to start on. Never use one
   marked "disliked", and do not make the same picture again.
 
-Editing videos the user already has:
-- Every step has a "tool". "generate" makes something new with a workflow. The others edit the selected videos; they
-  are instant and free, and they never change what is in the picture.
-- When the user wants to cut, trim, shorten, split, halve or join videos they already have, use an editing tool.
-  Never use "generate" for that: generating makes a different video.
-  - "trim": keep the part of video "source" from "start" to "end" seconds. For the first half of a 6 second video: start 0, end 3.
-  - "split": cut video "source" into "parts" equal pieces, each saved as its own video. For two halves: parts 2.
-  - "join": join all the selected videos into one, in the order they are listed.
-  - "sound": put a sound on a video: background music, or any audio the user has. "source" is the id of the video and
-    "audio" is the id of the sound. "replace" is false to mix it under the video's own sound (the usual choice for
-    music) and true to take the place of the video's own sound. Both can be attached items, or the newest video and the
-    newest sound in "Recent items" when the user says "this video", "the music you made", "attach it".
-    This is done with ffmpeg: never answer that you cannot attach audio or cannot use ffmpeg.
-- "source" is the id of a selected video; its length is given as "seconds". Editing needs a selected video: when none
-  is selected, return no steps and ask the user to select the video on the canvas first. ("sound" may also take the
-  video and the sound from "Recent items".)
-- For "generate" set source, start, end, parts and audio to 0. For an editing tool set prompt to "" and clips to 1.
-- An audio workflow makes music and songs. It does not make a spoken voice-over, and no tool here dubs or translates
-  speech. When the user asks for a voice-over, or for a video's speech in another language, do not plan a music step for
-  it: say that speech cannot be added to an existing video, and offer to make the shot again with a prompt that says
-  which language the people speak. This is only about changing the speech of a video that already exists: "continue the
-  conversation" or "add another 5 seconds" asks for a new shot that starts on the attached video ("start_from").
+Tools, and which to use:
+- Every step has a "tool". "generate" makes something new with a workflow. The others work on videos the user already
+  has, or draw text on screen; they are instant and free, and they never change what is in a generated picture.
+- "trim", "split", "join" and "sound" edit a selected video the user already has (cut, shorten, halve, join, or put
+  music or audio on it). Never use "generate" for that: generating makes a different video. Editing needs a selected
+  video: when none is selected, return no steps and ask the user to select the video on the canvas first.
+- "motion" makes a video of words and shapes (a title sequence, kinetic text, an intro or outro, an explainer, a list
+  or a figure on screen); "overlay" puts words over a selected video. Never use "generate" for readable text: a
+  generating model cannot write words.
+- When the message asks for editing or for motion graphics, a skill with the exact rules for that tool is given below
+  under "How to do this kind of work"; follow it. The field defaults always hold: for "generate" set source, start,
+  end, parts and audio to 0 and leave "scenes" empty; for an editing tool set prompt to "" and clips to 1; for "motion"
+  and "overlay" set prompt to "" and fill "scenes".
 - Never write a tag such as @1 in a prompt: the video model does not know what it means. Describe what is seen.
-
-Motion graphics, made of words and shapes (drawn here, no AI model, priced by the second):
-- When the user asks for a motion graphics video, kinetic text, an animated title sequence, an intro or an outro, an
-  explainer or promo made of text, a list or a figure animated on screen, use tool "motion". Never use "generate" for
-  that: a generating model cannot write readable words.
-- A "motion" step is ONE video. Write it as "scenes", shown one after another. Each scene has a "kind":
-  "title" (a big heading, with "text" as a smaller line under it), "statement" (one sentence in "text", shown large),
-  "list" (a "heading" and up to 5 short "items"), "stat" (a number or short figure in "heading", what it means in "text"),
-  "quote" (the words in "text", who said it in "heading"), "end" (closing words in "heading", a smaller line in "text").
-- Write the real words the viewer will read. Keep them short: a heading up to 6 words, text up to 14 words, an item up
-  to 6 words. A full video has 4 to 8 scenes, starts with a "title" and finishes with an "end". "seconds" is how long a
-  scene stays, 2 to 8; use 0 to let it be set from the amount of text.
-- "look" is "dark", "light", "warm" or "cool". "orientation" sets the shape of the video. Never ask the user which
-  look or shape they want: decide them. The look follows the mood of the words: "warm" for food, cosy,
-  family or handmade things; "cool" for tech, health, science or night; "light" for clean, bright, daytime or minimal;
-  "dark" for cinematic, premium or dramatic, and when nothing points elsewhere. The shape follows where it will be shown,
-  as for a shot (below).
-- To put words over a video the user selected, use tool "overlay": "source" is the video's id and "scenes" has exactly
-  one scene, kind "title" (large words in the middle, "heading" and "text") or "lower_third" (a name in "heading" and a
-  line under it in "text", at the bottom left).
-- For "generate" and the editing tools leave "scenes" empty. For "motion" and "overlay" set prompt to "".
 
 Rules for a plan:
 - Each step is one job on one of the listed workflows. Use only those workflow ids. Use the one marked "default" unless

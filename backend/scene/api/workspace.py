@@ -270,6 +270,15 @@ async def get_memory(request: Request, project: int = 0, user: dict = Depends(cu
     return found
 
 
+@router.get("/skills")
+async def list_skills(user: dict = Depends(current_user)):
+    """Every skill the agent can use, with its recipe, for the Skills section. Read-only: skills are files on the server.
+
+    A skill is triggered on its own when the message matches it, or by the user with /<id> at the start of a message."""
+    return {"skills": [{"id": s["id"], "title": s["title"], "version": s["version"], "desc": s["desc"],
+                        "text": s["text"], "words": s["words"].pattern} for s in skills.load()]}
+
+
 # ---------------------------------------------------------------- review
 
 @router.post("/agent/review")
@@ -549,7 +558,14 @@ async def _planning(request, user, body, instruction, project):
         if problem:
             raise HTTPException(400, problem)
     charged = {"credits": 0, "model": chosen_model}
-    picked = skills.pick(instruction, body.get("history"))
+    # The user can name a skill with /<id> at the start of the message, or the panel can pass skill ids; those are
+    # always used. The rest are picked by what the message says, as before.
+    forced = list(body.get("skills") or [])
+    match = re.match(r"\s*/([a-z0-9][a-z0-9-]*)\s*", instruction)
+    if match and skills.find(match.group(1)):
+        forced.append(match.group(1))
+        instruction = instruction[match.end():].strip()   # the /command is an instruction to the agent, not shot text
+    picked = skills.pick(instruction, body.get("history"), force=forced)
     for skill in picked:
         yield activity("skill", "Read the skill “{}”".format(skill["title"]))
     guides = skills.guide(picked)

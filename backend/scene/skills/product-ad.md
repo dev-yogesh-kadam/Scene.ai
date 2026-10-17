@@ -1,6 +1,7 @@
 id: product-ad
 title: An ad, a promo or a product video
 version: 2
+desc: Use to make an ad, promo or product video, keeping the product and logo consistent.
 words: \b(ad|ads|advert\w*|commercial|promo\w*|product|brand\w*|launch|sale|offer|campaign|marketing|packshot|logo)\b
 ---
 1. When the asset book has the product, the logo or a presenter, use them in every shot they are in, in the product,

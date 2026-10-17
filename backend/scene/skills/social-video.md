@@ -1,6 +1,7 @@
 id: social-video
 title: A Reel, a Short, a TikTok or a creator-style video
 version: 1
+desc: Use for a Reel, Short, TikTok or creator-style video with a strong hook.
 words: \b(reels?|shorts|tiktok|instagram|insta|youtube shorts|ugc|vlog|creator|influencer|story|stories|whatsapp|viral|hook|trend\w*)\b
 ---
 1. Portrait, always, unless the user names another shape.
