@@ -1,6 +1,7 @@
 id: character-sheet
 title: A character, a portrait or a reference picture to reuse
 version: 2
+desc: Use to design a character, portrait or reference picture you can reuse across shots.
 words: \b(character sheet|new character|create (a|the) character|design (a|the) character|portrait of|character portrait|reference (picture|image)|turnaround|mascot|avatar)\b
 ---
 1. A reference picture is an image, made with an image workflow, not a video.

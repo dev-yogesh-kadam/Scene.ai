@@ -55,6 +55,7 @@ const ICONS = {
   book: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5"/>',
   eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
   skill: '<path d="M4.5 4.5h15v15h-15z"/><path d="M9 15l6-6"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.3-4.3"/>',
   skip: '<circle cx="12" cy="12" r="8.5"/><path d="M8 12h8"/>',
   retry: '<path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4h4"/>',
   queue: '<path d="M4 7h16M4 12h16M4 17h10"/>',

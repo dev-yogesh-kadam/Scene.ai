@@ -15,7 +15,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
-from .. import __version__, audit, backup, edits, media
+from .. import __version__, audit, backup, edits, media, skills
 from ..agent import AgentError
 from ..catalog import KINDS
 from ..credits import MOTION, OVERLAY, PER_JOB, RATES
@@ -1099,3 +1099,50 @@ async def export(name: str, request: Request, user: dict = Depends(admin_user)):
     audit.record(request, user, "Exported data", name + ".csv", "{} rows".format(len(rows)))
     return Response(out.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="scene_{}_{}.csv"'.format(name, date.today().isoformat())})
+
+
+# ---------------------------------------------------------------- skills: the recipes the agent follows, as files
+
+@router.get("/skills")
+async def admin_list_skills(user: dict = Depends(admin_user)):
+    """Every skill with its full recipe, for the admin console's Skills section."""
+    return {"skills": [{"id": s["id"], "title": s["title"], "desc": s["desc"], "version": s["version"],
+                        "words": s["words"].pattern, "text": s["text"]} for s in skills.load()]}
+
+
+@router.post("/skills")
+async def admin_create_skill(body: dict, request: Request, user: dict = Depends(admin_user)):
+    """Make a new skill. The id becomes the file name and the /command, and must not already be in use."""
+    sid = skills._line(body.get("id")).lower()
+    if skills.find(sid):
+        raise HTTPException(400, "A skill with the id “{}” already exists.".format(sid))
+    try:
+        saved = skills.save(body)
+    except ValueError as err:
+        raise HTTPException(400, str(err))
+    audit.record(request, user, "Created skill", saved["id"], saved["title"])
+    return {"skill": {"id": saved["id"], "title": saved["title"], "desc": saved["desc"], "version": saved["version"],
+                      "words": saved["words"].pattern, "text": saved["text"]}}
+
+
+@router.put("/skills/{skill_id}")
+async def admin_update_skill(skill_id: str, body: dict, request: Request, user: dict = Depends(admin_user)):
+    """Change a skill's title, description, trigger words, version or steps. The id (file name) stays the same."""
+    if not skills.find(skill_id):
+        raise HTTPException(404, "No such skill.")
+    try:
+        saved = skills.save({**body, "id": skill_id})
+    except ValueError as err:
+        raise HTTPException(400, str(err))
+    audit.record(request, user, "Edited skill", saved["id"], saved["title"])
+    return {"skill": {"id": saved["id"], "title": saved["title"], "desc": saved["desc"], "version": saved["version"],
+                      "words": saved["words"].pattern, "text": saved["text"]}}
+
+
+@router.delete("/skills/{skill_id}")
+async def admin_delete_skill(skill_id: str, request: Request, user: dict = Depends(admin_user)):
+    """Delete a skill file for good."""
+    if not skills.remove(skill_id):
+        raise HTTPException(404, "No such skill.")
+    audit.record(request, user, "Deleted skill", skill_id)
+    return {"ok": True}

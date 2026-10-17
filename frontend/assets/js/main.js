@@ -11,6 +11,7 @@ import * as canvas from './pages/canvas.js';
 import * as timeline from './pages/timeline.js';
 import * as projects from './pages/projects.js';
 import * as library from './pages/library.js';
+import * as skills from './pages/skills.js';
 import * as assets from './pages/assets.js';
 import * as queue from './pages/queue.js';
 import * as settings from './pages/settings.js';
@@ -24,6 +25,7 @@ const PAGES = [
   { path: '#/home', label: 'Home', icon: 'home', page: home },
   { path: '#/projects', label: 'All projects', icon: 'folder', page: projects, group: 'Workspace' },
   { path: '#/library', label: 'Library', icon: 'grid', page: library, group: 'Workspace' },
+  { path: '#/skills', label: 'Skills', icon: 'skill', page: skills, group: 'Workspace' },
   { path: '#/create', page: create, under: '#/home' },
   { path: '#/canvas', page: canvas, under: '#/projects' },
   { path: '#/timeline', page: timeline, under: '#/projects' },
@@ -97,11 +99,19 @@ function showApp() {
   }
   const signOut = async () => { await api('/api/auth/logout', { method: 'POST' }).catch(() => {}); history.replaceState(null, '', '#/'); showAuth(); };
 
-  root.replaceChildren(el('div', { class: 'shell' }, el('div', { class: 'app-menu-wrap' }, opener, menu), view));
+  // Outside the canvas the sidebar is shown in full, down the left. In the canvas it folds into the menu above, so the
+  // stage gets the whole width. Narrow screens always use the menu.
+  const sidebar = el('aside', { class: 'sidebar', 'aria-label': 'Scene.ai' });
+  const shell = el('div', { class: 'shell' }, el('div', { class: 'app-menu-wrap' }, opener, menu), sidebar, view);
+  root.replaceChildren(shell);
+  const narrow = window.matchMedia('(max-width: 860px)');
 
   const drawNav = () => {
     const active = store.jobs.filter((j) => j.status === 'queued' || j.status === 'running').length;
     const here = PAGES.find((p) => p.path === location.hash) || {};
+    // The canvas folds the sidebar into the menu to free the stage; everywhere else shows it in full, unless the
+    // screen is too narrow for a sidebar.
+    const compact = location.hash === '#/canvas' || narrow.matches;
     const link = (p) => el('a', { href: p.path, role: 'menuitem', class: p.path === (here.under || here.path) ? 'on' : '', onclick: () => showMenu(false) },
       icon(p.icon), el('span', { class: 'grow' }, p.label));
     const shown = PAGES.filter((p) => !p.under && !p.menu);
@@ -111,8 +121,9 @@ function showApp() {
     working.replaceChildren(el('i', { class: 'cell-mark stepping' }), active === 1 ? '1 job in the queue' : `${active} jobs in the queue`);
     nav.replaceChildren(...shown.flatMap((p, i) =>
       (p.group && p.group !== (shown[i - 1] || {}).group ? [el('div', { class: 'nav-label' }, p.group), link(p)] : [link(p)])));
-    if (menu.classList.contains('hidden')) return;
-    menu.replaceChildren(
+    // The same blocks go into the menu (compact) or the sidebar (full): who, the pages, the queue and credits, then
+    // the settings pages, the theme and signing out.
+    const content = () => [
       el('div', { class: 'app-menu-who' },
         el('div', { class: 'avatar' }, (store.user.name[0] || '?').toUpperCase()),
         el('div', { class: 'who' }, el('b', {}, store.user.name), el('span', {}, store.user.email))),
@@ -125,7 +136,19 @@ function showApp() {
       el('div', { class: 'menu-sep' }),
       ...PAGES.filter((p) => p.menu && (!p.adminOnly || store.user.role === 'admin')).map((p) => link(p)),
       el('div', { class: 'menu-row' }, 'Theme', segmented(THEMES, localStorage.getItem('scene.theme') || 'system', (theme) => { applyTheme(theme); drawNav(); })),
-      el('button', { role: 'menuitem', class: 'menu-item', onclick: signOut }, icon('logout'), 'Sign out'));
+      el('button', { role: 'menuitem', class: 'menu-item', onclick: signOut }, icon('logout'), 'Sign out'),
+    ];
+    shell.classList.toggle('compact', compact);
+    shell.classList.toggle('railed', !compact);
+    if (compact) {
+      sidebar.replaceChildren();
+      if (!menu.classList.contains('hidden')) menu.replaceChildren(...content());
+    } else {
+      showMenu(false);   // the dropdown never stays open once the full sidebar is showing
+      sidebar.replaceChildren(
+        el('a', { class: 'sidebar-brand', href: '#/home', 'aria-label': 'Home' }, el('img', { src: '/assets/img/logo.svg', alt: '' }), el('b', {}, 'Scene.ai')),
+        ...content());
+    }
   };
   const drawStatus = () => {
     dot.className = 'dot ' + (store.online == null ? '' : store.online ? 'online' : 'offline');
@@ -160,8 +183,10 @@ function showApp() {
     if (change === 'credits') drawCredits();
   });
   window.addEventListener('hashchange', route);
+  const onResize = () => drawNav();   // crossing the narrow breakpoint swaps the sidebar and the menu
+  narrow.addEventListener('change', onResize);
   const leaveNews = announcement();
-  leaveShell = () => { unsubscribe(); leaveNews(); showMenu(false); window.removeEventListener('hashchange', route); };
+  leaveShell = () => { unsubscribe(); leaveNews(); showMenu(false); narrow.removeEventListener('change', onResize); window.removeEventListener('hashchange', route); };
 
   startLive();
   refreshJobs().catch(() => {});
