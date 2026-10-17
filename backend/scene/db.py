@@ -199,6 +199,9 @@ COLUMNS = [
     # (origin "upload"), beside the ones saved on purpose (origin "saved", which belong to no one project).
     ("assets", "origin", "TEXT NOT NULL DEFAULT 'saved'"),
     ("assets", "project_id", "INTEGER"),
+    # An asset the agent made for reuse (a character, a place, a voice): the library item it was kept from. A retake of
+    # the same name replaces it, where an asset the user saved is never replaced.
+    ("assets", "made_from", "INTEGER"),
     # Review: the agent's verdict on a library item it looked at after it was made (JSON, see review.py).
     ("generations", "review", "TEXT NOT NULL DEFAULT ''"),
     # The user's thumbs on a result: 1 up, -1 down, 0 not rated. The agent reuses what was liked and avoids the rest.

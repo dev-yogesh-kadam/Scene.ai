@@ -18,7 +18,7 @@ from pathlib import Path
 import httpx
 import websockets
 
-from . import edits, media, motion, sequence
+from . import edits, media, memory, motion, sequence
 from .comfy import workflows
 from .comfy.client import ComfyError
 from .db import as_everyone
@@ -34,8 +34,9 @@ class Cancelled(Exception):
 
 
 class JobManager:
-    def __init__(self, db, comfy, catalog, credits, outputs, notify, tmp_dir, node_path=""):
+    def __init__(self, db, comfy, catalog, credits, outputs, notify, tmp_dir, node_path="", assets_dir=None):
         self.db = db
+        self.assets_dir = Path(assets_dir) if assets_dir else None   # where a result kept for reuse is copied as an asset
         self.node_path = node_path      # the Node.js program that renders motion graphics
         self.comfy = comfy
         self.catalog = catalog
@@ -364,12 +365,19 @@ class JobManager:
             await response.aclose()
 
     def _record(self, job, kind, target, ctx):
-        self.db.run(
+        item_id = self.db.run(
             "INSERT INTO generations (user_id, job_id, project_id, workflow, kind, name, filename, summary, settings, "
             "context, seconds, size, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (job["user_id"], job["id"], job.get("project_id"), job["workflow"], kind, job["name"], target.name,
              job["summary"], json.dumps(job["settings"]), json.dumps(ctx), round(time.time() - job["started"], 1),
              target.stat().st_size, time.time()))
+        # A step the agent planned as something to reuse ("keep": a character called Maya) goes into shared memory.
+        keep = (job.get("settings") or {}).get("keep")
+        if keep and item_id and self.assets_dir:
+            try:
+                memory.keep_made(self.db, self.assets_dir / str(job["user_id"]), job["user_id"], item_id, target, kind, keep)
+            except OSError:
+                pass   # the result is in the library either way; only its copy for reuse is missing
 
     # ------------------------------------------------------------ helpers
 

@@ -1,7 +1,7 @@
 // Settings: the signed-in user's own account. Installation settings are in the admin console.
 
 import { api } from '../api.js';
-import { el, field } from '../dom.js';
+import { creditsText, el, field } from '../dom.js';
 import { store } from '../store.js';
 
 export function render(view) {
@@ -13,7 +13,7 @@ export function render(view) {
     el('div', { class: 'narrow' },
       el('div', { class: 'card' },
         el('div', { class: 'card-head' }, el('h2', {}, 'Account')),
-        el('p', {}, store.user.name, el('span', { class: 'muted' }, ` · ${store.user.email} · ${store.user.role} · ${store.user.credits ?? 0} cr`)),
+        el('p', {}, store.user.name, el('span', { class: 'muted' }, ` · ${store.user.email} · ${store.user.role} · ${creditsText(store.user.credits)}`)),
         el('form', { onsubmit: async (e) => {
           e.preventDefault();
           try {

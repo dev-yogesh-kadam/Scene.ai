@@ -2,7 +2,7 @@
 // Everything else uses the workflow's own defaults; the Create page has the full form.
 
 import { api } from '../api.js';
-import { el } from '../dom.js';
+import { creditsText, el } from '../dom.js';
 import { subscribe, refreshJobs } from '../store.js';
 
 const KIND_LABEL = { video: 'Video', image: 'Image', audio: 'Audio' };
@@ -98,11 +98,11 @@ export function composer({ startFrom = () => null, projectId = () => null, onQue
       try {
         const quote = await api('/api/estimate', { method: 'POST', json: settings() });
         const short = quote.credits > quote.balance;
-        cost.textContent = quote.credits + ' cr';
+        cost.textContent = creditsText(quote.credits);
         button.disabled = short;
         form.estimate = quote.text;
         button.title = `${quote.text} · Generate (Ctrl or ⌘ + Enter)`;
-        note.textContent = short ? `You have ${quote.balance} cr. This needs ${quote.credits} cr.` : '';
+        note.textContent = short ? `You have ${creditsText(quote.balance)}. This needs ${creditsText(quote.credits)}.` : '';
       } catch (e) { showError(e); }
     }, 150);
   }

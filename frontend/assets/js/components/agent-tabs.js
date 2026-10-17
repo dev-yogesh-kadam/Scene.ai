@@ -19,7 +19,7 @@ function age(time) {
 }
 
 // onFocus(itemId): show an item on the canvas. locate(itemId): where the canvas has it, {shot, take}, or null.
-export function agentTabs({ projectId = () => 0, onJobs = () => {}, onMemory = null, onFocus = () => {}, locate = () => null } = {}) {
+export function agentTabs({ projectId = () => 0, onJobs = () => {}, onMemory = null, onFocus = () => {}, locate = () => null, selection = () => [], items = () => [], pickCanvas = null, onUploaded = () => {} } = {}) {
   let index = { tabs: [], open: [], active: null };   // what the "agent" board keeps for this project
   const panels = new Map();   // tab id -> its agentPanel, made when the tab is first shown
   const jobsOf = new Map();   // tab id -> the jobs its plans started
@@ -40,7 +40,7 @@ export function agentTabs({ projectId = () => 0, onJobs = () => {}, onMemory = n
 
   function panelOf(id) {
     if (!panels.has(id)) {
-      const made = agentPanel({ projectId, onMemory, session: id, onFocus, locate,
+      const made = agentPanel({ projectId, onMemory, session: id, onFocus, locate, selection, items, pickCanvas, onUploaded,
         onJobs: (ids) => { jobsOf.set(id, ids); onJobs([...new Set([...jobsOf.values()].flat())]); },
         onSaved: ({ spent, updated }) => {
           const t = tab(id);
@@ -198,6 +198,7 @@ export function agentTabs({ projectId = () => 0, onJobs = () => {}, onMemory = n
   return {
     node,
     attach: (item) => active() && active().attach(item),
+    selectionChanged: () => active() && active().selectionChanged(),
     reload: () => load(),
     redraw: () => active() && active().redraw(),   // the canvas moved things: where each result is is drawn again
     focus: () => active() && active().focus(),

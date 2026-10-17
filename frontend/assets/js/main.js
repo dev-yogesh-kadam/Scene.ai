@@ -1,7 +1,7 @@
 // Scene.ai front end entry: sign-in gate, app shell and page routing.
 
 import { api } from './api.js';
-import { el, icon, segmented, tabTitle } from './dom.js';
+import { creditMark, el, icon, segmented, tabTitle } from './dom.js';
 import { store, subscribe, startLive, stopLive, refreshJobs } from './store.js';
 import { renderAuth } from './pages/auth.js';
 import { renderLanding } from './pages/landing.js';
@@ -77,14 +77,15 @@ function showApp() {
   const working = el('a', { class: 'working hidden', href: '#/queue', title: 'Open the queue' });
   const dot = el('span', { class: 'dot' });
   const server = el('span', {}, 'Checking render server…');
-  const credits = el('div', { class: 'credits', title: 'Credits pay for generations. An admin can add more.' });
+  // The balance sits at the top right of every page (on the canvas, in its own tool bar at the top right).
+  const credits = el('div', { class: 'credit-badge', title: 'Credits pay for generations. An admin can add more.' });
   // Everything the sidebar used to hold is in one menu that opens from the logo at the top left: the pages, the queue, the
   // credits, the render server, settings, the theme and signing out. The pages get the whole width of the screen.
   const menu = el('div', { class: 'app-menu hidden', role: 'menu', 'aria-label': 'Scene.ai' });
   const badge = el('span', { class: 'app-menu-badge hidden', 'aria-hidden': 'true' });
   const opener = el('button', { type: 'button', class: 'app-menu-button', 'aria-haspopup': 'menu', 'aria-expanded': 'false',
     title: 'Menu', 'aria-label': 'Open the menu', onclick: (e) => { e.stopPropagation(); showMenu(menu.classList.contains('hidden')); } },
-    el('img', { src: '/assets/img/logo.svg', alt: '' }), icon('menu'), badge);
+    el('img', { src: '/assets/img/logo.svg?v=clapper', alt: '' }), icon('menu'), badge);
   const closeMenu = (e) => {
     if (e.type === 'keydown' ? e.key === 'Escape' : !e.composedPath().includes(menu)) { showMenu(false); if (e.type === 'keydown') opener.focus(); }
   };
@@ -102,7 +103,7 @@ function showApp() {
   // Outside the canvas the sidebar is shown in full, down the left. In the canvas it folds into the menu above, so the
   // stage gets the whole width. Narrow screens always use the menu.
   const sidebar = el('aside', { class: 'sidebar', 'aria-label': 'Scene.ai' });
-  const shell = el('div', { class: 'shell' }, el('div', { class: 'app-menu-wrap' }, opener, menu), sidebar, view);
+  const shell = el('div', { class: 'shell' }, el('div', { class: 'app-menu-wrap' }, opener, menu), sidebar, view, credits);
   root.replaceChildren(shell);
   const narrow = window.matchMedia('(max-width: 860px)');
 
@@ -130,15 +131,15 @@ function showApp() {
       nav,
       el('div', { class: 'menu-sep' }),
       working,
-      credits,
       // Whether the render server answers is the admin's business; other users are not shown it.
       store.user.role === 'admin' && el('div', { class: 'server' }, dot, server),
       el('div', { class: 'menu-sep' }),
       ...PAGES.filter((p) => p.menu && (!p.adminOnly || store.user.role === 'admin')).map((p) => link(p)),
       el('div', { class: 'menu-row' }, 'Theme', segmented(THEMES, localStorage.getItem('scene.theme') || 'system', (theme) => { applyTheme(theme); drawNav(); })),
       el('button', { role: 'menuitem', class: 'menu-item', onclick: signOut }, icon('logout'), 'Sign out'),
-    ];
+    ].filter(Boolean);   // a block left out (the server line, for a non-admin) is false, which would show as "false"
     shell.classList.toggle('compact', compact);
+    shell.classList.toggle('on-canvas', location.hash === '#/canvas');   // the canvas shows the balance in its own tool bar
     shell.classList.toggle('railed', !compact);
     if (compact) {
       sidebar.replaceChildren();
@@ -146,7 +147,7 @@ function showApp() {
     } else {
       showMenu(false);   // the dropdown never stays open once the full sidebar is showing
       sidebar.replaceChildren(
-        el('a', { class: 'sidebar-brand', href: '#/home', 'aria-label': 'Home' }, el('img', { src: '/assets/img/logo.svg', alt: '' }), el('b', {}, 'Scene.ai')),
+        el('a', { class: 'sidebar-brand', href: '#/home', 'aria-label': 'Home' }, el('img', { src: '/assets/img/logo.svg?v=clapper', alt: '' }), el('b', {}, 'Scene.ai')),
         ...content());
     }
   };
@@ -154,7 +155,7 @@ function showApp() {
     dot.className = 'dot ' + (store.online == null ? '' : store.online ? 'online' : 'offline');
     server.textContent = store.online == null ? 'Checking render server…' : store.online ? 'Render server online' : 'Render server offline';
   };
-  const drawCredits = () => credits.replaceChildren(el('b', {}, Number(store.user.credits ?? 0).toLocaleString()), 'cr');
+  const drawCredits = () => credits.replaceChildren(creditMark(''), el('b', {}, Number(store.user.credits ?? 0).toLocaleString()), Number(store.user.credits) === 1 ? 'credit' : 'credits');
   const route = () => {
     const target = PAGES.find((p) => p.path === location.hash);
     if (!target) { location.hash = LANDING; return; }

@@ -5,6 +5,7 @@ import { api } from '../api.js';
 import { el, icon, segmented } from '../dom.js';
 import { store, subscribe, refreshJobs } from '../store.js';
 import { pickAsset } from './assets.js';
+import { addMenu } from './agent.js';
 import { motionForm, sequenceForm } from './motion.js';
 
 const ACCEPT = { image: 'image/*', video: 'video/*', audio: 'audio/*,video/*' };
@@ -22,7 +23,10 @@ const short = (label) => label.split(' (')[0];   // "First frame (the video star
 
 // startFrom(): the item selected on the canvas, or null. An upscale takes it; a title laid over a video goes on it.
 // projectId(): the project new work is filed under, or null.
-export function quickActions({ startFrom = () => null, projectId = () => null } = {}) {
+// What a reference slot takes, in a word, for its + menu.
+const KIND_WORD = { image: 'Image', video: 'Video', audio: 'Audio' };
+
+export function quickActions({ startFrom = () => null, projectId = () => null, pick = null } = {}) {
   const form = { catalog: [], wf: null, values: {}, options: {}, resolution: null, orientation: null,
     kind: 'video', refs: {}, allRefs: false };   // refs: slot id -> {file}, {assetId} or {itemId} (a library item, as the cast is), plus {name, url}
   let page = 'home';
@@ -271,6 +275,20 @@ promptField, texts, note),
     if (upscaled()) refreshEstimate();   // an upscale is priced by the video in its slot
   }
 
+  // A frame dragged from the canvas onto a slot: the item goes in as it is, a video in a picture slot as its last
+  // frame, a video in a sound slot as its sound. False when the slot can't take it.
+  function dropItem(slotId, item) {
+    const slot = form.wf && form.wf.refs.find((r) => r.id === slotId);
+    if (!slot || !item) return false;
+    const fits = item.kind === slot.kind || (slot.kind === 'image' && item.kind === 'video') || (slot.kind === 'audio' && item.kind === 'video');
+    if (!fits) return false;
+    const picture = slot.kind === 'image' && item.kind === 'video';
+    setRef(slot, { itemId: item.id, name: picture ? 'End of ' + item.name : item.name, takes: slot.kind,
+      shown: picture ? 'image' : item.kind === 'video' && slot.kind === 'audio' ? 'audio' : item.kind,
+      url: picture ? `/api/library/${item.id}/poster` : `/api/library/${item.id}/file` });
+    return true;
+  }
+
   async function chooseSaved(slot) {
     const asset = await pickAsset(slot.kind);
     if (asset) setRef(slot, { assetId: asset.id, name: asset.name, url: `/api/assets/${asset.id}/file` });
@@ -287,16 +305,24 @@ promptField, texts, note),
       : el('span', {}, '♪');
     return el('div', { class: 'slot' },
       el('div', { class: 'slot-label', title: slot.label }, short(slot.label) + (slot.optional ? '' : ' *')),
-      el('button', { type: 'button', class: 'slot-box' + (current ? ' filled' : '') + (current && current.cast ? ' cast' : ''),
-        title: current ? current.name + (current.cast ? ', from the project\'s cast' : '') : 'Click to choose a file, or drop one here',
-        onclick: () => file.click(),
+      el('div', { class: 'slot-frame' },
+      el('button', { type: 'button', class: 'slot-box' + (current ? ' filled' : '') + (current && current.cast ? ' cast' : ''), 'data-slot': slot.id,
+        title: current ? current.name + (current.cast ? ', from the project\'s cast' : '') : 'Add a file: upload, from your saved assets or from the canvas', 'aria-haspopup': 'menu',
+        // Where the file comes from: the computer, the saved assets, or what is selected on the canvas.
+        onclick: (e) => addMenu(e.currentTarget, [
+          { icon: 'upload', label: 'Upload', hint: KIND_WORD[slot.kind] || 'File', run: () => file.click() },
+          { icon: 'image', label: 'From library', hint: 'Saved assets', run: () => chooseSaved(slot) },
+          ...(pick ? [{ icon: 'target', label: 'From canvas', hint: 'Selected item', run: () => pick((list) => {
+            if (!dropItem(slot.id, list[0])) showError(new Error(`${list[0].name} can't go in "${short(slot.label)}": it takes another kind of file.`));
+          }) }] : []),
+        ]),
         ondragover: (e) => { e.preventDefault(); e.currentTarget.classList.add('over'); },
         ondragleave: (e) => e.currentTarget.classList.remove('over'),
         ondrop: (e) => { e.preventDefault(); e.currentTarget.classList.remove('over'); if (e.dataTransfer.files[0]) setRef(slot, e.dataTransfer.files[0]); },
       }, preview),
-      current
-        ? el('button', { type: 'button', class: 'btn small quiet', onclick: () => setRef(slot, null) }, 'Remove')
-        : el('button', { type: 'button', class: 'btn small quiet', title: 'Pick one of your saved assets', onclick: () => chooseSaved(slot) }, 'Saved'),
+      // A filled slot is emptied with the × in its corner.
+      current && el('button', { type: 'button', class: 'slot-clear', title: 'Remove', 'aria-label': `Remove ${current.name}`,
+        onclick: () => setRef(slot, null) }, '×')),
       file);
   }
 
@@ -385,6 +411,7 @@ promptField, texts, note),
     node,
     // refresh(): call when the selection changes (an upscale takes the selected video; a motion overlay goes on it).
     recast,   // the project's cast changed
+    dropItem,   // dropItem(slotId, item): a frame dragged from the canvas onto a reference slot
     refresh: () => {
       if (page === 'motion') motionPage.refresh();
       else if (form.wf && page !== 'home') draw();

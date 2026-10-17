@@ -15,6 +15,7 @@ import base64
 import hashlib
 import json
 import re
+import shutil
 import time
 
 from . import cast, media, review
@@ -66,6 +67,46 @@ def keep_upload(db, folder, user_id, project, filename, data, kind, label):
     return db.run("INSERT INTO assets (user_id, name, tag, kind, filename, size, created, origin, project_id) "
                   "VALUES (?, ?, ?, ?, ?, ?, ?, 'upload', ?)",
                   (user_id, name, tag_for_slot(label), kind, stored, len(data), time.time(), project or None))
+
+
+# ---------------------------------------------------------------- what the agent makes for reuse
+
+# What the agent may say a step's result is kept as, and the tag that gets. Only a voice is a sound; the rest are pictures.
+KEEP_AS = {"character": "character", "outfit": "outfit", "location": "background", "prop": "prop", "voice": "voice", "style": "style"}
+
+
+def clean_keep(keep, kind=None):
+    """{"tag", "name"} of a step's result to keep in shared memory, or None. kind: what the step makes, when known."""
+    if not isinstance(keep, dict):
+        return None
+    tag = KEEP_AS.get(str(keep.get("as") or "").strip().lower()) or (keep.get("tag") if keep.get("tag") in KEEP_AS.values() else None)
+    name = " ".join(str(keep.get("name") or "").split())[:60]
+    if not tag or not name or (kind and kind != ("audio" if tag == "voice" else "image")):
+        return None
+    return {"tag": tag, "name": name}
+
+
+def keep_made(db, folder, user_id, item_id, source, kind, keep):
+    """Keep what a step made as a saved asset under the name it was planned with ("Maya", a character), so every agent
+    tab, every project and the Shared memory tab know it. The file is copied, so deleting either leaves the other.
+    A retake under the same name and type replaces the asset the agent made before. Returns the asset id."""
+    keep = clean_keep(keep, kind)
+    if not keep:
+        return None
+    stored = "made_{}_{}".format(item_id, safe_name(source.name))
+    folder.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, folder / stored)
+    size = (folder / stored).stat().st_size
+    before = db.one("SELECT id, filename FROM assets WHERE user_id = ? AND tag = ? AND lower(name) = lower(?) AND made_from IS NOT NULL",
+                    (user_id, keep["tag"], keep["name"]))
+    if before:
+        db.run("UPDATE assets SET kind = ?, filename = ?, size = ?, made_from = ?, about = '', created = ? WHERE id = ?",
+               (kind, stored, size, item_id, time.time(), before["id"]))
+        if before["filename"] != stored:
+            (folder / before["filename"]).unlink(missing_ok=True)
+        return before["id"]
+    return db.run("INSERT INTO assets (user_id, name, tag, kind, filename, size, created, origin, made_from) "
+                  "VALUES (?, ?, ?, ?, ?, ?, ?, 'saved', ?)", (user_id, keep["name"], keep["tag"], kind, stored, size, time.time(), item_id))
 
 
 # ---------------------------------------------------------------- the book and the panel

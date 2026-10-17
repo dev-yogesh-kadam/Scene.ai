@@ -189,6 +189,8 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     parent = settings.get("parent")
     owned = isinstance(parent, int) and state.db.one("SELECT 1 FROM generations WHERE id = ? AND user_id = ?", (parent, user["id"]))
     settings["parent"] = parent if owned else None
+    # A result the agent planned as something to reuse is kept in shared memory when it is done: only a type and a name.
+    settings["keep"] = memory.clean_keep(settings.get("keep"), wf["id"].split("/", 1)[0])
 
     # The length of a video the user brought to an upscaler, measured here: it is what the upscale is charged by.
     videos = {r["id"] for r in schema["refs"] if r["kind"] == "video"} if wf["id"].startswith("upscaler/") else set()

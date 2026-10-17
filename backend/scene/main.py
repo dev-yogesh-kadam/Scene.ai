@@ -113,7 +113,8 @@ def create_app(settings=None):
 
     @asynccontextmanager
     async def lifespan(app):
-        app.state.jobs = JobManager(db, comfy, catalog, credits, app.state.outputs, notify, storage / "tmp", settings.node_path)
+        app.state.jobs = JobManager(db, comfy, catalog, credits, app.state.outputs, notify, storage / "tmp", settings.node_path,
+                                    storage / "assets")
         workers = [asyncio.create_task(app.state.jobs.run_forever()), asyncio.create_task(app.state.jobs.run_forever(local=True))]
         if settings.backup_keep > 0:
             copies = (db, app.state.backup_dir, settings.config_file, settings.backup_keep)

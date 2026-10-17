@@ -3,16 +3,25 @@
 // The agent only proposes. Nothing is queued or charged until Approve is pressed (or the permission says to go on).
 
 import { api, apiLines } from '../api.js';
-import { el, icon, still } from '../dom.js';
+import { creditMark, el, icon, phaseOf, reel, still } from '../dom.js';
 import { store, subscribe, refreshJobs } from '../store.js';
 import { openViewer } from './media.js';
+import { pickLibraryItem } from './assets.js';
 import { chip, clock, fold, markdown, span, workRows } from './conversation.js';
 
-const KEPT = 12;   // how many past plans are remembered per project
-const RECALLED = 6;   // how many earlier turns are sent along, so the agent can follow the conversation
+const KEPT = 60;   // how many turns an agent tab keeps
+const RECALLED = 40;   // how many earlier turns are sent along (the server keeps the newest that fit its budget)
 // A message that only says to go ahead: under a plan that waits for approval it approves it.
 const GO = /^\W*(approve|approved|start|go|go ahead|yes|ok|okay|proceed|generate|generate it|make it|do it|run it|confirm)\W*$/i;
 const REVIEW_WITHIN = 24 * 3600 * 1000;   // a shot finished longer ago than this is not reviewed when the panel opens
+// The studio's default model changed (to a local one, 17 October): a model picked before that is forgotten once, so
+// everyone starts on the new default and can still pick another.
+try {
+  if (localStorage.getItem('scene.agent.model.v') !== '2') {
+    localStorage.removeItem('scene.agent.model');
+    localStorage.setItem('scene.agent.model.v', '2');
+  }
+} catch { /* storage may be blocked: the server's default is used anyway */ }
 const LONG_REPLY = 700;   // a reply longer than this is folded to a few lines, with Show more
 const MARK = { queued: 'Waiting', running: 'Running', done: 'Done', failed: 'Failed', cancelled: 'Cancelled', waiting: 'Waits for the step before' };
 // Whether a plan runs as soon as it arrives or waits for Approve. The choice is this browser's, kept in localStorage.
@@ -50,6 +59,16 @@ export function popover(anchor, content, className = '') {
   Object.assign(box.style, { left: left + 'px', top: (below ? at.bottom + 6 : Math.max(8, at.top - room.height - 6)) + 'px' });
   document.addEventListener('pointerdown', outside, true);
   document.addEventListener('keydown', escape, true);
+  return box;
+}
+
+// The "+" menu of a message box or a reference slot: where to take a file from. rows: [{icon, label, hint, run}].
+export function addMenu(anchor, rows) {
+  const box = popover(anchor, rows.map((row) => el('button', { type: 'button', class: 'pop-item add-menu-item', role: 'menuitem',
+    onclick: () => { box.close(); row.run(); } }, icon(row.icon), el('span', { class: 'grow' }, row.label), row.hint && el('span', { class: 'add-menu-hint' }, row.hint))),
+  'add-menu');
+  const first = box.querySelector('button');
+  if (first) first.focus();
   return box;
 }
 
@@ -103,11 +122,12 @@ export function spendCard(anchor, spent, { above = false } = {}) {
 // locate(itemId): where the canvas has it, {shot, take}, or null.
 // The page calls attach(item) when a frame is clicked: the item goes into the message as a chip, where the cursor is.
 export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = null, session = null, onSaved = () => {},
-  onFocus = () => {}, locate = () => null } = {}) {
+  onFocus = () => {}, locate = () => null, selection = () => [], items = () => [], pickCanvas = null, onUploaded = () => {} } = {}) {
   let runs = [];       // the turns: {instruction, parts, reply, thought, activity, chips, steps, total, state, work, ui}
   let busy = false;       // a message is with the model
   let pending = null;     // the message being answered: {instruction, parts, stop, events, status, started}
   let working = false;    // an approved plan is being carried out, which can take minutes when steps wait for each other
+  let noteFocus = null;   // the plan (by its time) whose "what to change" box has the cursor, kept across redraws
   let deferred = false;   // a redraw waits until a box being typed in is left
 
   const status = el('span', { class: 'agent-status slate-text' }, 'checking…');   // the model's name, or why it is offline
@@ -288,6 +308,71 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     rememberCaret();
   }
 
+  // ------------------------------------------------------------ @name: attach a frame of the project by its name
+
+  let mention = null;   // while "@name" is being typed: {menu, rows, at, node, start, end, query}
+  // The "@words" just before the cursor, or null.
+  function mentionQuery() {
+    const sel = window.getSelection();
+    if (!sel.rangeCount || !sel.isCollapsed) return null;
+    const { startContainer: node, startOffset: offset } = sel.getRangeAt(0);
+    if (node.nodeType !== Node.TEXT_NODE || !input.contains(node)) return null;
+    const m = /(?:^|\s)@([^\s@]{0,40})$/.exec(node.textContent.slice(0, offset));
+    return m ? { node, start: offset - m[1].length - 1, end: offset, query: m[1].toLowerCase() } : null;
+  }
+  // The project's frames that fit what was typed, newest first, leaving out what is attached already.
+  function mentionRows(query) {
+    const taken = new Set(chipsIn().map((c) => Number(c.dataset.id)));
+    return [...(items() || [])].reverse().filter((i) => !taken.has(i.id) && (!query || i.name.toLowerCase().includes(query))).slice(0, 8);
+  }
+  function drawMention() {
+    const list = mention.rows.length ? mention.rows.map((item, idx) => el('button', { type: 'button', role: 'option',
+      class: 'skillmenu-item mention-item' + (idx === mention.at ? ' on' : ''), 'aria-selected': String(idx === mention.at),
+      onmouseenter: () => { mention.at = idx; drawMention(); },
+      onmousedown: (e) => { e.preventDefault(); pickMention(item); } },
+      el('span', { class: 'attach-thumb mention-thumb' }, still(`/api/library/${item.id}/file`, item.kind)),
+      el('span', { class: 'skillmenu-text' }, el('b', {}, item.name), el('span', { class: 'skillmenu-desc' }, item.kind))))
+      : [el('div', { class: 'skillmenu-empty muted small' }, 'No frame by that name in this project.')];
+    mention.menu.replaceChildren(el('div', { class: 'skillmenu-label' }, 'Attach a frame'), ...list);
+  }
+  const mentionOutside = (e) => { if (mention && !mention.menu.contains(e.target) && !input.contains(e.target)) hideMention(); };
+  function onMention() {
+    const found = mentionQuery();
+    if (!found) { hideMention(); return; }
+    if (!mention) {
+      mention = { menu: el('div', { class: 'agent-skillmenu agent-mentionmenu', role: 'listbox' }), at: 0 };
+      composer.prepend(mention.menu);
+      document.addEventListener('pointerdown', mentionOutside, true);
+    }
+    const rows = mentionRows(found.query);
+    Object.assign(mention, found, { rows, at: Math.min(mention.at, Math.max(0, rows.length - 1)) });
+    drawMention();
+  }
+  function hideMention() {
+    if (!mention) return;
+    mention.menu.remove();
+    mention = null;
+    document.removeEventListener('pointerdown', mentionOutside, true);
+  }
+  // The "@words" give way to the frame's chip, at the same place.
+  function pickMention(item) {
+    const range = document.createRange();
+    range.setStart(mention.node, mention.start);
+    range.setEnd(mention.node, mention.end);
+    range.deleteContents();
+    caret = range;
+    hideMention();
+    attach(item);
+    drawSuggest();
+  }
+  function mentionKey(e) {   // arrows, Enter/Tab, Escape while the list is open; true when it handled the key
+    if (e.key === 'ArrowDown') { e.preventDefault(); mention.at = Math.min(mention.rows.length - 1, mention.at + 1); drawMention(); return true; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); mention.at = Math.max(0, mention.at - 1); drawMention(); return true; }
+    if ((e.key === 'Enter' || e.key === 'Tab') && mention.rows[mention.at]) { e.preventDefault(); pickMention(mention.rows[mention.at]); return true; }
+    if (e.key === 'Escape') { e.preventDefault(); hideMention(); return true; }
+    return false;
+  }
+
   const log = el('div', { class: 'agent-log' });
   // A button to the newest message, while the conversation is scrolled up.
   const toEnd = el('button', { type: 'button', class: 'agent-to-end hidden', title: 'Go to the newest', 'aria-label': 'Go to the newest message',
@@ -299,14 +384,15 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
 
   // The message is typed text with chips in it, one per attached item, so the words around a chip say what it is for.
   const input = el('div', { class: 'agent-input', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Message',
-    'data-placeholder': 'Ask the agent, or tell it what to make. Click a frame to attach it.',
+    'data-placeholder': 'Ask the agent, or tell it what to make. Use + or type @ to attach a file.',
     onkeydown: (e) => {
+      if (mention && mentionKey(e)) return;   // while typing @name, the keys drive the list of frames
       if (skillMode === 'slash' && skillKey(e)) return;   // while typing /name, the keys drive the inline menu
       if (e.key !== 'Enter') return;
       e.preventDefault();
       if (e.shiftKey) document.execCommand('insertLineBreak'); else send();
     },
-    oninput: () => onInputChanged(),
+    oninput: () => { onInputChanged(); onMention(); },
     onpaste: (e) => {   // only the words of what is pasted, never its markup
       e.preventDefault();
       document.execCommand('insertText', false, (e.clipboardData || window.clipboardData).getData('text/plain'));
@@ -323,13 +409,41 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     sendButton.replaceChildren(pending ? el('span', { class: 'stop-mark' }) : icon('arrowup'));
     sendButton.title = sendButton.ariaLabel = pending ? 'Stop (Esc)' : 'Send (Enter)';
     sendButton.classList.toggle('stopping', !!pending);
-    input.dataset.placeholder = pending ? 'Waiting for response…' : 'Ask the agent, or tell it what to make. Click a frame to attach it.';
+    input.dataset.placeholder = pending ? 'Waiting for response…' : 'Ask the agent, or tell it what to make. Use + or type @ to attach a file.';
   };
   drawSend();
-  const composer = el('div', { class: 'agent-composer', onclick: (e) => { if (e.target === e.currentTarget) input.focus(); } }, input,
-    el('div', { class: 'agent-composer-bar' }, el('span', { style: 'flex:1' }), status, skillsButton, modelPicker, permButton, sendButton));
+  // What is selected on the canvas, offered as one suggestion: it is not part of the message until it is clicked.
+  const suggest = el('button', { type: 'button', class: 'agent-suggest hidden', onclick: () => {
+    for (const item of offered()) attach(item);
+    drawSuggest();
+  } });
+  // "+": attach a file from the computer (it joins the project's library and canvas), from the canvas, or from the library.
+  const upload = el('input', { type: 'file', accept: 'image/*,video/*,audio/*', multiple: true, hidden: true,
+    onchange: async (e) => {
+      const files = [...e.target.files];
+      e.target.value = '';
+      for (const file of files) {
+        const data = new FormData();
+        data.append('file', file, file.name);
+        data.append('project_id', projectId() || '');
+        try { attach(await api('/api/library/upload', { method: 'POST', body: data })); }
+        catch (error) { alert(`${file.name}: ${error.message}`); }
+      }
+      if (files.length) { onUploaded(); drawSuggest(); input.focus(); }
+    } });
+  const addButton = el('button', { type: 'button', class: 'icon-btn agent-add', title: 'Attach', 'aria-label': 'Attach', 'aria-haspopup': 'menu',
+    onclick: (e) => addMenu(e.currentTarget, [
+      { icon: 'upload', label: 'Upload media or files', run: () => upload.click() },
+      ...(pickCanvas ? [{ icon: 'grid', label: 'Select from canvas', run: () => pickCanvas((list) => { list.forEach(attach); drawSuggest(); input.focus(); }) }] : []),
+      { icon: 'book', label: 'From library', run: async () => { const item = await pickLibraryItem(); if (item) { attach(item); drawSuggest(); input.focus(); } } },
+    ]) }, icon('plus'));
+  const composer = el('div', { class: 'agent-composer', onclick: (e) => { if (e.target === e.currentTarget) input.focus(); } }, input, upload,
+    el('div', { class: 'agent-composer-bar' }, addButton, suggest, el('span', { style: 'flex:1' }), status, skillsButton, modelPicker, permButton, sendButton));
+  // The approval bar of the newest plan waiting for approval sits here, on top of the message box, and does not
+  // scroll with the conversation.
+  const dock = el('div', { class: 'agent-dock hidden' });
   const node = el('div', { class: 'agent-panel' },
-    el('div', { class: 'agent-log-wrap' }, log, toEnd), composer);
+    el('div', { class: 'agent-log-wrap' }, log, toEnd), dock, composer);
   node.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pending) pending.stop(); });
 
   const board = (kind) => `/api/boards/${kind}?project=${projectId()}`;
@@ -348,6 +462,18 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
 
   const chipsIn = () => [...input.querySelectorAll('.attach')];
 
+  // The selected items that are not in the message yet.
+  const offered = () => (selection() || []).filter((item) => !chipsIn().some((c) => Number(c.dataset.id) === item.id)).slice(0, 8);
+  function drawSuggest() {
+    const list = offered();
+    suggest.classList.toggle('hidden', !list.length || busy);
+    if (!list.length) return;
+    suggest.title = 'Add to the message: ' + list.map((i) => i.name).join(', ');
+    suggest.replaceChildren(icon('plus'),
+      el('span', { class: 'agent-suggest-thumbs' }, list.slice(0, 3).map((item) => el('span', { class: 'attach-thumb' }, still(`/api/library/${item.id}/file`, item.kind)))),
+      el('span', {}, list.length === 1 ? `Use “${list[0].name}”` : `Use ${list.length} selected`));
+  }
+
   // Put an item into the message as a chip, where the cursor was. An item that is already there is not added twice.
   function attach(item) {
     if (chipsIn().some((c) => Number(c.dataset.id) === item.id)) return;
@@ -355,7 +481,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       el('span', { class: 'attach-thumb' }, still(`/api/library/${item.id}/file`, item.kind)),
       el('span', { class: 'attach-name' }, item.name),
       el('button', { type: 'button', class: 'attach-drop', title: 'Remove', 'aria-label': `Remove ${item.name}`, tabindex: '-1',
-        onclick: () => { tag.remove(); input.focus(); } }, '×'));
+        onclick: () => { tag.remove(); input.focus(); drawSuggest(); } }, '×'));
     const range = caret && input.contains(caret.startContainer) ? caret : null;
     const space = document.createTextNode(' ');
     if (range) {
@@ -476,7 +602,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   function stepPrompt(run, step) {
     const editable = run.state === 'proposed' && step.settings && !step.updating;
     if (step.editing) {
-      const text = el('textarea', { class: 'agent-prompt-edit', rows: 6, 'aria-label': 'Prompt' }, step.prompt);
+      const text = el('textarea', { class: 'agent-prompt-edit', rows: Math.min(18, Math.max(8, String(step.prompt).split('\n').length + 3)), 'aria-label': 'Prompt' }, step.prompt);
       setTimeout(() => text.focus());
       return el('div', { class: 'agent-prompt' }, text, el('div', { class: 'row' }, el('span', { style: 'flex:1' }),
         el('button', { class: 'btn small quiet', onclick: () => { step.editing = false; drawLog(); } }, 'Cancel'),
@@ -486,13 +612,27 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
           else drawLog();
         } }, 'Save')));
     }
-    return el('div', { class: 'agent-prompt' },
-      el('p', { class: 'small muted' + (step.open ? '' : ' clamp') }, step.prompt),
+    return el('div', { class: 'agent-prompt' + (step.open ? ' open' : '') },
+      step.open ? promptSections(step.prompt) : el('p', { class: 'small muted clamp' }, step.prompt),
       step.prompt && el('span', { class: 'agent-prompt-tools' },
         editable && el('button', { type: 'button', class: 'icon-btn small', title: 'Edit the prompt', 'aria-label': 'Edit the prompt',
           onclick: () => { step.editing = true; drawLog(); } }, icon('pencil')),
         el('button', { type: 'button', class: 'icon-btn small', title: step.open ? 'Show less' : 'Show the whole prompt',
           'aria-label': step.open ? 'Show less' : 'Show the whole prompt', onclick: () => { step.open = !step.open; drawLog(); } }, icon('expand'))));
+  }
+
+  // A whole prompt, opened: each part of its structure (SCENE CONTEXT, REFERENCES, ACTION, CAMERA…) on its own, its
+  // heading picked out. A prompt that does not follow the structure is shown as it is.
+  function promptSections(prompt) {
+    const parts = [];
+    for (const line of String(prompt || '').split('\n')) {
+      const head = line.match(/^\s*([A-Z][A-Z &/]{2,40}):\s*(.*)$/);
+      if (head) parts.push({ head: head[1], text: head[2] });
+      else if (parts.length) parts[parts.length - 1].text += (parts[parts.length - 1].text ? '\n' : '') + line;
+      else parts.push({ head: '', text: line });
+    }
+    return el('div', { class: 'prompt-sections' }, parts.filter((p) => p.head || p.text.trim()).map((p) =>
+      el('div', { class: 'prompt-section' }, p.head && el('b', {}, p.head), el('p', {}, p.text.trim()))));
   }
 
   // The settings of a step as short words: model, shape, size, length, clips, quality.
@@ -504,13 +644,66 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
         step.settings.options && step.settings.options.quality && step.settings.options.quality + ' quality']
       : [step.workflow_title, step.facts]).filter(Boolean);
   };
-  const linksOf = (step) => [step.start && 'starts on ' + step.start.name, step.after && `continues step ${step.after.step + 1}`,
-    ...(step.uses || []).map((use) => `${use.name} as ${use.label.toLowerCase().split(' (')[0]}${use.cast ? ' (cast)' : ''}`)].filter(Boolean);
+  const linksOf = (step) => [step.start && 'starts on ' + step.start.name, step.after && `continues step ${step.after.step + 1}`].filter(Boolean);
+
+  // The assets a step uses, as small pictures with their names and the slot each one fills, so the user sees before
+  // approving which character, place or voice goes into the shot. The picture it starts on comes first.
+  function usesOf(step) {
+    const shown = [
+      step.start && { url: `/api/library/${step.start.id}/file`, kind: 'image', name: step.start.name, role: 'first frame' },
+      ...(step.uses || []).map((use) => ({ url: use.asset ? `/api/assets/${use.asset}/file` : `/api/library/${use.id}/file`,
+        kind: use.kind || 'image', name: use.name, role: use.label.toLowerCase().split(' (')[0] + (use.cast ? ' · cast' : ''), saved: !!use.asset })),
+    ].filter(Boolean);
+    if (!shown.length) return null;
+    return el('div', { class: 'step-uses' }, shown.map((u) => el('div', { class: 'step-use', 'aria-label': `${u.name}: ${u.role}`,
+      onmouseenter: (e) => previewUse(e.currentTarget, u), onmouseleave: hidePreview },
+      el('span', { class: 'step-use-thumb' }, u.kind === 'image' ? still(u.url, 'image', u.name) : icon(u.kind === 'audio' ? 'audio' : 'video')),
+      el('span', { class: 'step-use-words' }, el('b', {}, u.name), el('span', {}, u.role)))));
+  }
+
+  // A bigger look at an asset a step uses, while the pointer is on it. It is fixed to the page, so the scrolling log
+  // does not cut it off, and it goes when the chip is gone (the log is drawn again while jobs move).
+  let preview = null;
+  function hidePreview() {
+    if (!preview) return;
+    preview.node.remove();
+    window.removeEventListener('pointermove', preview.check);
+    preview = null;
+  }
+  function previewUse(anchor, u) {
+    hidePreview();
+    const media = u.kind === 'image' ? el('img', { src: u.url, alt: u.name })
+      : u.kind === 'audio' ? el('audio', { src: u.url, controls: true, preload: 'none' })
+        : el('img', { src: u.saved ? u.url : u.url.replace(/\/file$/, '/poster'), alt: u.name });
+    const node = el('div', { class: 'use-preview', role: 'tooltip' }, media, el('div', { class: 'use-preview-words' }, el('b', {}, u.name), el('span', {}, u.role)));
+    document.body.append(node);
+    const place = () => {
+      const r = anchor.getBoundingClientRect();
+      const w = node.offsetWidth, h = node.offsetHeight;
+      const left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left));
+      const top = r.top - h - 8 >= 8 ? r.top - h - 8 : Math.min(window.innerHeight - h - 8, r.bottom + 8);
+      node.style.left = left + 'px';
+      node.style.top = top + 'px';
+    };
+    place();
+    if (media.tagName === 'IMG' && !media.complete) media.addEventListener('load', place, { once: true });
+    const check = () => { if (!anchor.isConnected || !anchor.matches(':hover')) hidePreview(); };
+    window.addEventListener('pointermove', check);
+    preview = { node, check };
+  }
+
+  // A step whose result is kept in shared memory under a name, for every agent tab and project to use.
+  const keepOf = (step) => step.keep && el('div', { class: 'step-keep' }, icon('memory'),
+    `Kept in shared memory as ${step.keep.tag === 'background' ? 'location' : step.keep.tag} “${step.keep.name}”`);
+
+  // An amount of credits on an approval card: the Scene token and the number, in place of "cr".
+  const tokens = (n) => el('span', { class: 'token-amount', title: `${n} credits` },
+    creditMark('credits'), String(n));
 
   // One step of a plan waiting for approval (or one that was turned down): what it makes, its settings and its prompt.
   function drawStep(run, step) {
     const proposed = run.state === 'proposed';
-    const chipState = step.updating ? ['running', 'Updating'] : step.error ? ['failed', 'Not changed'] : ['price', step.credits ? step.credits + ' cr' : 'Free'];
+    const chipState = step.updating ? ['running', 'Updating'] : step.error ? ['failed', 'Not changed'] : ['price', step.credits ? tokens(step.credits) : 'Free'];
     const glyph = step.motion ? 'title' : step.sound ? 'audio' : KIND_ICONS[step.kind] || 'video';
     const editable = proposed && step.menu && !step.editing;
     const links = linksOf(step);
@@ -519,9 +712,12 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
         el('div', { class: 'step-title' },
           el('b', {}, step.name),
           !editable && el('div', { class: 'step-tags' }, tagsOf(step).map((t) => el('span', {}, t)))),
-        el('span', { class: 'step-chip ' + chipState[0] }, chipState[0] === 'running' && el('i', { class: 'cell-mark stepping' }), chipState[1])),
+        // The price is shown once, in the Approve button; the corner only says when a step is being changed or could not be.
+        chipState[0] !== 'price' && el('span', { class: 'step-chip ' + chipState[0] }, chipState[0] === 'running' && el('i', { class: 'cell-mark stepping' }), chipState[1])),
       editable && stepSettings(run, step),
+      usesOf(step),
       links.length > 0 && el('div', { class: 'step-links' }, links.join(' · ')),
+      keepOf(step),
       stepPrompt(run, step),
       // What the agent decided that the user did not say, and why: the length, the shape, the quality.
       step.why && el('div', { class: 'step-why' }, step.why),
@@ -538,7 +734,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     if (job) {
       if (job.status === 'running') {
         const share = job.steps ? (Math.max(job.clip, 1) - 1 + job.step / job.steps) / Math.max(job.clips, 1) : 0;
-        return { state: 'running', share, text: job.steps ? 'Making' : 'Starting' };
+        return { state: 'running', share, text: job.steps ? phaseOf(share) : 'Setting up the shot' };
       }
       if (job.status === 'queued') return { state: 'queued', text: job.position ? `Waiting · ${job.position} in the queue` : 'Waiting' };
       if (job.status === 'failed') return { state: 'failed', text: 'Failed. The credits came back.' };
@@ -563,14 +759,19 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     return `aspect-ratio:${w} / ${h};width:min(100%, ${Math.round((RESULT_HEIGHT * w) / h)}px)`;
   };
 
+  const filmReel = (share) => { const r = reel(18); r.set(share); return r.node; };
+
   // What a step made: a picture, a still of a clip, or a sound. Clips are not played here: a click on a picture or a
   // clip shows it on the canvas, where it plays.
   function resultMedia(take, step) {
     const p = progressOf(take, step);
     if (p.state !== 'done') {
-      return el('div', { class: 'result-wait ' + p.state, style: step.kind === 'audio' || p.state === 'failed' ? '' : sized(take, step) },
+      // The animations are set to where they would be by the clock: the log is drawn again on every progress message,
+      // and a glow or pulse that started over each time would jump.
+      const clock = `--since:-${((Date.now() / 1000) % 12).toFixed(2)}s;`;
+      return el('div', { class: 'result-wait ' + p.state, style: clock + (step.kind === 'audio' || p.state === 'failed' ? '' : sized(take, step)) },
         el('div', { class: 'result-wait-inner' },
-          p.state === 'running' && el('div', { class: 'result-bar' }, el('i', { style: `width:${Math.round((p.share || 0) * 100)}%` })),
+          p.state === 'running' && filmReel(p.share),
           el('span', {}, p.text)));
     }
     const id = take.made;
@@ -663,7 +864,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
         const p = progressOf(step, step);
         if (p.state !== 'done') {
           return el('div', { class: 'res-tile wait ' + p.state, style: aspect(step, step) },
-            p.state === 'running' && el('div', { class: 'result-bar' }, el('i', { style: `width:${Math.round((p.share || 0) * 100)}%` })), el('span', {}, p.text));
+            p.state === 'running' && filmReel(p.share), el('span', {}, p.text));
         }
         return el('div', { class: 'res-tile', style: aspect(step, step) },
           el('button', { type: 'button', class: 'tile-media', title: `${step.name}: show it on the canvas`, onclick: () => onFocus(step.made) },
@@ -904,19 +1105,59 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
         run.ui.more ? 'Show less' : 'Show more', el('span', { class: run.ui.more ? 'flip' : '' }, icon('down'))));
   }
 
+  // The newest plan that waits for approval: its bar goes in the dock.
+  const docked = () => [...runs].reverse().find((r) => r.state === 'proposed') || null;
+
+  // What to do with a plan: say what to change, Dismiss, or Approve with its price.
+  function approveBar(run) {
+    const balance = Number(store.user.credits ?? 0);
+    const short = run.total > balance;
+    // Instead of approving as it is, the user can say what to do differently ("make the cast first") and the agent
+    // plans again with that. The draft lives on the run, since the bar is drawn again while jobs move.
+    const change = el('button', { class: 'btn small primary' + (run.ui.note ? '' : ' hidden'), disabled: busy || working, onclick: () => revise(run) }, 'Send change');
+    const go = el('button', { class: 'btn small primary' + (run.ui.note ? ' hidden' : ''), disabled: working || short, title: `You have ${balance} credits`,
+      onclick: () => approve(run) }, 'Approve · ', tokens(run.total));
+    const note = el('input', { type: 'text', class: 'approve-note', placeholder: short ? `Needs ${run.total} credits, you have ${balance}. Or say what to change…`
+      : 'Want something different? e.g. make the assets first', 'aria-label': 'What to change in this plan', 'data-run': run.at,
+      oninput: (e) => { run.ui.note = e.target.value; change.classList.toggle('hidden', !e.target.value.trim()); go.classList.toggle('hidden', !!e.target.value.trim()); },
+      onfocus: () => { noteFocus = run.at; }, onblur: () => { if (noteFocus === run.at) noteFocus = null; },
+      onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); revise(run); } } });
+    note.value = run.ui.note || '';
+    if (noteFocus === run.at) requestAnimationFrame(() => { note.focus(); note.setSelectionRange(note.value.length, note.value.length); });
+    return el('div', { class: 'agent-approve' }, note,
+      el('span', { class: 'row' },
+        el('button', { class: 'btn small quiet', onclick: () => { run.state = 'dismissed'; saveRuns(); drawLog(); } }, 'Dismiss'),
+        change, go));
+  }
+
+  // The dock above the message box: the newest plan waiting for approval, its steps and its bar, or nothing. While the
+  // user types in it (the change box, a prompt being edited) it is left as it is, so the redraws that follow jobs do not
+  // take the cursor away. A long plan scrolls inside the dock; where it was scrolled to is kept.
+  function drawDock() {
+    drawSuggest();   // drawn with the log: a tab shown again, a message sent or answered
+    const run = pending ? null : docked();
+    const typing = document.activeElement && dock.contains(document.activeElement) && document.activeElement.matches('input, textarea');
+    if (run && dock.dataset.run === String(run.at) && typing) return;
+    const steps = dock.querySelector('.agent-dock-steps');
+    const scrolled = run && dock.dataset.run === String(run.at) && steps ? steps.scrollTop : 0;
+    dock.dataset.run = run ? String(run.at) : '';
+    dock.replaceChildren(...(run ? [el('div', { class: 'agent-dock-steps' }, el('div', { class: 'step-list' }, run.steps.map((step) => drawStep(run, step)))),
+      approveBar(run)] : []));
+    if (scrolled) dock.querySelector('.agent-dock-steps').scrollTop = scrolled;
+    dock.classList.toggle('hidden', !run);
+  }
+
   // The plan of a turn: the card to approve, what it made once approved, or, turned down, a folded "Cancelled".
   function plan(run) {
     if (run.state === 'dismissed') {
-      return fold({ glyph: 'film', title: 'Generation', sub: 'Cancelled', state: (run.ui.cancelled = run.ui.cancelled || {}), onToggle: redraw,
+      return fold({ glyph: 'film', title: 'Generation', sub: run.revised ? 'Changed' : 'Cancelled', state: (run.ui.cancelled = run.ui.cancelled || {}), onToggle: redraw,
         className: 'cancelled', body: el('div', { class: 'step-list' }, run.steps.map((step) => drawStep(run, step))) });
     }
     if (run.state === 'proposed') {
-      return el('div', { class: 'agent-plan' }, el('div', { class: 'step-list' }, run.steps.map((step) => drawStep(run, step))),
-        el('div', { class: 'agent-approve' },
-          el('span', { class: 'slate-text' }, `${run.total} cr · you have ${Number(store.user.credits ?? 0)} cr`),
-          el('span', { class: 'row' },
-            el('button', { class: 'btn small quiet', onclick: () => { run.state = 'dismissed'; saveRuns(); drawLog(); } }, 'Dismiss'),
-            el('button', { class: 'btn small primary', disabled: working || run.total > Number(store.user.credits ?? 0), onclick: () => approve(run) }, 'Approve'))));
+      // The newest plan waiting for approval is in the dock above the message box, its steps and its bar; an older
+      // plan still waiting stays here with its own bar.
+      if (run === docked()) return null;
+      return el('div', { class: 'agent-plan' }, el('div', { class: 'step-list' }, run.steps.map((step) => drawStep(run, step))), approveBar(run));
     }
     return el('div', { class: 'agent-plan' }, results(run),
       // An approved plan with steps still to carry out: it was interrupted, or a step failed. Resume goes on from there.
@@ -1008,9 +1249,10 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
         window.getSelection().removeAllRanges();
         window.getSelection().addRange(end);
       } }, text);
+      drawDock();
       log.replaceChildren(el('div', { class: 'agent-welcome' },
         el('h2', {}, 'What are we making?'),
-        el('p', { class: 'muted' }, 'Describe a shot, click a frame to attach it, or start from one of these. Nothing runs until you approve.'),
+        el('p', { class: 'muted' }, 'Describe a shot, press + to attach a file, or start from one of these. Nothing runs until you approve.'),
         el('div', { class: 'agent-starters' },
           starter('A 6 second shot of a fox crossing a snowy road at dawn'),
           starter('A product shot of a perfume bottle turning on black glass'),
@@ -1019,18 +1261,41 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       return;
     }
     live = pending ? liveTurn() : null;
+    drawDock();
     log.replaceChildren(...runs.map(turn), ...(live ? [live] : []));
     log.scrollTop = follow ? log.scrollHeight : kept;
     toEnd.classList.toggle('hidden', log.scrollHeight - log.scrollTop - log.clientHeight < 160);
   }
 
-  async function send() {
-    const { text, shown: instruction, ids, parts } = message();
+  // What the user typed under a plan instead of approving it: the plan is set aside and the agent plans again with the
+  // change. A note that only says to go ahead is the Approve button.
+  function revise(run) {
+    const note = String(run.ui.note || '').trim();
+    if (!note || busy || working || run.state !== 'proposed') return;
+    run.ui.note = '';
+    noteFocus = null;
+    if (GO.test(note)) {
+      if (run.total <= Number(store.user.credits ?? 0)) approve(run);
+      return;
+    }
+    run.state = 'dismissed';
+    run.revised = note;
+    saveRuns();
+    send({ text: `Change the plan you just proposed (it was not run): ${note}`, shown: note, ids: [], parts: [{ text: note }], from: run });
+  }
+
+  // `typed`: a message that did not come from the box (a change asked for under a plan); the box is then left alone.
+  async function send(typed) {
+    const fromBox = !typed;
+    const { text, shown: instruction, ids: attached, parts } = typed || message();
     if (!text || busy) return;
+    // Nothing attached: the canvas selection goes along, and the server reads it only when the words point at it
+    // ("make this darker", "join these").
+    const ids = attached.length || !fromBox ? attached : (selection() || []).map((item) => item.id).slice(0, 8);
     // "approve", "start", "go ahead" typed under a plan that waits for approval is the Approve button: the agent can
     // only propose, so asking it again would answer in words and make nothing.
     const waiting = runs[runs.length - 1];
-    if (waiting && waiting.state === 'proposed' && !working && GO.test(text)) {
+    if (fromBox && waiting && waiting.state === 'proposed' && !working && GO.test(text)) {
       if (waiting.total > Number(store.user.credits ?? 0)) return;   // the button is off too: the cost is shown under the plan
       input.replaceChildren();
       caret = null;
@@ -1038,11 +1303,11 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     }
     busy = true;
     // The message goes into the log at once, with the agent's work under it as it happens; the box empties and waits.
-    const typed = [...input.childNodes].map((n) => n.cloneNode(true));
+    const boxed = [...input.childNodes].map((n) => n.cloneNode(true));
     const controller = new AbortController();
     pending = { instruction, parts, stop: () => controller.abort(), events: [], status: 'Thinking', started: Date.now() };
     startWhimsy();
-    input.replaceChildren();
+    if (fromBox) input.replaceChildren();
     input.contentEditable = 'false';
     caret = null;
     drawSend();
@@ -1052,7 +1317,8 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       let answer = null;
       await apiLines('/api/agent/plan', { signal: controller.signal, json: { instruction: text, project_id: projectId() || null, selection: ids,
         model: localStorage.getItem('scene.agent.model') || null,
-        history: runs.slice(-RECALLED).map((r) => ({ instruction: r.instruction, reply: r.reply, steps: r.steps.map((s) => s.name) })) } }, (event) => {
+        history: runs.slice(-RECALLED).map((r) => ({ instruction: r.instruction, reply: r.reply,
+          steps: r.steps.map((s) => ({ name: s.name, uses: (s.uses || []).map((u) => u.name) })) })) } }, (event) => {
         if (event.type === 'error') throw new Error(event.message);
         if (event.type === 'plan') answer = event;
         else if (event.type === 'status') pending.status = event.text;
@@ -1067,7 +1333,10 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       runs.push(made);
       saveRuns();
     } catch (e) {
-      if (e.name === 'AbortError') input.replaceChildren(...typed);   // stopped: the message comes back to be changed or sent again
+      if (e.name === 'AbortError') {   // stopped: the message comes back to be changed or sent again
+        if (fromBox) input.replaceChildren(...boxed);
+        else if (typed.from) { typed.from.state = 'proposed'; typed.from.revised = null; typed.from.ui.note = instruction; saveRuns(); }
+      }
       else runs.push({ instruction, parts, reply: e.message, error: true, activity: pending.events, steps: [], total: 0, state: 'answered', at: Date.now(), ui: {} });
     }
     stopWhimsy();
@@ -1214,8 +1483,9 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     if (change === 'jobs' || change === 'credits') drawLog();
   });
   load();
+  // selectionChanged(): what is selected on the canvas changed, so the suggestion is drawn again.
   // attach(item): put a library item into the message. reload(): the project changed. redraw(): the canvas moved
   // things, so where each result is ("Shot 3 › Take 2") is drawn again.
-  return { node, attach, reload: load, redraw: () => drawLog(), focus: () => input.focus(),
-    destroy: () => { unsubscribe(); clearInterval(ticker); stopWhimsy(); hideSkillMenu(); document.removeEventListener('selectionchange', rememberCaret); } };
+  return { node, attach: (item) => { attach(item); drawSuggest(); }, selectionChanged: drawSuggest, reload: load, redraw: () => drawLog(), focus: () => input.focus(),
+    destroy: () => { unsubscribe(); clearInterval(ticker); stopWhimsy(); hideSkillMenu(); hideMention(); document.removeEventListener('selectionchange', rememberCaret); } };
 }

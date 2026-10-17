@@ -183,7 +183,7 @@ async function openJob(ctx, id) {
         ['failed', 'cancelled'].includes(j.status) && [
           el('button', { class: 'btn small primary', title: 'Its first run was refunded, so this is charged like a new job', onclick: () => {
             if (confirm(`Run "${j.name}" again for ${j.user_name}? It costs them ${j.cost} credits, as a new job would.`)) retry(false);
-          } }, `Run again (${j.cost} cr)`),
+          } }, `Run again (${j.cost} credits)`),
           el('button', { class: 'btn small', title: 'For a failure that was the studio\'s fault', onclick: () => {
             if (confirm(`Run "${j.name}" again for ${j.user_name} at no charge?`)) retry(true);
           } }, 'Run again free')]),

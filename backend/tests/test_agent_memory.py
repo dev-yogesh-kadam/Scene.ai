@@ -196,3 +196,38 @@ def test_the_book_gives_the_latest_items_in_full_and_older_ones_by_name(client):
     book = memory.book_for_model(memory.book(client.app.state.db, me["id"], 0))
     assert len(book) == memory.BOOK_FULL_ITEMS + 3 and book[0]["name"] == "Shot %d" % (memory.BOOK_FULL_ITEMS + 2)
     assert "type" in book[0] and "type" not in book[-1] and set(book[-1]) == {"item", "name", "kind", "shows"}
+
+
+def test_what_a_step_makes_for_reuse_is_kept_in_shared_memory_under_its_name(client, tmp_path):
+    """A character the agent made ("keep" on its step) becomes a saved asset when the job records it, so another agent
+    tab or project finds "Maya" by name. A retake replaces it; an asset the user saved is never replaced."""
+    me = register(client)
+    jobs, db = client.app.state.jobs, client.app.state.db
+    assert memory.clean_keep({"as": "location", "name": "  the   cafe "}, "image") == {"tag": "background", "name": "the cafe"}
+    assert memory.clean_keep({"as": "voice", "name": "Maya"}, "image") is None   # a voice is a sound, not a picture
+    assert memory.clean_keep({"as": "", "name": ""}) is None
+
+    def made(name, keep):
+        target = tmp_path / (name + ".png")
+        target.write_bytes(PNG)
+        job = {"id": name, "user_id": me["id"], "workflow": "image/z", "name": name, "summary": "", "started": 0,
+               "settings": {"prompt": "a woman", "keep": keep}}
+        jobs._record(job, "image", target, {})
+
+    made("maya1", {"tag": "character", "name": "Maya"})
+    made("plain", None)   # an ordinary picture is only in the library
+    shown = client.get("/api/memory").json()["assets"]
+    assert [(a["name"], a["type"]) for a in shown] == [("Maya", "character")]
+    first = db.one("SELECT id, filename, made_from FROM assets WHERE name = 'Maya'")
+    assert first["made_from"] and (client.app.state.assets_dir / str(me["id"]) / first["filename"]).is_file()
+
+    made("maya2", {"tag": "character", "name": "maya"})   # a retake under the same name: the same asset, the new picture
+    again = db.all("SELECT id, filename FROM assets WHERE lower(name) = 'maya'")
+    assert len(again) == 1 and again[0]["id"] == first["id"] and again[0]["filename"] != first["filename"]
+    assert not (client.app.state.assets_dir / str(me["id"]) / first["filename"]).exists()
+
+    saved = save_asset(client, "Liam", "character")   # saved by the user: a step named Liam adds its own, never replaces it
+    made("liam", {"tag": "character", "name": "Liam"})
+    assert len(db.all("SELECT id FROM assets WHERE name = 'Liam'")) == 2 and db.one("SELECT 1 FROM assets WHERE id = ?", (saved,))
+    book = memory.book_for_model(memory.book(db, me["id"], 0))
+    assert {e["name"] for e in book if e.get("type") == "character"} == {"Maya", "Liam"}

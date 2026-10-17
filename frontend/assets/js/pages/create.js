@@ -1,7 +1,7 @@
 // The Create page: pick a workflow, fill its form, queue a generation.
 
 import { api } from '../api.js';
-import { el, field, segmented } from '../dom.js';
+import { creditsText, el, field, segmented } from '../dom.js';
 import { store, subscribe, refreshJobs } from '../store.js';
 import { jobList } from '../components/jobs.js';
 import { mediaCard } from '../components/media.js';
@@ -359,9 +359,9 @@ export function render(view) {
         form.estimate = quote.text;
         form.cost = quote.credits;
         const short = quote.credits > quote.balance;
-        cost.textContent = quote.credits + ' cr';
+        cost.textContent = creditsText(quote.credits);
         estimate.replaceChildren(el('b', {}, quote.text),
-          el('span', { class: short ? 'error' : '' }, short ? ` · this needs ${quote.credits} cr and you have ${quote.balance} cr` : ` · you have ${quote.balance} cr`));
+          el('span', { class: short ? 'error' : '' }, short ? ` · this needs ${creditsText(quote.credits)} and you have ${creditsText(quote.balance)}` : ` · you have ${creditsText(quote.balance)}`));
       } catch (e) { estimate.textContent = e.message; }
     }, 150);
   }

@@ -75,7 +75,7 @@ export async function pricing(ctx) {
   const [data, llm] = await Promise.all([api('/api/admin/pricing'), api('/api/admin/pricing/llm').catch((e) => ({ models: [], error: e.message }))]);
   const perJob = (kind) => data.per_job.includes(kind);
   const worth = (credits) => rupees((credits * data.inr_per_1000_credits) / 1000);
-  const price = (credits) => `${number(credits)} cr · ${worth(credits)}`;
+  const price = (credits) => `${number(credits)} credits · ${worth(credits)}`;
 
   // ---- what credits are worth, and the rate of each kind
   const value = el('input', { type: 'number', min: 0, step: 'any', value: data.inr_per_1000_credits });
@@ -105,7 +105,7 @@ export async function pricing(ctx) {
 
   // ---- each workflow's own pricing
   const servers = [{ id: '', label: 'Any' }, ...data.servers.map((s) => ({ id: s.name, label: s.name }))];
-  const rateText = (w) => [w.base ? `${trim(w.base)} cr` : null, w.per_second ? `${trim(w.per_second)} cr/s` : null].filter(Boolean).join(' + ') || 'Free';
+  const rateText = (w) => [w.base ? `${trim(w.base)} credits` : null, w.per_second ? `${trim(w.per_second)} credits/s` : null].filter(Boolean).join(' + ') || 'Free';
   const own = (w) => w.credits_per_second != null || w.base_credits != null;
   const editWorkflow = (w) => editDialog(w.title, `${w.id}. Leave a rate empty to follow the rate for its type.`, [
     { id: 'credits_per_second', label: 'Credits per second', type: 'number', hint: perJob(w.kind) ? 'None' : `${trim(data.rates[w.kind])} (the ${w.kind} rate)` },

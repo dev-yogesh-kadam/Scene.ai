@@ -17,7 +17,7 @@ export async function economics(ctx) {
       segmented([7, 30, 90].map((d) => ({ id: d, label: `${d} days` })), data.days, (d) => { ctx.days = d; ctx.draw(); }),
       el('span', { class: 'push' }), exportLink('jobs')),
     el('div', { class: 'tiles' },
-      tile('Value of credits used', rupees(t.revenue_inr), `${number(t.credits)} cr used · ${number(t.refunded)} cr refunded`),
+      tile('Value of credits used', rupees(t.revenue_inr), `${number(t.credits)} credits used · ${number(t.refunded)} credits refunded`),
       tile('Electricity', rupees(t.electricity_inr), `${span(t.run_seconds) || '0 s'} of rendering at ₹${data.electricity_inr_per_kwh} per kWh`),
       tile('Left after electricity', rupees(t.margin_inr), t.margin_percent == null ? 'No credits used yet' : `${t.margin_percent}% of the value`),
       tile('Runs that failed', t.failure_rate == null ? 'None yet' : t.failure_rate + '%', `${number(t.failed)} failed · ${number(t.done)} done · ${number(t.cancelled)} cancelled`)),

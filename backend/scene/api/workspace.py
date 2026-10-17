@@ -25,7 +25,7 @@ AGENT_TAB = re.compile(r"^agent-[a-z0-9]{1,16}$")
 def _board_kind(kind):
     if kind not in KINDS and not AGENT_TAB.match(kind):
         raise HTTPException(404, "No such board.")   # the lengths a shot can be given on an approval card, in seconds
-MAX_BOARD_BYTES = 200_000
+MAX_BOARD_BYTES = 2_000_000   # an agent tab keeps its whole conversation
 MAX_CLIPS = 50
 MOTION_WORKFLOW = credits.MOTION   # what a rendered motion graphic is filed and priced under
 
@@ -425,6 +425,9 @@ async def agent_step(body: dict, request: Request, user: dict = Depends(agent_us
     if not built:
         raise HTTPException(400, "{} needs reference files this step doesn't have.".format(schema["title"]))
     settings, started = built
+    keep = memory.clean_keep(old.get("keep"), schema["id"].split("/", 1)[0])
+    if keep:   # a step changed on its card is still kept in shared memory
+        settings["keep"] = keep
     if same:   # the workflow's own choices (mode, speed, quality) and other settings stay as they were
         known = {o["id"]: [c["id"] for c in o["choices"]] for o in schema["options"]}
         settings["options"].update({k: v for k, v in (old.get("options") or {}).items() if v in known.get(k, [])})
@@ -698,6 +701,9 @@ async def _plan_step(state, proposed, instruction, steps, made_by, schemas, name
     if not built:
         return "it had no prompt, or {} needs files it was not given".format(schema["title"])
     settings, start = built
+    keep = memory.clean_keep(proposed.get("keep"), schema["id"].split("/", 1)[0])
+    if keep:   # kept in shared memory once it is made
+        settings["keep"] = keep
     # A shot takes the shape of the picture it starts on: a portrait picture in a landscape video comes out squashed.
     agent.shape_like(schema, settings, steps[earlier].get("shape") if chained else shapes.get(start))
     # The project's cast goes into every slot meant for it that the step left empty.
@@ -731,7 +737,7 @@ async def _shown_step(state, schema, settings, menu, uses, start, after, why="")
     return {"name": settings["name"], "workflow_title": schema["title"], "kind": kind,
             "prompt": settings["values"][roles["prompt"]["id"]], "facts": workflows.summary(schema, ctx), "time": quote["text"],
             "credits": quote["credits"], "settings": settings, "start": start, "uses": uses, "after": after,
-            "shape": agent.shape_of(schema, settings, ctx), "why": why,
+            "shape": agent.shape_of(schema, settings, ctx), "why": why, "keep": settings.get("keep"),
             # What the card offers: the other workflows of the same kind, and this one's shapes, sizes and lengths.
             "menu": {"workflows": [w for w in menu if w["kind"] == kind],
                      "shapes": bool(schema.get("size") or aspect), "resolutions": resolutions,

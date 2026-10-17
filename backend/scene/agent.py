@@ -17,7 +17,9 @@ MAX_STEPS = 6
 SHOT_SECONDS = (4, 15)  # the length the agent may give one video shot; the workflow takes any number of seconds
 WORDS_PER_SECOND = 2.5  # how fast people speak in a shot, for the time spoken words need
 LONG_SHOT = 10          # a shot longer than this is not made at the largest resolution: it may not fit in memory
-MAX_HISTORY = 6     # earlier turns of the conversation sent along with a new message
+MAX_HISTORY = 40    # earlier turns of the conversation sent along with a new message
+HISTORY_CHARS = 48_000   # ...but no more than this much of them (about 12k tokens): the newest turns are kept
+LOCAL_CONTEXT = 32768    # tokens a local model reads, the same for every call: a change of size makes Ollama reload the model
 ORIENTATIONS = ("landscape", "portrait", "square")
 EDIT_TOOLS = ("trim", "split", "join")   # done with ffmpeg on videos the user already has: no GPU, no credits
 MAX_PARTS = 6
@@ -61,6 +63,11 @@ The asset book (the project's memory):
   outfit slot, a voice in a voice slot). For a saved asset write {{"item": 0, "asset": <its id>, "slot": ...}}; for an
   item of the project write {{"item": <its id>, "asset": 0, "slot": ...}}. An entry marked "in_cast" is attached to every
   shot already: never put it in "uses".
+- A step that makes something meant for reuse in later shots (a character, an outfit, a location, a prop, a style
+  picture, or a voice sample) fills "keep": {{"as": its type, "name": its short name, "Maya" or "the cafe"}}. Its result
+  is kept in the book under that name, for every agent tab and every project. Every other step writes {{"as": "", "name": ""}}.
+  Name a kept asset by who or what it is, never "Maya Character Asset". When the user names one ("use Maya"), find it in the
+  book by its name and put it in "uses"; a shot with several characters puts each in its own character slot.
 - In the prompt, call a used asset by what it is in plain words ("the girl", "the cafe"), never by its name in the book
   or a number, and do not describe its look again: the reference carries it.
 - Use an entry only when it is what the shot is about. An entry about something else (a car when the user wants a pet)
@@ -299,7 +306,7 @@ def reply_format(workflow_ids):
     # Every field is required so the model has to decide each one; values a workflow can't take are dropped later.
     step = {"type": "object", "required": ["tool", "workflow", "name", "prompt", "resolution", "orientation", "duration", "clips",
                                            "start_from", "after", "uses", "source", "start", "end", "parts", "audio", "replace", "scenes", "look",
-                                           "choices", "why"], "properties": {
+                                           "choices", "keep", "why"], "properties": {
         "tool": {"type": "string", "enum": ["generate", *EDIT_TOOLS, SOUND_TOOL, *MOTION_TOOLS]},
         "workflow": {"type": "string", "enum": workflow_ids},
         "name": {"type": "string"},
@@ -324,6 +331,8 @@ def reply_format(workflow_ids):
         "look": {"type": "string", "enum": list(sequence.LOOKS)},
         "choices": {"type": "array", "items": {"type": "object", "required": ["setting", "value"],
                                                "properties": {"setting": {"type": "string"}, "value": {"type": "string"}}}},
+        "keep": {"type": "object", "required": ["as", "name"], "properties": {
+            "as": {"type": "string", "enum": ["", "character", "outfit", "location", "prop", "voice", "style"]}, "name": {"type": "string"}}},
         "why": {"type": "string"},
     }}
     return {"type": "object", "required": ["thought", "reply", "steps"], "properties": {
@@ -443,7 +452,9 @@ class Agent:
         return answer
 
     async def _ask_local(self, model, messages, answer_format, context):
-        options = {"temperature": 0.4, **({"num_ctx": context} if context else {})}
+        # One context size for every call. Without one Ollama cuts a long prompt from its start (the instructions), and a
+        # call with another size than the last makes it load the model again and lose what it had already read.
+        options = {"temperature": 0.4, "num_ctx": max(LOCAL_CONTEXT, context or 0)}
         try:
             response = await self.http.post(self.url + "/api/chat", json={
                 "model": model, "stream": False, "think": False, "format": answer_format,
@@ -779,14 +790,21 @@ EMPTY_CLAIM = "I didn't put a plan together that time, so nothing was made. Say 
 
 
 def past_turns(history):
-    """The last few turns the browser sent, as chat messages. Anything that is not text is left out."""
+    """The earlier turns the browser sent, as chat messages, the newest that fit in HISTORY_CHARS. Anything that is not
+    text is left out. A turn says what it planned and which assets each step used, so "use those three" still knows."""
     turns = []
     for turn in history[-MAX_HISTORY:] if isinstance(history, list) else []:
         if not isinstance(turn, dict):
             continue
         said, answered = str(turn.get("instruction") or "").strip(), str(turn.get("reply") or "").strip()
         if said and answered:
-            planned = [str(name)[:80] for name in turn.get("steps") or [] if isinstance(name, str)][:MAX_STEPS]
+            planned = []
+            for step in (turn.get("steps") or [])[:MAX_STEPS]:
+                if isinstance(step, str):
+                    planned.append(step[:80])
+                elif isinstance(step, dict) and step.get("name"):
+                    used = [str(u)[:60] for u in step.get("uses") or [] if isinstance(u, str)][:6]
+                    planned.append(str(step["name"])[:80] + (" using " + ", ".join(used) if used else ""))
             # A reply that came without a plan made nothing, whatever its words said ("Generating it now"): the model
             # is told so, or it believes the work was done and only talks about it from then on.
             if planned:
@@ -794,6 +812,11 @@ def past_turns(history):
             elif CLAIMS.search(answered):
                 answered += "\n(No plan with this reply: nothing was made or queued.)"
             turns += [{"role": "user", "content": said[:2000]}, {"role": "assistant", "content": answered[:1500]}]
+    size = 0
+    for start in range(len(turns) - 2, -1, -2):   # from the newest pair back, while they fit
+        size += len(turns[start]["content"]) + len(turns[start + 1]["content"])
+        if size > HISTORY_CHARS:
+            return turns[start + 2:]
     return turns
 
 

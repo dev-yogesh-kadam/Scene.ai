@@ -238,7 +238,23 @@ select.small { width: auto; height: 28px; padding: 0 8px; font-size: 12px; max-w
 .shell.railed .app-menu-wrap { display: none; }
 .shell.railed .sidebar { display: flex; flex-direction: column; gap: 2px; width: 252px; flex: none; height: 100vh; position: sticky; top: 0;
   padding: 16px 12px; border-right: 1px solid var(--line); background: var(--surface); overflow-y: auto; }
-.shell.railed .view { flex: 1; padding-top: 40px; margin: 0; }
+.shell.railed .view { flex: 1; padding-top: 64px; margin: 0 auto; }
+/* The balance, at the top right of every page. The canvas has its own (.canvas-credits) in the tool bar there. */
+.credit-badge { position: fixed; top: 14px; right: 16px; z-index: 30; display: flex; align-items: center; gap: 6px; padding: 6px 14px 6px 8px;
+  border-radius: 999px; background: var(--material); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  border: 1px solid var(--line-strong); box-shadow: var(--shadow-s); font: 400 12px/16px var(--sans); color: var(--muted); }
+.credit-badge b { color: var(--text); font: 650 15px/1 var(--display); font-stretch: var(--wide); letter-spacing: -.02em; }
+.shell.on-canvas .credit-badge { display: none; }
+/* The credit mark (creditMark() in dom.js): the studio's Clapper Gate, drawn in currentColor. */
+.credit-token { width: 18px; height: 18px; flex: none; display: block; }
+.canvas-credits .credit-token { width: 16px; height: 16px; }
+/* The mark takes the colour of the text around it: white on the dark canvas and badge, black in a light button. */
+.credit-badge .credit-token, .canvas-credits .credit-token { color: var(--text); }
+.token-amount { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; }
+.token-amount .credit-token { width: 14px; height: 14px; }
+.canvas-credits { display: inline-flex; align-items: center; gap: 5px; padding: 0 10px 0 8px; margin-right: 2px; border-right: 1px solid var(--line);
+  font: 400 12px/28px var(--sans); color: var(--muted); white-space: nowrap; }
+.canvas-credits b { color: var(--text); font-weight: 600; }
 .sidebar .nav { margin-bottom: 4px; }
 .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 14px; text-decoration: none; color: var(--text); }
 .sidebar-brand img { width: 30px; height: 30px; border-radius: 8px; box-shadow: 0 4px 14px -4px rgba(255, 255, 255, .3); }
@@ -533,7 +549,27 @@ svg.run rect { fill: none; rx: 12px; stroke: var(--accent); stroke-width: 2; str
 .canvas-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 /* A shot is a faint lane behind its frames. */
 .lane { position: absolute; pointer-events: none; border-radius: calc(14px * var(--inv, 1)); background-color: color-mix(in srgb, var(--text) 5%, transparent); box-shadow: inset 0 0 0 calc(1px * var(--inv, 1)) color-mix(in srgb, var(--text) 6%, transparent); }
+/* While a frame is dragged over the gap between two shots: the line lights up, and dropping there starts a new shot. */
+.insert-mark { position: absolute; z-index: 2; pointer-events: none; height: calc(3px * var(--inv, 1)); margin-top: calc(-1px * var(--inv, 1));
+  border-radius: 99px; background: var(--agent); box-shadow: 0 0 calc(10px * var(--inv, 1)) var(--agent); }
+.insert-mark span { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: calc(3px * var(--inv, 1)) calc(10px * var(--inv, 1));
+  border-radius: 99px; background: var(--agent); color: #0b1a2b; font: 600 calc(12px * var(--inv, 1))/1.3 var(--sans); white-space: nowrap; }
+/* The line between one shot and the next on the board, kept one pixel thick at any zoom. */
+.lane-divider { position: absolute; pointer-events: none; height: calc(1px * var(--inv, 1)); background: color-mix(in srgb, var(--text) 12%, transparent); }
 .frame { position: absolute; width: 240px; cursor: grab; user-select: none; }
+/* "+" on a frame: add it to the agent's message. Shown when the pointer is on the frame (always on a touch screen). */
+.frame-attach { position: absolute; top: 8px; right: 8px; z-index: 3; width: 28px; height: 28px; display: grid; place-items: center; padding: 0;
+  border: 1px solid rgba(255, 255, 255, .18); border-radius: 9px; background: rgba(14, 15, 18, .72); color: #fff; cursor: pointer;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); opacity: 0; transform: scale(.9); transition: opacity .15s var(--ease), transform .15s var(--ease); }
+.frame-attach svg { width: 16px; height: 16px; }
+/* "From canvas" with nothing selected: the next frame clicked is the one used. */
+.canvas.picking .frame, .picking .frame { cursor: copy; }
+.picking .frame:hover .shot { outline: 2px solid var(--agent); outline-offset: 2px; }
+/* The list of frames for "@name" in the agent's message, built like the skill menu. */
+.mention-item .mention-thumb { width: 28px; height: 28px; border-radius: 6px; }
+.frame:hover .frame-attach, .frame-attach:focus-visible { opacity: 1; transform: none; }
+.frame-attach:hover { background: var(--agent); color: #0b1a2b; border-color: transparent; }
+@media (hover: none) { .frame-attach { opacity: 1; transform: none; } }
 /* Every frame has a line around it, so a dark picture stands out from the canvas. --inv keeps it the same width on screen at any zoom. */
 .frame .shot { background: var(--media-ground); border-radius: var(--radius-media); box-shadow: 0 0 0 calc(2px * var(--inv, 1)) var(--text); }
 .frame .shot img, .frame .shot video { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; border-radius: var(--radius-media); }
@@ -672,6 +708,13 @@ svg.run rect { fill: none; rx: 12px; stroke: var(--accent); stroke-width: 2; str
 .slot-box.filled { border-style: solid; }
 .slot-box.cast { border-color: var(--accent); }
 .slot-box img, .slot-box video { width: 100%; height: 100%; object-fit: cover; }
+/* The × on a filled reference slot: always in view, white on a dark disc so it stands out on any picture. */
+.slot-frame { position: relative; width: 100%; }
+.slot-clear { position: absolute; top: 5px; right: 5px; width: 24px; height: 24px; display: grid; place-items: center; padding: 0;
+  border: 1px solid rgba(255, 255, 255, .25); border-radius: 50%; background: rgba(10, 10, 12, .78); color: #fff; font: 500 17px/1 var(--sans);
+  cursor: pointer; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); box-shadow: 0 2px 8px rgba(0, 0, 0, .4);
+  transition: background .15s var(--ease), transform .15s var(--ease); }
+.slot-clear:hover, .slot-clear:focus-visible { background: var(--bad); border-color: transparent; transform: scale(1.08); }
 .slot .btn.small { height: 22px; padding: 0 6px; font-size: 11px; }
 .quick-source { margin-top: 14px; padding: 10px 12px; border-radius: var(--radius-s); background: var(--hover); font-size: 13px; }
 .quick-source.missing { color: var(--muted); }
@@ -721,6 +764,24 @@ button.chip:hover { color: var(--text); border-color: var(--control); }
 .step-chip .cell-mark.stepping { margin: 0; }
 .step-card .agent-pills { margin-top: 0; }
 .step-links { font-size: 12px; color: var(--muted); }
+.step-uses { display: flex; flex-wrap: wrap; gap: 6px; }
+.step-use { display: flex; align-items: center; gap: 8px; max-width: 220px; padding: 4px 10px 4px 4px; border-radius: 12px; background: var(--hover); border: 1px solid var(--line); }
+.step-use-thumb { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: 8px; overflow: hidden; background: var(--surface); color: var(--muted); }
+.step-use-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.step-use-words { display: grid; min-width: 0; font-size: 12px; line-height: 15px; }
+.step-use-words b { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-use-words span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-use { cursor: default; }
+.step-use:hover { border-color: var(--line-strong); background: var(--active); }
+.use-preview { position: fixed; z-index: 70; display: grid; gap: 8px; width: 240px; padding: 8px; border-radius: 14px; background: var(--raised);
+  border: 1px solid var(--line-strong); box-shadow: var(--shadow); pointer-events: none; animation: pop-in .12s var(--ease); }
+.use-preview img { width: 100%; max-height: 300px; object-fit: contain; border-radius: 10px; background: var(--surface); display: block; }
+.use-preview audio { width: 100%; }
+.use-preview-words { display: grid; gap: 1px; padding: 0 4px 2px; font-size: 12px; line-height: 16px; }
+.use-preview-words b { color: var(--text); font-weight: 600; }
+.use-preview-words span { color: var(--muted); }
+.step-keep { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--agent); }
+.step-keep svg { width: 14px; height: 14px; flex: none; }
 .step-card .agent-prompt { padding: 8px 10px; border-radius: 10px; background: var(--field); }
 .step-card .agent-prompt p { color: var(--muted); line-height: 1.5; }
 .step-card .agent-prompt-tools { top: 4px; right: 4px; }
@@ -737,6 +798,9 @@ button.chip:hover { color: var(--text); border-color: var(--control); }
 .cell-mark.stepping::before { content: ""; position: absolute; left: 2px; top: 2px; width: 4px; height: 4px; background: var(--agent); animation: cell-step 667ms steps(1) infinite; }
 .cell-mark.stepping { margin: 0 2px 0 0; }
 .agent-approve { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 8px 12px; background: var(--raised); border-top: 1px solid var(--line-strong); border-radius: 0 0 12px 12px; }
+input.approve-note { flex: 1 1 200px; min-width: 0; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: 400 13px/16px var(--sans); }
+input.approve-note::placeholder { color: var(--faint); }
+input.approve-note:focus { outline: none; border-color: var(--agent); }
 /* The message box: typed text with chips in it, one per attached item (a small picture and its name). */
 .agent-input { flex: 1; min-width: 0; min-height: 60px; max-height: 220px; overflow-y: auto; padding: 8px 12px; background: var(--field); border: 1px solid var(--line); border-radius: var(--radius-s); font-size: 13px; line-height: 28px; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; transition: border-color .2s var(--ease); }
 .agent-input:hover { border-color: var(--muted); }
@@ -746,6 +810,15 @@ button.chip:hover { color: var(--text); border-color: var(--control); }
 .attach-thumb { width: 20px; height: 20px; flex: none; border-radius: 5px; overflow: hidden; background: var(--media-ground); }
 .attach-thumb img, .attach-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .attach-thumb .sound { padding: 0; }
+/* The canvas selection, offered under the message: dashed, since it is not part of the message until it is clicked. */
+.agent-suggest { display: inline-flex; align-items: center; gap: 6px; height: 28px; max-width: 55%; padding: 0 10px 0 6px; border: 1px dashed var(--line-strong);
+  border-radius: 9px; background: none; color: var(--muted); font: 500 12px/16px var(--sans); cursor: pointer; white-space: nowrap; overflow: hidden; }
+.agent-suggest > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.agent-suggest svg { width: 14px; height: 14px; flex: none; }
+.agent-suggest:hover { color: var(--text); border-color: var(--agent); border-style: solid; background: var(--agent-soft); }
+.agent-suggest-thumbs { display: inline-flex; }
+.agent-suggest-thumbs .attach-thumb { width: 18px; height: 18px; border: 1.5px solid var(--raised); }
+.agent-suggest-thumbs .attach-thumb + .attach-thumb { margin-left: -7px; }
 .attach-thumb .sound span { display: none; }
 .attach-thumb .sound svg.icon { width: 12px; height: 12px; }
 .attach-name { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
@@ -754,6 +827,16 @@ button.chip:hover { color: var(--text); border-color: var(--control); }
 /* The composer: the message box with its bar under it (model, permission, send). */
 .agent-composer { margin: 0 12px 12px; padding: 10px 10px 8px 4px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: var(--radius); cursor: text; transition: border-color .2s var(--ease); }
 .agent-composer:focus-within { border-color: var(--control); }
+/* The approval bar of the newest plan, docked on top of the message box: it stays in place while the conversation scrolls. */
+.agent-dock { flex: none; display: grid; margin: 0 12px 8px; overflow: hidden; background: var(--raised);
+  border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow-s); }
+/* One section: the plan's steps on top, its bar along the bottom. A long plan scrolls inside instead of pushing the
+   message box off the panel. The steps lose their own frames; several are divided by a line. */
+.agent-dock-steps { max-height: min(48vh, 520px); overflow-y: auto; overscroll-behavior: contain; }
+.agent-dock .step-list { gap: 0; }
+.agent-dock .step-card { border: 0; border-radius: 0; background: none; }
+.agent-dock .step-card + .step-card { border-top: 1px solid var(--line); }
+.agent-dock .agent-approve { border: 0; border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; padding: 8px 8px 8px 12px; background: none; }
 .agent-composer .agent-input { min-height: 44px; background: none; border: 0; padding: 4px 10px; }
 .agent-composer .agent-input:focus { outline: none; }
 .agent-composer .agent-input[contenteditable="false"] { cursor: default; }
@@ -779,7 +862,15 @@ button.chip:hover { color: var(--text); border-color: var(--control); }
 /* A step waiting for approval: its prompt, which can be opened in full and edited, and its settings as pills. */
 .agent-prompt { position: relative; display: grid; gap: 6px; }
 .agent-prompt p { margin: 0; padding-right: 56px; white-space: pre-wrap; }
-.agent-prompt p.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.agent-prompt p.clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+/* The whole prompt, opened: the full width of the card, a little larger, each part under its own heading. */
+.step-card .agent-prompt.open { padding: 14px 16px; }
+.prompt-sections { display: grid; gap: 12px; padding-top: 22px; animation: prompt-open .22s var(--ease); }
+.prompt-section { display: grid; gap: 3px; }
+.prompt-section b { font: 600 11px/14px var(--sans); letter-spacing: .06em; color: var(--agent); }
+.agent-prompt .prompt-section p { padding-right: 0; font-size: 13px; line-height: 1.6; color: var(--text); }
+@keyframes prompt-open { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .prompt-sections { animation: none; } }
 .agent-prompt-tools { position: absolute; top: -4px; right: 0; display: flex; }
 .icon-btn.small { width: 26px; height: 26px; }
 .icon-btn.small .icon { width: 15px; height: 15px; }
@@ -796,6 +887,11 @@ button.chip:hover { color: var(--text); border-color: var(--control); }
 .pop-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 10px; background: none; color: var(--text); text-align: left; cursor: pointer; font: 13px/1.35 var(--sans); }
 .pop-item:hover, .pop-item:focus-visible, .pop-item.on { background: var(--hover); }
 .pop-item > .icon { width: 18px; height: 18px; flex: none; color: var(--muted); }
+/* The + menu of a message box or a reference slot: where a file comes from, with what it takes on the right. */
+.add-menu { min-width: 230px; }
+.add-menu-hint { margin-left: 16px; color: var(--muted); font-size: 12px; font-style: italic; }
+.agent-add { width: 30px; height: 30px; border-radius: 9px; border: 1px solid var(--line-strong); }
+.agent-add:hover { border-color: var(--control); }
 .pop-item > span { display: grid; gap: 2px; flex: 1; }
 .pop-perm { width: 300px; }
 .pop-perm .pop-item > .icon:last-child { color: var(--agent); }
@@ -1220,11 +1316,32 @@ button.fold-head:hover .fold-title, button.fold-head:hover .fold-caret { color: 
 .result-model { display: inline-flex; align-items: center; gap: 6px; min-width: 0; margin-left: 4px; padding: 2px 10px; border: 1px solid var(--line-strong); border-radius: 12px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result-model::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--agent); }
 .result-name { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.result-wait.running { background: linear-gradient(110deg, var(--hover) 30%, var(--active) 50%, var(--hover) 70%); background-size: 200% 100%; animation: shimmer 1.8s linear infinite; }
 .result-wait.failed { background: var(--bad-soft); color: var(--bad); }
 .result-wait-inner { display: grid; justify-items: center; gap: 8px; width: 62%; text-align: center; }
-.result-bar { width: 100%; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
-.result-bar i { display: block; height: 100%; background: var(--agent); transition: width .4s var(--ease); }
+/* The reel: a strip of film whose frames fill in as a job is made, sprocket holes above and below, the frame being
+   made glowing. Used under a running result in the agent panel and on a developing frame of the canvas. */
+.reel { position: relative; display: flex; gap: 3px; width: 100%; height: 18px; padding: 5px 4px; border-radius: 5px; background: rgba(0, 0, 0, .28); }
+.reel::before, .reel::after { content: ""; position: absolute; left: 4px; right: 4px; height: 2px;
+  background: repeating-linear-gradient(90deg, rgba(255, 255, 255, .22) 0 3px, transparent 3px 7px); }
+.reel::before { top: 1px; }
+.reel::after { bottom: 1px; }
+.reel i { flex: 1; border-radius: 1.5px; background: rgba(255, 255, 255, .08); transition: background .5s var(--ease), box-shadow .5s var(--ease); }
+.reel i.lit { background: var(--agent); box-shadow: 0 0 6px color-mix(in srgb, var(--agent) 55%, transparent); }
+.reel i.next { animation: reel-next 1.1s ease-in-out infinite; }
+@keyframes reel-next { 0%, 100% { background: rgba(255, 255, 255, .08); } 50% { background: var(--agent); box-shadow: 0 0 10px var(--agent); } }
+.frame .slate .reel { flex: 1 1 60px; max-width: 120px; height: 14px; padding: 4px 3px; align-self: center; }
+.frame.developing.waiting .slate .reel { display: none; }
+/* A running result in the agent panel: one soft glow that drifts slowly across, as light on film being exposed. Every
+   animation here starts at --since (set from the clock), so drawing the log again does not restart it. */
+.result-wait.running { background: var(--hover); }
+.result-wait.running::before { content: ""; position: absolute; top: -30%; bottom: -30%; left: -60%; width: 70%; z-index: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--agent) 22%, transparent), transparent 70%);
+  animation: glow-drift 12s ease-in-out var(--since, 0s) infinite alternate; will-change: transform; }
+.result-wait-inner { position: relative; z-index: 1; }
+.result-wait.running .result-wait-inner > span { color: var(--text); letter-spacing: .02em; animation: phase-breathe 3s ease-in-out var(--since, 0s) infinite; }
+.result-wait.running .reel i.next { animation-delay: var(--since, 0s); }
+@keyframes glow-drift { from { transform: translateX(0); } to { transform: translateX(230%); } }
+@keyframes phase-breathe { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
 .result-audio audio { width: 100%; }
 .keyframes { display: flex; gap: 6px; }
 .keyframe { position: relative; width: 76px; aspect-ratio: 16 / 10; padding: 0; border: 0; border-radius: 8px; overflow: hidden; background: var(--media-ground); cursor: pointer; }
@@ -1279,6 +1396,7 @@ button.fold-head:hover .fold-title, button.fold-head:hover .fold-caret { color: 
   .canvas-world.gliding { transition: none; }
   .frame.spotlight::after { animation: none; opacity: 1; }
   .result-wait.running, .res-tile.wait.running, .dot-state.running { animation: none; }
+  .result-wait.running::before, .result-wait.running .result-wait-inner > span, .reel i.next { animation: none; }
 }
 
 /* The user's thumbs on a library item: in the viewer beside Download, and as a mark on its card. */

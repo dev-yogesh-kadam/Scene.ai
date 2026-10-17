@@ -44,7 +44,7 @@ export function renderLanding(root, { signupOpen }) {
     : el('a', { class: 'btn generate lp-cta', href: '#/signin' }, 'Sign in'));
   root.replaceChildren(el('div', { class: 'lp' },
     el('header', { class: 'lp-top' },
-      el('a', { class: 'brand', href: '#/' }, el('img', { src: '/assets/img/logo.svg', alt: '' }), 'Scene.ai'),
+      el('a', { class: 'brand', href: '#/' }, el('img', { src: '/assets/img/logo.svg?v=clapper', alt: '' }), 'Scene.ai'),
       el('nav', { class: 'lp-nav' },
         el('a', { class: 'btn lp-outline', href: '#/signin' }, 'Sign in'),
         signupOpen && el('a', { class: 'btn generate', href: '#/signup' }, 'Create an account'))),

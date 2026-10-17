@@ -4,7 +4,7 @@
 // dragged between rows, and the rows are remembered per project. Work in progress shows as a frame the Gate runs around.
 
 import { api } from '../api.js';
-import { el, icon, runningGate, segmented, still, tabTitle } from '../dom.js';
+import { creditMark, el, icon, phaseOf, reel, runningGate, segmented, still, tabTitle } from '../dom.js';
 import { store, subscribe } from '../store.js';
 import { openViewer } from '../components/media.js';
 import { quickActions } from '../components/quick.js';
@@ -61,6 +61,7 @@ export function render(view) {
   const selected = new Set();     // generation ids
   const spots = new Map();        // key -> {x, y, h}: where its row puts each frame
   let bands = [];                 // the rows as drawn: {row, y, h}
+  let boardBox = { left: 0, width: 0 };   // where the board of shots is across, for the line that marks a new shot
   const boxes = new Map();        // what is on the canvas now: key -> {key, x, y, h, node}
   const jobFrames = new Map();    // job id -> the parts of its frame that change while it runs
   let agentJobs = new Set();      // jobs the agent started: their frames are drawn in the agent's colour
@@ -81,7 +82,13 @@ export function render(view) {
   const zoomLabel = el('button', { class: 'btn small quiet', title: 'Zoom to 100% (0)', onclick: () => zoomTo(1) });
   const map = el('div', { class: 'minimap hidden', 'aria-hidden': 'true' });
   const hint = el('p', { class: 'canvas-hint muted' }, 'Use the panel on the right to make a shot. Everything you make lands here.');
+  // The balance, at the top right like on every page; here it leads the tool bar that is already there.
+  const balance = el('span', { class: 'canvas-credits', title: 'Credits pay for generations. An admin can add more.' });
+  const drawBalance = () => balance.replaceChildren(creditMark(''), el('b', {}, Number(store.user.credits ?? 0).toLocaleString()), Number(store.user.credits) === 1 ? ' credit' : ' credits');
+  drawBalance();
+  const leaveBalance = subscribe((change) => { if (change === 'credits') drawBalance(); });
   const dock = quickActions({
+    pick: (onPick) => pickFromCanvas(onPick),   // "From canvas" in a reference slot's + menu
     startFrom: () => (selected.size === 1 ? items.find((i) => selected.has(i.id) && i.kind !== 'audio') : null),   // a sound is not a frame to start on
     projectId: () => project || null,
   });
@@ -91,9 +98,14 @@ export function render(view) {
     el('div', { class: 'soon-box' }, icon('chat'), el('span', { class: 'soon-tag' }, 'Coming soon'), el('b', {}, 'The agent'),
       el('p', { class: 'muted small' }, 'Describe what you want and have it planned for you. It is not open on your account yet.'),
       el('button', { class: 'btn small', onclick: () => showPanel(true, 'quick') }, 'Use Quick actions'))),
-    attach: () => {}, reload: () => {}, redraw: () => {}, focus: () => {}, destroy: () => {} });
+    attach: () => {}, selectionChanged: () => {}, reload: () => {}, redraw: () => {}, focus: () => {}, destroy: () => {} });
   const agent = !store.user.agent ? comingSoon() : agentTabs({
     projectId: () => project,
+    // What is selected on the canvas: offered to the message as one suggestion, and read when a message says "this".
+    selection: () => items.filter((i) => selected.has(i.id)),
+    items: () => items,   // the project's frames, for "@name" in the message
+    pickCanvas: (onPick) => pickFromCanvas(onPick),   // "Select from canvas" in the + menu
+    onUploaded: () => loadItems().then(draw),   // a file uploaded from the + menu joins the canvas
     onJobs: (ids) => { agentJobs = new Set(ids); for (const [id, frame] of jobFrames) frame.node.classList.toggle('by-agent', agentJobs.has(id)); },
     onMemory: () => showPanel(true, 'memory'),
     onFocus: (id) => focusItem(id),   // a result in the conversation shows that clip on the canvas
@@ -320,6 +332,7 @@ export function render(view) {
     tools, drawer, toolNote,
     context,
     el('div', { class: 'float canvas-view' },
+      balance,
       assetsButton,
       el('button', { class: 'btn small quiet', title: 'Fit everything (1)', onclick: () => fit() }, 'Fit'),
       zoomLabel, panelButton),
@@ -386,9 +399,13 @@ export function render(view) {
       lazy.observe(shot);
       const c = item.context || {};
       const label = el('b', {}, take(spot));
+      // "+" on a frame adds it to the agent's message, opening the agent when it is not showing.
+      const toChat = store.user.agent && el('button', { type: 'button', class: 'frame-attach', title: 'Add to chat', 'aria-label': `Add ${item.name} to the chat`,
+        onpointerdown: (e) => e.stopPropagation(), ondblclick: (e) => e.stopPropagation(),
+        onclick: (e) => { e.stopPropagation(); addToChat([item]); } }, icon('plus'));
       const node = el('div', { class: 'frame' + (selected.has(item.id) ? ' selected' : ''), style: `left:${spot.x}px;top:${spot.y}px`, title: item.name,
         onpointerdown: (e) => grab(e, item.id), ondblclick: () => open(item) },
-        shot,
+        shot, toChat,
         el('div', { class: 'slate' }, label, el('span', {}, c.width ? `${item.kind} · ${c.width}×${c.height}` : item.name)));
       node.take = label;
       boxes.set(item.id, { key: item.id, ...spot, node });
@@ -413,9 +430,10 @@ export function render(view) {
         const clock = el('span');
         const fact = el('span');
         const shot = el('div', { class: 'shot', style: `height:${spot.h}px` }, clock);
+        const film = reel(20);
         const node = el('div', { class: 'frame developing' + (agentJobs.has(job.id) ? ' by-agent' : ''), title: job.name },
-          shot, el('div', { class: 'slate' }, el('b', {}, job.workflow.split('/')[0]), fact));
-        frame = { node, shot, clock, fact, gate: null };
+          shot, el('div', { class: 'slate' }, el('b', {}, job.workflow.split('/')[0]), film.node, fact));
+        frame = { node, shot, clock, fact, film, gate: null };
         jobFrames.set(job.id, frame);
         jobLayer.append(node);
         boxes.set('job:' + job.id, { key: 'job:' + job.id, ...spot, node });
@@ -427,7 +445,8 @@ export function render(view) {
       frame.shot.style.setProperty('--developed', done.toFixed(3));
       frame.node.classList.toggle('waiting', waiting);
       frame.clock.textContent = waiting ? 'queued' : elapsed(job);   // how long it has been at it; no percentage
-      frame.fact.textContent = waiting ? `position ${job.position}` : job.steps ? `step ${job.step} of ${job.steps}` : 'starting';
+      frame.film.set(done);   // a reel that fills, and what the job is at in words, in place of a step count
+      frame.fact.textContent = waiting ? `position ${job.position}` : job.steps ? phaseOf(done) : 'Setting up the shot';
     }
     hint.classList.toggle('hidden', boxes.size > 0);
   }
@@ -442,9 +461,21 @@ export function render(view) {
       box.node.style.top = spot.y + 'px';
       if (box.node.take) box.node.take.textContent = take(spot);
     }
-    // Each shot is a strip of film behind its frames, a little longer than the frames on it.
-    labelLayer.replaceChildren(...bands.map((band) => el('div', { class: 'lane',
-      style: `left:${-GAP / 2}px;top:${band.y - GAP / 3}px;width:${band.row.keys.length * (FRAME + GAP)}px;height:${band.h + SLATE + GAP * 2 / 3}px` })),
+    // All the shots sit in one board, the names of the shots down its left side and a line between one shot and the
+    // next, halfway across the gap. The board is as wide as the longest shot.
+    const pad = GAP / 3;
+    const last = bands[bands.length - 1];
+    const left = -LABEL - GAP / 4;
+    const width = Math.max(1, ...bands.map((band) => band.row.keys.length)) * (FRAME + GAP) - left - GAP / 2;
+    boardBox = { left, width };
+    const board = last ? [el('div', { class: 'lane lane-board',
+      style: `left:${left}px;top:${bands[0].y - pad}px;width:${width}px;height:${last.y + last.h + SLATE + pad - (bands[0].y - pad)}px` })] : [];
+    const lines = bands.slice(1).map((band, i) => {
+      const above = bands[i];
+      const y = (above.y + above.h + SLATE + band.y) / 2;
+      return el('div', { class: 'lane-divider', style: `left:${left + GAP / 4}px;top:${y}px;width:${width - GAP / 2}px` });
+    });
+    labelLayer.replaceChildren(...board, ...lines,
     ...bands.map((band, i) => el('button', { class: 'shot-label', title: 'Rename this shot',
       style: `left:${-LABEL}px;top:${band.y}px;width:${LABEL - GAP / 2}px;height:${band.h}px`,
       onpointerdown: (e) => e.stopPropagation(), onclick: (e) => rename(band.row, e.currentTarget, i) }, band.row.name || `Shot ${i + 1}`)));
@@ -599,6 +630,19 @@ export function render(view) {
 
   // ------------------------------------------------------------ selecting and moving
 
+  // Where a dragged frame would start a new shot: in the gap above the first shot or between two shots, near the
+  // line between them. The index the new shot takes, or -1 when the pointer is over a shot (it joins that one).
+  function gapAt(y) {
+    if (!bands.length) return -1;
+    if (y > bands[0].y - GAP && y < bands[0].y + 12) return 0;
+    for (let i = 1; i < bands.length; i++) {
+      if (y > bands[i - 1].y + bands[i - 1].h + SLATE - 12 && y < bands[i].y + 12) return i;
+    }
+    return -1;
+  }
+  const gapLine = (i) => (i === 0 ? bands[0].y - GAP / 2 : (bands[i - 1].y + bands[i - 1].h + SLATE + bands[i].y) / 2);
+  const insertMark = el('div', { class: 'insert-mark' }, el('span', {}, 'New shot here'));
+
   function grab(e, id) {
     if (e.button !== 0) return;
     e.stopPropagation();
@@ -608,12 +652,22 @@ export function render(view) {
     const from = { x: e.clientX, y: e.clientY };
     const moving = [...selected].map((key) => boxes.get(key)).filter(Boolean).map((box) => ({ box, x: box.x, y: box.y }));
     let moved = false;
+    // Where the pointer is on the canvas, to tell a drop on a shot from a drop in the gap between two shots.
+    const held = boxes.get(id);
+    const grip = held ? (from.y - held.node.getBoundingClientRect().top) / cam.k : 0;
+    const startY = held ? held.y + grip : 0;
+    let gap = -1;
     track((ev) => {
       const dx = (ev.clientX - from.x) / cam.k;
       const dy = (ev.clientY - from.y) / cam.k;
       moved = moved || Math.abs(dx) + Math.abs(dy) > 3 / cam.k;
       if (!moved) return;
       context.classList.add('hidden');
+      gap = gapAt(startY + dy);
+      if (gap >= 0) {   // over the line between two shots: it lights up, and the frames will start a new shot there
+        Object.assign(insertMark.style, { left: boardBox.left + GAP / 4 + 'px', width: boardBox.width - GAP / 2 + 'px', top: gapLine(gap) + 'px' });
+        if (!insertMark.isConnected) labelLayer.append(insertMark);
+      } else insertMark.remove();
       for (const m of moving) {
         m.box.x = Math.round((m.x + dx) / SNAP) * SNAP;
         m.box.y = Math.round((m.y + dy) / SNAP) * SNAP;
@@ -621,8 +675,10 @@ export function render(view) {
         m.box.node.style.top = m.box.y + 'px';
       }
     }, () => {
-      // A click on a frame while the agent is open attaches it to the message, so several can be named one after another.
-      if (!moved && isOpen() && tab === 'agent') agent.attach(items.find((i) => i.id === id));
+      // A click only selects: looking at a frame does not put it into the message. The agent offers the selection as
+      // one suggestion to use, and each frame has its own "+" to add it. While a panel asked for a frame ("From
+      // canvas" with nothing selected), the click gives it this frame.
+      if (!moved && picking) { const done = picking; stopPicking(); done(items.find((i) => i.id === id)); return; }
       if (!moved) return;
       // Dropped frames join the shot they were dropped on, at that place in the row; below the last row they start a new shot.
       const dropped = boxes.get(id);
@@ -631,14 +687,40 @@ export function render(view) {
       const band = bands.find((b) => middle < b.y + b.h + SLATE + GAP / 2);
       const at = Math.max(0, Math.round(dropped.x / (FRAME + GAP)));
       for (const row of layout.rows) row.keys = row.keys.filter((key) => !ids.includes(key));
-      const row = band ? band.row : newRow();
-      row.keys.splice(Math.min(at, row.keys.length), 0, ...ids);
+      insertMark.remove();
+      // Dropped on the line between two shots (or above the first): a new shot there, between them.
+      const fresh = gap >= 0 ? { id: ++layout.count, name: '', keys: [] } : null;
+      if (fresh) layout.rows.splice(layout.rows.indexOf(bands[gap].row), 0, fresh);
+      const row = fresh || (band ? band.row : newRow());
+      row.keys.splice(Math.min(fresh ? 0 : at, row.keys.length), 0, ...ids);
       update();
       save();
     });
   }
 
+  // "From canvas" in a panel's + menu: what is selected, or, with nothing selected, the next frame clicked.
+  let picking = null;
+  const stopPicking = () => { picking = null; view.classList.remove('picking'); toolNote.classList.add('hidden'); };
+  function pickFromCanvas(onPick) {
+    const chosen = items.filter((i) => selected.has(i.id));
+    if (chosen.length) { onPick(chosen); return; }
+    picking = (item) => onPick([item]);
+    clearTimeout(noteTimer);
+    view.classList.add('picking');
+    toolNote.replaceChildren(el('span', {}, 'Click a frame to use it'),
+      el('button', { class: 'btn small quiet', onclick: stopPicking }, 'Cancel'));
+    toolNote.classList.remove('hidden');
+  }
+
+  // Put items into the agent's message, opening the agent tab first when another one is showing.
+  function addToChat(list) {
+    if (!(isOpen() && tab === 'agent')) showPanel(true, 'agent');
+    for (const item of list) agent.attach(item);
+    agent.focus();
+  }
+
   function selectionChanged() {
+    agent.selectionChanged();   // the message box offers what is selected, without adding it
     for (const box of boxes.values()) box.node.classList.toggle('selected', selected.has(box.key));
     dock.refresh();
     cast.refresh();
@@ -741,6 +823,7 @@ export function render(view) {
     if (e.target.closest('input, textarea, select, dialog, [contenteditable]') || e.metaKey || e.ctrlKey) return;
     if (e.key === '1') fit();
     else if (e.key === '0') zoomTo(1);
+    else if (e.key === 'Escape' && picking) stopPicking();
     else if (e.key === 'Escape' && selected.size) { selected.clear(); selectionChanged(); }
     else if (e.key === 'Enter' && selected.size === 1) open(items.find((i) => selected.has(i.id)));
     else if (e.key.toLowerCase() === 'd' && !e.altKey && !e.repeat) items.filter((i) => selected.has(i.id)).forEach(download);
@@ -769,6 +852,7 @@ export function render(view) {
     clearTimeout(saveTimer);
     lazy.disconnect();
     window.removeEventListener('keydown', onKey);
+    leaveBalance();
     view.classList.remove('full', 'with-panel', 'resizing');
     view.style.removeProperty('--panel-w');
   };

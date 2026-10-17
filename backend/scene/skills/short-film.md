@@ -11,7 +11,7 @@ words: \b(film|movie|story|stories|scene|script|episode|drama|trailer|dialogue|s
    A person the book does not have is described once in a few concrete words (age, hair, clothes) and that same
    description is repeated word for word in every shot, so the shots match.
 3. When the story has a main person who is in three shots or more and the book has no picture of them, say in "reply"
-   that a character picture saved on the Assets page keeps the face the same in every shot, and offer to make one.
+   that a character picture kept in shared memory keeps the face the same in every shot, and offer to make one.
    Plan the shots anyway.
 4. Cover the scene the way a film does: open on a wide shot that shows the place, then go closer for the action and the
    faces, and end on the moment that matters (a face, a reaction, a detail). Say the framing and the camera in each

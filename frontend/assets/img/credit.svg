@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- One credit: the studio's Clapper Gate on its own, in its sky blue, without a tile or a coin around it. -->
+  <defs>
+    <linearGradient id="credit-blue" x1="6" y1="6" x2="42" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9fd6ff"/><stop offset="1" stop-color="#3a86e0"/>
+    </linearGradient>
+  </defs>
+  <path d="M5.5 12.5l35-7.2" stroke="url(#credit-blue)" stroke-width="5.6" stroke-linecap="round"/>
+  <rect x="5.5" y="19" width="37" height="24" rx="5" fill="none" stroke="url(#credit-blue)" stroke-width="5.2"/>
+  <rect x="17.5" y="24.5" width="13" height="13" rx="2.2" fill="url(#credit-blue)"/>
+</svg>

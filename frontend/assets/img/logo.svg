@@ -1,6 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <rect width="48" height="48" rx="11" fill="#F4F4F4"/>
-  <!-- The Gate: two opposing brackets holding one frame, as the studio marks a selected shot. -->
-  <g fill="none" stroke="#0B0B0B" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 23V12h11"/><path d="M36 25v11H25"/></g>
-  <rect x="19.5" y="19.5" width="9" height="9" rx="1.6" fill="#0B0B0B"/>
+  <!-- The Clapper Gate: a clapperboard, its stick lifted for the take, and on the board the studio's frame. -->
+  <rect width="48" height="48" rx="11" fill="#0E0F12"/>
+  <path d="M11 15.5l25.5-5.2" stroke="#F4F4F4" stroke-width="4.5" stroke-linecap="round"/>
+  <rect x="11" y="21" width="26" height="17" rx="3.5" fill="none" stroke="#F4F4F4" stroke-width="4"/>
+  <rect x="20" y="25.5" width="8" height="8" rx="1.4" fill="#8CCBFF"/>
 </svg>

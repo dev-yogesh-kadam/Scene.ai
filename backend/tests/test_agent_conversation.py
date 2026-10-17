@@ -141,3 +141,17 @@ def test_a_message_costs_what_its_model_costs(client, monkeypatch):
     assert client.put("/api/admin/pricing/llm", json={"model": "gemini/flash", "credits": 0}).status_code == 200
     model(monkeypatch, client, {"thought": "", "reply": "Hello.", "steps": [], "model": "gemini/flash"})
     assert client.post("/api/agent/plan", json={"instruction": "hi"}).json()["llm"]["credits"] == 0
+
+
+def test_the_conversation_keeps_many_turns_with_what_each_used_and_drops_the_oldest_past_its_budget():
+    from scene import agent
+    history = [{"instruction": "turn {}".format(i), "reply": "answer {}".format(i)} for i in range(30)]
+    history[0]["steps"] = [{"name": "Maya", "uses": []}, "Liam"]   # the old shape (a name) is still read
+    history[-1]["steps"] = [{"name": "Football Match Beat", "uses": ["Maya", "Liam", "Elena"]}]
+    turns = agent.past_turns(history)
+    assert len(turns) == 60 and turns[0]["content"] == "turn 0"   # far more than the six turns of before
+    assert "(Planned: Maya, Liam)" in turns[1]["content"]
+    assert "(Planned: Football Match Beat using Maya, Liam, Elena)" in turns[-1]["content"]
+    long = [{"instruction": "x" * 2000, "reply": "y" * 1500} for _ in range(40)]
+    kept = agent.past_turns(long)
+    assert sum(len(t["content"]) for t in kept) <= agent.HISTORY_CHARS and len(kept) % 2 == 0 and kept[-1]["content"] == "y" * 1500
