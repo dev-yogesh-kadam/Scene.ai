@@ -8,6 +8,7 @@ A job is charged when it is queued and refunded if it fails or is cancelled.
 """
 
 import math
+import json
 import time
 
 # The rates a new installation starts with. Per generation for the kinds in PER_JOB, per second for the rest.
@@ -44,6 +45,25 @@ class Credits:
     def rates(self):
         return {kind: float(self.db.setting("rate_" + kind, default)) for kind, default in RATES.items()}
 
+    def llm_prices(self):
+        """What a message to the agent costs, by model: {"gemini/gemini-3.6-flash": 2}. A model not listed is free."""
+        try:
+            found = json.loads(self.db.setting("llm_prices", "{}") or "{}")
+        except ValueError:
+            found = {}
+        return {str(k): int(v) for k, v in found.items() if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0}
+
+    def set_llm_price(self, model, credits):
+        prices = self.llm_prices()
+        if credits:
+            prices[model] = int(credits)
+        else:
+            prices.pop(model, None)
+        self.db.set_setting("llm_prices", json.dumps(prices))
+
+    def llm_cost(self, model):
+        return self.llm_prices().get(str(model or ""), 0)
+
     def pricing(self, workflow_id):
         """The workflow's own pricing, or None when it follows the rate of its kind."""
         return self.db.one("SELECT * FROM workflow_pricing WHERE workflow = ?", (workflow_id,))
@@ -69,6 +89,33 @@ class Credits:
         base, per_second, multiplier = self.rate_for(workflow_id)
         seconds = ASSUMED_SECONDS if seconds is None else seconds
         return math.ceil(round((base + per_second * seconds) * multiplier, 6))
+
+    @property
+    def daily_cap(self):
+        """The most credits one user may spend in 24 hours, unless an admin set their own. 0 means no limit."""
+        return int(float(self.db.setting("daily_cap", 0)))
+
+    def cap_for(self, user):
+        own = user.get("daily_cap")
+        return self.daily_cap if own is None else own
+
+    def spent_today(self, user_id):
+        """Credits spent in the last 24 hours: charges, less what was refunded."""
+        row = self.db.one("SELECT SUM(amount) n FROM credit_events WHERE user_id = ? AND reason IN ('generation', 'refund', 'agent') "
+                          "AND created > ?", (user_id, time.time() - 86400))
+        return max(0, -(row["n"] or 0))
+
+    def cap_problem(self, user_id, amount):
+        """Why a charge of `amount` would go over the user's daily limit, or None. Admins have no limit."""
+        user = self.db.one("SELECT role, daily_cap FROM users WHERE id = ?", (user_id,))
+        if not user or user["role"] == "admin" or amount <= 0:
+            return None
+        cap = self.cap_for(user)
+        spent = self.spent_today(user_id)
+        if cap and spent + amount > cap:
+            return ("This needs {} credits. Your account can spend {} in 24 hours and has spent {} already. "
+                    "Try again later, or ask an admin.".format(amount, cap, spent))
+        return None
 
     def balance(self, user_id):
         row = self.db.one("SELECT credits FROM users WHERE id = ?", (user_id,))

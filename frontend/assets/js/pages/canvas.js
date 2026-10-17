@@ -8,7 +8,8 @@ import { el, icon, runningGate, segmented, still, tabTitle } from '../dom.js';
 import { store, subscribe } from '../store.js';
 import { openViewer } from '../components/media.js';
 import { quickActions } from '../components/quick.js';
-import { agentPanel } from '../components/agent.js';
+import { agentTabs } from '../components/agent-tabs.js';
+import { memoryPanel } from '../components/memory.js';
 import { castEditor } from '../components/cast.js';
 
 const FRAME = 240;      // width of every frame, in canvas units
@@ -22,13 +23,27 @@ const ACTIVE = ['queued', 'running'];
 const PANEL = 380;      // the width the panel starts with; its left edge can be dragged
 const PANEL_MIN = 320;
 const PANEL_MAX = 960;
-const TABS = [{ id: 'quick', label: 'Quick actions', icon: 'bolt' }, { id: 'agent', label: 'Agent', icon: 'chat' }];
+const TABS = [{ id: 'quick', label: 'Quick actions', icon: 'bolt' }, { id: 'agent', label: 'Agent', icon: 'chat' },
+  { id: 'memory', label: 'Shared memory', icon: 'memory' }];
+
+// The asset boards: the user's saved assets (and this project's uploads) to the left of the shots, one board per type.
+const ASSET_TYPES = [
+  { tag: 'character', label: 'Characters', glyph: 'C' }, { tag: 'background', label: 'Locations', glyph: 'L' },
+  { tag: 'prop', label: 'Props', glyph: 'P' }, { tag: 'outfit', label: 'Outfits', glyph: 'O' },
+  { tag: 'style', label: 'Style', glyph: 'S' }, { tag: 'voice', label: 'Voices', glyph: 'V' }, { tag: 'other', label: 'Other', glyph: '·' },
+];
+const BOARD_W = 236;      // width of one asset board, in canvas units
+const BOARD_GAP = 32;
+const CARD_H = 212;       // a card: its name and its picture
+const BOARD_HEAD = 56;
 
 const clamp = (n, low, high) => Math.max(low, Math.min(high, n));
 const heightOf = (item) => {
   const c = (item && item.context) || {};
   return Math.round(FRAME * (c.width && c.height ? c.height / c.width : 9 / 16));
 };
+// A frame's place in its shot, counted as takes from the left.
+const take = (spot) => `Take ${Math.round(spot.x / (FRAME + GAP)) + 1}`;
 const elapsed = (job) => {
   const s = Math.max(0, Math.round(Date.now() / 1000 - (job.started || Date.now() / 1000)));
   return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
@@ -51,11 +66,16 @@ export function render(view) {
   let agentJobs = new Set();      // jobs the agent started: their frames are drawn in the agent's colour
 
   const itemLayer = el('div');
+  const assetLayer = el('div');
+  let assets = [];
+  let assetBox = null;            // where the asset boards are, in canvas units, or null when none are shown
+  let showAssets = localStorage.getItem('scene.canvas.assets') !== 'off';
   const jobLayer = el('div');
   const labelLayer = el('div');
-  const world = el('div', { class: 'canvas-world' }, labelLayer, itemLayer, jobLayer);
+  const world = el('div', { class: 'canvas-world' }, assetLayer, labelLayer, itemLayer, jobLayer);
   const stage = el('div', { class: 'canvas-stage' }, world);
-  const picker = el('select', { 'aria-label': 'Project', onchange: (e) => { project = Number(e.target.value) || 0; localStorage.setItem('scene.project', project || ''); selected.clear(); load(); agent.reload(); cast.reload().then(() => dock.recast()); } });
+  // The canvas shows one project, the one opened from All projects; its name is shown, and it does not switch.
+  const picker = el('b', { class: 'canvas-project', title: 'This project. Open another from All projects.' });
   const count = el('span', { class: 'slate-text' });
   const context = el('div', { class: 'float canvas-context hidden' });
   const zoomLabel = el('button', { class: 'btn small quiet', title: 'Zoom to 100% (0)', onclick: () => zoomTo(1) });
@@ -71,13 +91,19 @@ export function render(view) {
     el('div', { class: 'soon-box' }, icon('chat'), el('span', { class: 'soon-tag' }, 'Coming soon'), el('b', {}, 'The agent'),
       el('p', { class: 'muted small' }, 'Describe what you want and have it planned for you. It is not open on your account yet.'),
       el('button', { class: 'btn small', onclick: () => showPanel(true, 'quick') }, 'Use Quick actions'))),
-    attach: () => {}, reload: () => {}, focus: () => {}, destroy: () => {} });
-  const agent = !store.user.agent ? comingSoon() : agentPanel({
+    attach: () => {}, reload: () => {}, redraw: () => {}, focus: () => {}, destroy: () => {} });
+  const agent = !store.user.agent ? comingSoon() : agentTabs({
     projectId: () => project,
     onJobs: (ids) => { agentJobs = new Set(ids); for (const [id, frame] of jobFrames) frame.node.classList.toggle('by-agent', agentJobs.has(id)); },
+    onMemory: () => showPanel(true, 'memory'),
+    onFocus: (id) => focusItem(id),   // a result in the conversation shows that clip on the canvas
+    locate: (id) => locate(id),
   });
+  // Shared memory: the saved assets and this project's uploads, which the agent plans with.
+  const shared = memoryPanel({ projectId: () => project });
   // The panel is open every time the canvas is entered, and remembers which of its two tabs was showing.
-  let tab = localStorage.getItem('scene.panel.tab') === 'agent' && store.user.agent ? 'agent' : 'quick';   // Quick actions unless the agent was chosen
+  const savedTab = localStorage.getItem('scene.panel.tab');   // Quick actions unless the agent or the memory was chosen
+  let tab = savedTab === 'agent' && store.user.agent ? 'agent' : savedTab === 'memory' ? 'memory' : 'quick';
   const title = el('b', { class: 'panel-title' });
   const tabs = el('div');
   const quick = el('div', { class: 'panel-quick' }, dock.node);
@@ -106,7 +132,7 @@ export function render(view) {
   const panel = el('aside', { class: 'side-panel', 'aria-label': 'Make something' }, grip,
     el('div', { class: 'panel-head' }, title, el('span', { style: 'flex:1' }), cast.button, tabs,
       el('button', { class: 'icon-btn', title: 'Close (Ctrl or ⌘ + J)', 'aria-label': 'Close the panel', onclick: () => showPanel(false) }, '×')),
-    cast.box, quick, agent.node);
+    cast.box, quick, agent.node, shared.node);
   const isOpen = () => view.classList.contains('with-panel');
   const panelButton = el('button', { class: 'btn small quiet', title: 'Show or hide Quick action and the Agent (Ctrl or ⌘ + J)', onclick: () => showPanel(!isOpen()) }, 'Panel');
   function showPanel(open, which = tab) {
@@ -119,14 +145,182 @@ export function render(view) {
     tabs.replaceChildren(segmented(TABS.map((t) => ({ id: t.id, label: icon(t.icon), hint: t.label })), tab, (id) => showPanel(true, id)));
     quick.classList.toggle('hidden', tab !== 'quick');
     agent.node.classList.toggle('hidden', tab !== 'agent');
-    if (open) (tab === 'agent' ? agent : dock).focus();
+    shared.node.classList.toggle('hidden', tab !== 'memory');
+    if (open && tab === 'memory') shared.load();   // what the agent has just made or remembered shows at once
+    if (open) (tab === 'agent' ? agent : tab === 'memory' ? shared : dock).focus();
     if (ready) fit();
   }
 
+  // ------------------------------------------------------------ asset boards
+
+  const assetsButton = el('button', { class: 'btn small quiet', title: 'Show or hide the saved assets beside the shots',
+    'aria-pressed': String(showAssets), onclick: async () => {
+      showAssets = !showAssets;
+      localStorage.setItem('scene.canvas.assets', showAssets ? 'on' : 'off');
+      assetsButton.setAttribute('aria-pressed', String(showAssets));
+      if (showAssets) await loadAssets();   // what was saved since the canvas opened shows too
+      drawAssets();
+      fit();
+    } }, 'Assets');
+
+  async function loadAssets() {
+    try {
+      // Saved assets belong to every project; an upload belongs to the project it was dropped into.
+      assets = (await api('/api/assets')).assets.filter((a) => a.origin === 'saved' || (project && a.project_id === project));
+    } catch { assets = []; }
+  }
+
+  // One board per type that has assets, side by side to the left of the names of the shots.
+  function drawAssets() {
+    const groups = ASSET_TYPES.map((t) => ({ ...t, list: assets.filter((a) => (ASSET_TYPES.some((x) => x.tag === a.tag) ? a.tag : 'other') === t.tag) }))
+      .filter((g) => g.list.length);
+    if (!showAssets || !groups.length) {
+      assetLayer.replaceChildren();
+      assetBox = null;
+      return;
+    }
+    const width = groups.length * BOARD_W + (groups.length - 1) * BOARD_GAP;
+    const left = -LABEL - 96 - width;
+    let tallest = 0;
+    assetLayer.replaceChildren(...groups.map((group, i) => {
+      const height = BOARD_HEAD + group.list.length * CARD_H + 12;
+      tallest = Math.max(tallest, height);
+      return el('section', { class: 'asset-board type-' + group.tag, style: `left:${left + i * (BOARD_W + BOARD_GAP)}px;top:0;width:${BOARD_W}px;height:${height}px`,
+        'aria-label': group.label },
+        el('header', { class: 'asset-board-head' }, el('span', { class: 'asset-glyph', 'aria-hidden': 'true' }, group.glyph),
+          el('b', {}, group.label), el('span', { class: 'asset-count' }, String(group.list.length))),
+        ...group.list.map((asset) => el('button', { type: 'button', class: 'asset-card',
+          title: [asset.name, asset.use_note && 'Use: ' + asset.use_note, asset.about].filter(Boolean).join('\n'),
+          onpointerdown: (e) => e.stopPropagation(), ondblclick: () => previewAsset(asset), onclick: (e) => {
+            assetLayer.querySelectorAll('.asset-card.on').forEach((c) => c !== e.currentTarget && c.classList.remove('on'));
+            e.currentTarget.classList.toggle('on');
+          } },
+          el('span', { class: 'asset-name' }, asset.name, asset.origin !== 'saved' && el('i', { class: 'asset-tag' }, 'upload')),
+          el('span', { class: 'asset-picture' }, asset.kind === 'audio'
+            ? el('span', { class: 'asset-sound' }, icon('audio'), 'Sound')
+            : still(`/api/assets/${asset.id}/file`, asset.kind, asset.name)))));
+    }));
+    assetBox = { x: left, y: 0, right: left + width, bottom: tallest };
+  }
+
+  // A closer look at one asset: the file, what it shows and the note on when to use it.
+  function previewAsset(asset) {
+    const url = `/api/assets/${asset.id}/file`;
+    const dialog = el('dialog', { class: 'asset-preview' },
+      el('div', { class: 'asset-preview-media' }, asset.kind === 'image' ? el('img', { src: url, alt: asset.name })
+        : el(asset.kind === 'video' ? 'video' : 'audio', { src: url, controls: true })),
+      el('div', { class: 'asset-preview-words' },
+        el('span', { class: 'asset-tag' }, (ASSET_TYPES.find((t) => t.tag === asset.tag) || ASSET_TYPES[6]).label.replace(/s$/, '')),
+        el('h2', {}, asset.name),
+        asset.about && el('p', { class: 'muted small' }, asset.about),
+        asset.use_note && el('p', { class: 'small' }, el('b', {}, 'When to use: '), asset.use_note),
+        el('div', { class: 'dialog-buttons' }, el('a', { class: 'btn small quiet', href: '#/assets' }, 'Edit in Assets'),
+          el('button', { class: 'btn small primary', onclick: () => dialog.close() }, 'Close'))));
+    dialog.addEventListener('close', () => dialog.remove());
+    document.body.append(dialog);
+    dialog.showModal();
+  }
+
+  // ------------------------------------------------------------ tools: bring files in, and take work from the library
+
+  const toolNote = el('div', { class: 'float canvas-tool-note hidden', role: 'status', 'aria-live': 'polite' });
+  let noteTimer = null;
+  const note = (text, { error = false, stay = false } = {}) => {
+    clearTimeout(noteTimer);
+    toolNote.textContent = text;
+    toolNote.classList.toggle('error', error);
+    toolNote.classList.toggle('hidden', !text);
+    if (!stay) noteTimer = setTimeout(() => toolNote.classList.add('hidden'), error ? 6000 : 2500);
+  };
+  const filePicker = el('input', { type: 'file', accept: 'image/*,video/*,audio/*', multiple: true, hidden: true,
+    onchange: (e) => { uploadFiles([...e.target.files]); e.target.value = ''; } });
+  // Each file joins the library and this project, and lands on the canvas as a shot of its own.
+  async function uploadFiles(files) {
+    const usable = files.filter((f) => /^(image|video|audio)\//.test(f.type));
+    if (!usable.length) return note('Only images, videos and sound can be uploaded.', { error: true });
+    const made = [];
+    for (const [i, file] of usable.entries()) {
+      note(usable.length > 1 ? `Uploading ${i + 1} of ${usable.length}: ${file.name}` : `Uploading ${file.name}…`, { stay: true });
+      const data = new FormData();
+      data.append('file', file, file.name);
+      data.append('project_id', project || '');
+      try { made.push((await api('/api/library/upload', { method: 'POST', body: data })).id); } catch (e) { return note(e.message, { error: true }); }
+    }
+    await loadItems();
+    selected.clear();
+    for (const id of made) selected.add(id);
+    draw();
+    note(made.length === 1 ? 'Uploaded. It is on the canvas.' : `${made.length} files uploaded. They are on the canvas.`);
+  }
+  stage.addEventListener('dragover', (e) => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); view.classList.add('dropping'); } });
+  stage.addEventListener('dragleave', (e) => { if (e.target === stage) view.classList.remove('dropping'); });
+  stage.addEventListener('drop', (e) => {
+    if (!e.dataTransfer.files.length) return;
+    e.preventDefault();
+    view.classList.remove('dropping');
+    uploadFiles([...e.dataTransfer.files]);
+  });
+
+  // The library drawer: everything the user has made or brought in, to bring onto this canvas.
+  const drawer = el('div', { class: 'float canvas-library hidden', role: 'dialog', 'aria-label': 'Library' });
+  const shelf = { kind: '', q: '', all: [], loaded: false };
+  const libraryButton = el('button', { type: 'button', class: 'tool-btn', 'aria-label': 'Library', 'data-tip': 'Library', onclick: () => toggleLibrary() }, icon('grid'));
+  async function toggleLibrary(open = drawer.classList.contains('hidden')) {
+    drawer.classList.toggle('hidden', !open);
+    libraryButton.classList.toggle('on', open);
+    if (!open) return;
+    drawShelf();
+    try { shelf.all = (await api('/api/library')).items; shelf.loaded = true; } catch (e) { return note(e.message, { error: true }); }
+    drawShelf();
+  }
+  const grid = el('div', { class: 'library-grid' });
+  const kinds = el('div');
+  drawer.append(
+    el('div', { class: 'library-head' }, el('b', {}, 'Library'), el('span', { style: 'flex:1' }),
+      el('a', { class: 'btn small quiet', href: '#/library' }, 'Open page'),
+      el('button', { class: 'icon-btn', 'aria-label': 'Close the library', title: 'Close', onclick: () => toggleLibrary(false) }, '×')),
+    kinds,
+    el('input', { type: 'search', class: 'search', placeholder: 'Search by name', 'aria-label': 'Search the library',
+      oninput: (e) => { shelf.q = e.target.value; drawShelf(); } }),
+    grid);
+  function drawShelf() {
+    kinds.replaceChildren(segmented([{ id: '', label: 'All' }, { id: 'image', label: 'Images' }, { id: 'video', label: 'Videos' }, { id: 'audio', label: 'Audio' }],
+      shelf.kind, (k) => { shelf.kind = k; drawShelf(); }));
+    const words = shelf.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const shown = shelf.all.filter((i) => (!shelf.kind || i.kind === shelf.kind) && words.every((w) => i.name.toLowerCase().includes(w)));
+    grid.replaceChildren(...(shown.length ? shown.map((item) => {
+      const here = !project || item.project_id === project;
+      return el('button', { type: 'button', class: 'library-tile' + (here ? ' here' : ''),
+        title: here ? 'Open it' : `In ${item.project_name || 'no project'}. Click to move it to this project's canvas.`,
+        onclick: async () => {
+          if (here) return open(item);
+          try {
+            await api('/api/library/' + item.id, { method: 'PUT', json: { project_id: project } });
+            item.project_id = project;
+            await loadItems();
+            selected.clear();
+            selected.add(item.id);
+            draw();
+            drawShelf();
+            note(`${item.name} is on the canvas.`);
+          } catch (e) { note(e.message, { error: true }); }
+        } },
+        el('span', { class: 'library-thumb' }, still(`/api/library/${item.id}/file`, item.kind, item.name)),
+        el('span', { class: 'library-name' }, item.name),
+        el('span', { class: 'library-where' }, here ? (project ? 'On this canvas' : item.project_name || 'No project') : '+ Add to canvas'));
+    }) : [el('p', { class: 'muted small' }, shelf.loaded ? (shelf.all.length ? 'Nothing matches.' : 'Your library is empty.') : 'Loading…')]));
+  }
+  const tools = el('div', { class: 'float canvas-tools', role: 'toolbar', 'aria-label': 'Canvas tools', 'aria-orientation': 'vertical' },
+    el('button', { type: 'button', class: 'tool-btn', 'aria-label': 'Upload an image, video or sound', 'data-tip': 'Upload image, video or audio',
+      onclick: () => filePicker.click() }, icon('upload')),
+    libraryButton, filePicker);
+
   view.replaceChildren(stage,
     el('div', { class: 'float canvas-bar' }, picker, count, el('a', { class: 'btn small quiet', href: '#/timeline', title: 'Put this project\'s videos in order' }, 'Timeline')),
+    tools, drawer, toolNote,
     context,
     el('div', { class: 'float canvas-view' },
+      assetsButton,
       el('button', { class: 'btn small quiet', title: 'Fit everything (1)', onclick: () => fit() }, 'Fit'),
       zoomLabel, panelButton),
     map, hint, panel);
@@ -191,10 +385,12 @@ export function render(view) {
       shot.item = item;
       lazy.observe(shot);
       const c = item.context || {};
+      const label = el('b', {}, take(spot));
       const node = el('div', { class: 'frame' + (selected.has(item.id) ? ' selected' : ''), style: `left:${spot.x}px;top:${spot.y}px`, title: item.name,
         onpointerdown: (e) => grab(e, item.id), ondblclick: () => open(item) },
         shot,
-        el('div', { class: 'slate' }, el('b', {}, item.kind), el('span', {}, c.width ? `${c.width}×${c.height}` : item.name)));
+        el('div', { class: 'slate' }, label, el('span', {}, c.width ? `${item.kind} · ${c.width}×${c.height}` : item.name)));
+      node.take = label;
       boxes.set(item.id, { key: item.id, ...spot, node });
       return node;
     }));
@@ -226,7 +422,11 @@ export function render(view) {
       }
       const waiting = job.status === 'queued';
       if (!waiting && !frame.gate) frame.gate = frame.shot.appendChild(runningGate());
-      frame.clock.textContent = waiting ? 'queued' : elapsed(job);
+      // The frame develops like a print in a tray: the grain clears as the steps go by.
+      const done = job.steps ? (Math.max(job.clip, 1) - 1 + job.step / job.steps) / Math.max(job.clips, 1) : 0;
+      frame.shot.style.setProperty('--developed', done.toFixed(3));
+      frame.node.classList.toggle('waiting', waiting);
+      frame.clock.textContent = waiting ? 'queued' : elapsed(job);   // how long it has been at it; no percentage
       frame.fact.textContent = waiting ? `position ${job.position}` : job.steps ? `step ${job.step} of ${job.steps}` : 'starting';
     }
     hint.classList.toggle('hidden', boxes.size > 0);
@@ -240,8 +440,12 @@ export function render(view) {
       Object.assign(box, spot);
       box.node.style.left = spot.x + 'px';
       box.node.style.top = spot.y + 'px';
+      if (box.node.take) box.node.take.textContent = take(spot);
     }
-    labelLayer.replaceChildren(...bands.map((band, i) => el('button', { class: 'shot-label', title: 'Rename this shot',
+    // Each shot is a strip of film behind its frames, a little longer than the frames on it.
+    labelLayer.replaceChildren(...bands.map((band) => el('div', { class: 'lane',
+      style: `left:${-GAP / 2}px;top:${band.y - GAP / 3}px;width:${band.row.keys.length * (FRAME + GAP)}px;height:${band.h + SLATE + GAP * 2 / 3}px` })),
+    ...bands.map((band, i) => el('button', { class: 'shot-label', title: 'Rename this shot',
       style: `left:${-LABEL}px;top:${band.y}px;width:${LABEL - GAP / 2}px;height:${band.h}px`,
       onpointerdown: (e) => e.stopPropagation(), onclick: (e) => rename(band.row, e.currentTarget, i) }, band.row.name || `Shot ${i + 1}`)));
     drawOverlay();
@@ -273,6 +477,43 @@ export function render(view) {
     drawItems();
     drawJobs(jobs);
     settle();
+  }
+
+  // ------------------------------------------------------------ one item in view: where the agent's results lead
+
+  // Where an item is, as the agent's panel names it: "Shot 3", take 2.
+  function locate(id) {
+    const index = layout.rows.findIndex((row) => row.keys.includes(id));
+    if (index < 0) return null;
+    const row = layout.rows[index];
+    return { shot: row.name || `Shot ${index + 1}`, take: row.keys.indexOf(id) + 1 };
+  }
+
+  // Glide to one item and select it: it comes to the middle of the part of the canvas the panel leaves free, at a size
+  // it can be seen at, with a ring that shows which one it is.
+  let glide = null;
+  async function focusItem(id) {
+    if (!boxes.has(id)) {   // made a moment ago, it may not be drawn yet
+      try { await loadItems(); draw(); } catch { /* said below */ }
+    }
+    const box = boxes.get(id);
+    if (!box) return note(project ? 'That one is not in this project. Pick All work to see it.' : 'That one is no longer in the library.', { error: true });
+    const rect = stage.getBoundingClientRect();
+    const covered = isOpen() ? panelWidth + 12 : 0;
+    const room = { w: Math.max(200, rect.width - covered), h: rect.height };
+    cam.k = clamp(Math.min((room.w * 0.55) / FRAME, (room.h * 0.62) / (box.h + SLATE)), 0.35, 1.6);
+    cam.x = room.w / 2 - (box.x + FRAME / 2) * cam.k;
+    cam.y = room.h / 2 - (box.y + (box.h + SLATE) / 2) * cam.k;
+    world.classList.add('gliding');
+    applyCamera();
+    clearTimeout(glide);
+    glide = setTimeout(() => world.classList.remove('gliding'), 650);
+    selected.clear();
+    selected.add(id);
+    selectionChanged();
+    box.node.classList.remove('spotlight');
+    void box.node.offsetWidth;   // starts the ring again when it is already there
+    box.node.classList.add('spotlight');
   }
 
   // ------------------------------------------------------------ camera
@@ -311,9 +552,11 @@ export function render(view) {
   }
 
   function fit() {
-    if (!boxes.size) { cam.x = 96; cam.y = 96; cam.k = 1; return applyCamera(); }
-    const all = bounds([...boxes.values()]);
-    all.x -= LABEL;   // the names of the shots are part of the picture
+    if (!boxes.size && !assetBox) { cam.x = 96; cam.y = 96; cam.k = 1; return applyCamera(); }
+    const all = boxes.size ? bounds([...boxes.values()]) : { ...assetBox };
+    all.x -= boxes.size ? LABEL : 0;   // the names of the shots are part of the picture
+    if (assetBox) Object.assign(all, { x: Math.min(all.x, assetBox.x), y: Math.min(all.y, assetBox.y),
+      right: Math.max(all.right, assetBox.right), bottom: Math.max(all.bottom, assetBox.bottom) });
     const rect = stage.getBoundingClientRect();
     const covered = isOpen() ? panelWidth + 12 : 0;   // the open panel covers the right side
     const room = { w: rect.width - 160 - covered, h: rect.height - 160 };
@@ -403,8 +646,8 @@ export function render(view) {
   }
 
   const download = (item) => el('a', { href: `/api/library/${item.id}/file?download=true`, download: item.filename }).click();
-  const open = (item) => openViewer(item, { actions: item.workflow.startsWith('edit/') ? []
-    : [{ label: 'Re-run', run: (dialog) => { dialog.close(); store.rerun = item; location.hash = '#/create'; } }] });
+  const open = (item) => openViewer(item, { actions: /^(edit|upload)\//.test(item.workflow) ? []
+    : [{ label: 'Re-run', run: (dialog) => { dialog.close(); store.rerun = item; store.from = '#/canvas'; location.hash = '#/create'; } }] });
 
   async function addToTimeline(videos, button) {
     button.disabled = true;
@@ -434,8 +677,8 @@ export function render(view) {
     context.replaceChildren(...[
       !one && el('span', { class: 'slate-text' }, `${chosen.length} selected`),
       one && el('button', { class: 'btn small quiet', onclick: () => open(one) }, 'Open'),
-      one && !one.workflow.startsWith('edit/') && el('button', { class: 'btn small quiet', title: 'Open Create with the same settings',
-        onclick: () => { store.rerun = one; location.hash = '#/create'; } }, 'Re-run'),
+      one && !/^(edit|upload)\//.test(one.workflow) && el('button', { class: 'btn small quiet', title: 'Open Create with the same settings',
+        onclick: () => { store.rerun = one; store.from = '#/canvas'; location.hash = '#/create'; } }, 'Re-run'),
       videos.length > 0 && el('button', { class: 'btn small quiet', onclick: (e) => addToTimeline(videos, e.currentTarget) },
         one ? 'Add to timeline' : `Add ${videos.length} to timeline`),
       el('button', { class: 'btn small quiet', title: 'Download (D)', onclick: () => chosen.forEach(download) }, one ? 'Download' : `Download ${chosen.length}`),
@@ -464,6 +707,7 @@ export function render(view) {
 
   let saveTimer;
   function save() {
+    agent.redraw();   // where each of the agent's results is ("Shot 3 › Take 2") may have changed
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => api('/api/boards/canvas', { method: 'PUT', json: { project: project || null, data: layout } }).catch(() => {}), 400);
   }
@@ -480,10 +724,10 @@ export function render(view) {
     try {
       projects = (await api('/api/projects')).projects;
       if (project && !projects.some((p) => p.id === project)) project = 0;
-      picker.replaceChildren(el('option', { value: '' }, 'All work'),
-        ...projects.map((p) => el('option', { value: p.id, selected: p.id === project }, p.name)));
+      picker.textContent = (projects.find((p) => p.id === project) || { name: 'All work' }).name;
       tabTitle((projects.find((p) => p.id === project) || { name: 'Canvas' }).name);
-      const [board] = await Promise.all([api('/api/boards/canvas?project=' + project), loadItems()]);
+      const [board] = await Promise.all([api('/api/boards/canvas?project=' + project), loadItems(), loadAssets()]);
+      drawAssets();
       const saved = board.data || {};
       layout = { rows: Array.isArray(saved.rows) ? saved.rows.filter((row) => row && Array.isArray(row.keys)) : [], count: Number(saved.count) || 0 };
       ready = true;
@@ -520,6 +764,7 @@ export function render(view) {
     unsubscribe();
     dock.destroy();
     agent.destroy();
+    shared.destroy();
     clearInterval(ticker);
     clearTimeout(saveTimer);
     lazy.disconnect();

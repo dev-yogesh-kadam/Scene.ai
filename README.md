@@ -77,11 +77,14 @@ Stop the app with `Ctrl+C`.
 | `comfy_url` | `http://127.0.0.1:8188` | ComfyUI address. An admin can also change it in the admin console. |
 | `ollama_url` | `http://127.0.0.1:11434` | The Ollama server whose language model the agent uses. It also improves prompts and writes the captions some image models need. |
 | `agent_model` | first model there is | The model the agent uses unless the user picks another, for example `qwen3.5:9b`, or `kimi/kimi-k2.6` for a hosted one. |
+| `ollama_models` | all of them | The local models the agent offers, comma separated, for example `qwen3.6:35b,nemotron3:33b`. Ollama may hold others, such as an embedding model, that should not be picked. |
 | `api_url`, `api_key`, `api_models` | none | A hosted model service for the agent beside the local ones, for example Kimi. See [docs/servers.md](docs/servers.md). |
 | `gemini_key`, `gemini_models` | none | Google Gemini models for the agent. |
 | `host`, `port` | `0.0.0.0`, `8080` | Where the app listens. Use `127.0.0.1` to keep it to this computer. |
 | `default_workflow` | none | Workflow selected for new users, for example `video/h3_master`. |
 | `allow_signup` | `true` | Whether visitors can create accounts. The first account can always be created. |
+| `database_url` | `""` | The PostgreSQL database, as `postgresql://scene_app:<password>@localhost:5432/scene`. Empty means SQLite in `storage_dir`. See [docs/database.md](docs/database.md). |
+| `database_owner_url` | `""` | The account that owns the tables; it makes and changes them when the app starts. |
 | `first_account_local` | `true` | The first account (the admin) can only be made from a browser on the machine the app runs on. Set `false` for a server with no browser of its own. |
 | `secure_cookies` | `false` | Marks the session cookie `Secure` for every visit. Visits over https, including through a Cloudflare tunnel, get it anyway. |
 | `signup_credits` | `1000` | Credits a new account starts with. An admin can change it in the admin console. |

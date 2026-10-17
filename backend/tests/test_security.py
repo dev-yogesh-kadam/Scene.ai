@@ -134,3 +134,33 @@ def test_totp_matches_the_rfc_test_vector():
     assert security.totp_code(secret, 59 // 30) == "287082"
     assert security.check_totp(secret, "287082", now=59) == 1
     assert security.check_totp(secret, "287082", last_step=1, now=59) is None
+
+
+def test_row_level_security_keeps_each_user_to_their_own_rows(client):
+    """PostgreSQL only: the database itself refuses other users' rows, even to SQL that forgot to ask for one user's."""
+    import pytest
+    from scene import db as storage
+    db = client.app.state.db
+    if db.kind != "postgres":
+        pytest.skip("row-level security is PostgreSQL's")
+    ada = account(client)["id"]
+    client.post("/api/projects", json={"name": "Ada's"})
+    eve = account(client, "eve@example.com")["id"]
+    client.post("/api/projects", json={"name": "Eve's"})
+    try:
+        storage.act_for(ada)
+        assert [p["name"] for p in db.all("SELECT name FROM projects")] == ["Ada's"]        # no user_id in the SQL
+        assert [u["id"] for u in db.all("SELECT id FROM users")] == [ada]
+        assert db.change("UPDATE projects SET name = 'taken' WHERE user_id = ?", (eve,)) == 0
+        with pytest.raises(Exception):   # a row written for another user is refused
+            db.run("INSERT INTO projects (user_id, name, created) VALUES (?, ?, ?)", (eve, "planted", 0))
+        with storage.as_everyone():
+            assert sorted(p["name"] for p in db.all("SELECT name FROM projects")) == ["Ada's", "Eve's"]
+    finally:
+        storage.act_for_everyone()
+    # A connection that never says whose rows it wants sees none.
+    import psycopg
+    with psycopg.connect(db.url) as raw:
+        assert raw.execute("SELECT COUNT(*) FROM projects").fetchone()[0] == 0
+        assert raw.execute("SELECT COUNT(*) FROM settings").fetchone()[0] >= 0   # tables of the whole installation are open
+

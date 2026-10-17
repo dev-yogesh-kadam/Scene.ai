@@ -1,8 +1,10 @@
 """The admin console: overview, users, every user's jobs and library, credits, workflows, system, audit log, settings."""
 
+import asyncio
 import csv
 import io
 import json
+import os
 import platform
 import re
 import shutil
@@ -14,22 +16,26 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
 from .. import __version__, audit, backup, edits, media
+from ..agent import AgentError
 from ..catalog import KINDS
 from ..credits import MOTION, OVERLAY, PER_JOB, RATES
 from .auth import new_hash, password_problem, signup_open
 from .deps import admin_user
 from .library import poster_response
+from .studio import current_announcement
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 DAY = 86400
 RANGES = (7, 30, 90)
-SPEND = "reason IN ('generation', 'refund')"   # a charge and its refund cancel out
-LOCAL_DAY = "date({}, 'unixepoch', 'localtime')"
+SPEND = "reason IN ('generation', 'refund', 'agent')"   # a charge and its refund cancel out; messages to the agent are spending too
+COUNT_IF = "SUM(CASE WHEN {} THEN 1 ELSE 0 END)"   # how many rows meet a condition, in SQL both databases speak
+DONE_FAILED = COUNT_IF.format("status = 'done'") + " AS done, " + COUNT_IF.format("status = 'failed'") + " AS failed"
 
 
 def _settings(state):
     return {"comfy_url": state.comfy.url, "allow_signup": signup_open(state),
-            "signup_credits": state.credits.signup}
+            "signup_credits": state.credits.signup, "daily_cap": state.credits.daily_cap,
+            "admin_mfa": state.db.setting("admin_mfa", "0") == "1"}
 
 
 def _number(body, key, maximum):
@@ -50,9 +56,49 @@ def _like(text):
 async def _server(state):
     try:
         stats = await state.comfy.stats()
-        return dict(stats, online=True, url=state.comfy.url)
+        state.saw_server(True)
+        found = dict(stats, online=True, url=state.comfy.url)
     except (httpx.HTTPError, ValueError):
-        return {"online": False, "url": state.comfy.url}
+        state.saw_server(False)
+        found = {"online": False, "url": state.comfy.url}
+    # Since when it has answered, or not: as far as this app has seen, so no earlier than the app's start.
+    found["since"] = state.server_seen["since"]
+    return found
+
+
+def _clock(timestamp):
+    """A time of day, with the date when it was not today: "14:02", or "9 Oct 14:02"."""
+    when = time.localtime(timestamp)
+    return time.strftime("%H:%M" if time.strftime("%Y-%m-%d", when) == time.strftime("%Y-%m-%d") else "%d %b %H:%M", when).lstrip("0")
+
+
+# What a failed job's error means, in words for the admin: (part of the message, explanation). The first match wins.
+PLAIN_ERRORS = [
+    ("out of memory", "The render PC ran out of graphics memory. A shorter clip, a lower resolution or a lower quality fits."),
+    ("allocation on device", "The render PC ran out of graphics memory. A shorter clip, a lower resolution or a lower quality fits."),
+    ("app was restarted", "The studio app was restarted while this job ran, so it could not finish."),
+    ("lost the connection to comfyui", "The render server stopped answering while this job ran: it was turned off, restarted or lost its network."),
+    ("can't be reached", "The render server could not be reached."),
+    ("interrupted in comfyui", "It was stopped in ComfyUI itself, not from the studio."),
+    ("saved no", "The workflow finished but saved no picture, video or sound. Its Save node may be missing or switched off."),
+    ("value not in list", "The workflow asked for a model or file the render server does not have."),
+    ("prompt outputs failed validation", "ComfyUI refused the workflow before running it: a setting or a model file is missing on the render server."),
+    ("hyperframes", "The motion graphic could not be drawn on this machine."),
+    ("ffmpeg", "Joining or cutting the video failed on this machine."),
+]
+
+
+def explain(error):
+    if not error:
+        return ""
+    low = error.lower()
+    for words, meaning in PLAIN_ERRORS:
+        if words in low:
+            return meaning
+    node = re.match(r"ComfyUI error in node '([^']*)'", error)
+    if node:
+        return "A step of the workflow failed on the render server ({}).".format(node.group(1))
+    return ""
 
 
 # ---------------------------------------------------------------- overview
@@ -79,6 +125,39 @@ def _period(db, start, end):
     }
 
 
+def _online(state):
+    """Who has the studio open now, with the pages of their open tabs and their job, if one is waiting or running."""
+    people = state.hub.people()
+    if not people:
+        return []
+    marks = ", ".join("?" * len(people))
+    users = {u["id"]: u for u in state.db.all("SELECT id, name, email, role FROM users WHERE id IN ({})".format(marks), list(people))}
+    jobs = {}
+    for job in state.db.all("SELECT user_id, name, status FROM jobs WHERE status IN ('queued', 'running') AND user_id IN ({}) "
+                            "ORDER BY created".format(marks), list(people)):
+        if job["user_id"] not in jobs or job["status"] == "running":
+            jobs[job["user_id"]] = {"name": job["name"], "status": job["status"]}
+    return sorted([dict(users[user_id], **found, job=jobs.get(user_id)) for user_id, found in people.items() if user_id in users],
+                  key=lambda p: p["since"])
+
+
+def _signups(state, now):
+    """New accounts lately, and the addresses that made more than one of them in the last day."""
+    db = state.db
+    made = db.all("SELECT target, ip, created FROM audit_log WHERE action = 'Created account' AND created > ?", (now - DAY,))
+    by_address = {}
+    for row in made:
+        by_address.setdefault(row["ip"], []).append(row["target"])
+    recent = db.all("SELECT u.id, u.name, u.email, u.created, u.disabled, u.credits, "
+                    "(SELECT COUNT(*) FROM jobs j WHERE j.user_id = u.id) AS jobs FROM users u ORDER BY u.created DESC LIMIT 8")
+    address = {row["target"]: row["ip"] for row in db.all(
+        "SELECT target, ip FROM audit_log WHERE action = 'Created account' ORDER BY id DESC LIMIT 200")}
+    for user in recent:
+        user["ip"] = address.get(user["email"], "")
+    return {"open": signup_open(state), "today": len(made), "per_day": state.settings.signups_per_day, "recent": recent,
+            "crowded": [{"ip": ip, "accounts": len(emails), "emails": emails} for ip, emails in by_address.items() if len(emails) > 1 and ip]}
+
+
 def _daily(db, days, sql, since):
     """One number per local day, with zeros for days that have no rows. `sql` selects (day, n)."""
     found = {row["day"]: row["n"] or 0 for row in db.all(sql, (since,))}
@@ -95,7 +174,7 @@ async def overview(request: Request, days: int = 30, user: dict = Depends(admin_
 
     def series(table, extra="", value="COUNT(*)", column="created"):
         return _daily(db, calendar, "SELECT {} AS day, {} AS n FROM {} WHERE {} > ? {} GROUP BY day".format(
-            LOCAL_DAY.format(column), value, table, column, extra), since)
+            db.local_day(column), value, table, column, extra), since)
 
     server = await _server(state)
     running = db.one("SELECT j.id, j.name, j.workflow, j.started, j.est_seconds, u.name AS user_name "
@@ -104,13 +183,25 @@ async def overview(request: Request, days: int = 30, user: dict = Depends(admin_
         live = state.jobs.live.get(running["id"], {})
         running.update(step=live.get("step", 0), steps=live.get("steps", 0), clip=live.get("clip", 0),
                        clips=live.get("clips", 0), node=live.get("node", ""))
-    waiting = db.all("SELECT j.id, j.name, j.created, j.est_seconds, u.name AS user_name FROM jobs j "
-                     "JOIN users u ON u.id = j.user_id WHERE j.status = 'queued' ORDER BY j.created LIMIT 8")
+    waiting = db.all("SELECT j.id, j.name, j.workflow, j.created, j.est_seconds, j.priority, u.name AS user_name FROM jobs j "
+                     "JOIN users u ON u.id = j.user_id WHERE j.status = 'queued' ORDER BY j.priority DESC, j.created LIMIT 8")
 
     # Things an admin should act on.
     attention = []
     if not server["online"]:
-        attention.append({"level": "critical", "text": "The render server does not answer at {}. No jobs can run.".format(server["url"]), "tab": "system"})
+        attention.append({"level": "critical", "text": "The render server has not answered at {} since {}. No renders can run.".format(
+            server["url"], _clock(server["since"])), "tab": "system"})
+    if state.jobs.paused():
+        attention.append({"level": "warning", "text": "Renders are paused. Jobs wait until you resume them.", "tab": "overview"})
+    signups = _signups(state, now)
+    for crowd in signups["crowded"]:
+        attention.append({"level": "warning", "text": "{} accounts were made from one address ({}) in the last 24 hours.".format(
+            crowd["accounts"], crowd["ip"]), "tab": "users"})
+    money = _economics(state, days, titles={w["id"]: w for w in await state.catalog.listing()})
+    for row in money["workflows"]:
+        if row["margin_inr"] is not None and row["margin_inr"] < 0 and row["done"]:
+            attention.append({"level": "warning", "text": "{} earned ₹{:,.0f} in {} days but its electricity cost ₹{:,.0f}. Its price no longer covers its cost.".format(
+                row["title"], row["revenue_inr"], days, row["electricity_inr"]), "tab": "pricing"})
     failed_day = db.one("SELECT COUNT(*) n FROM jobs WHERE status = 'failed' AND created > ?", (now - DAY,))["n"]
     if failed_day:
         attention.append({"level": "serious", "text": "{} job{} failed in the last 24 hours.".format(failed_day, "" if failed_day == 1 else "s"), "tab": "jobs"})
@@ -162,15 +253,19 @@ async def overview(request: Request, days: int = 30, user: dict = Depends(admin_
             "SUM(CASE WHEN j.status = 'done' THEN j.finished - j.started ELSE 0 END) AS gpu_seconds "
             "FROM jobs j JOIN users u ON u.id = j.user_id WHERE j.created > ? GROUP BY u.id ORDER BY credits DESC, jobs DESC LIMIT 6", (since,)),
         "top_workflows": db.all(
-            "SELECT workflow, COUNT(*) AS jobs, SUM(status = 'done') AS done, SUM(status = 'failed') AS failed, "
+            "SELECT workflow, COUNT(*) AS jobs, " + DONE_FAILED + ", "
             "AVG(CASE WHEN status = 'done' THEN finished - started END) AS avg_seconds "
             "FROM jobs WHERE created > ? GROUP BY workflow ORDER BY jobs DESC LIMIT 6", (since,)),
         "failures": db.all(
             "SELECT substr(error, 1, 140) AS error, COUNT(*) AS jobs, MAX(created) AS last_seen FROM jobs "
             "WHERE status = 'failed' AND created > ? GROUP BY substr(error, 1, 140) ORDER BY jobs DESC, last_seen DESC LIMIT 5", (since,)),
-        "queue": {"running": running, "waiting": waiting,
+        "queue": {"running": running, "waiting": waiting, "paused": state.jobs.paused(),
                   "waiting_total": db.one("SELECT COUNT(*) n FROM jobs WHERE status = 'queued'")["n"]},
-        "server": {"online": server["online"], "version": server.get("system", {}).get("comfyui_version")},
+        "server": {"online": server["online"], "version": server.get("system", {}).get("comfyui_version"), "since": server["since"]},
+        "online": _online(state),
+        "signups": signups,
+        "economics": {"workflows": money["workflows"][:6], "totals": money["totals"], "unmeasured": money["unmeasured"]},
+        "announcement": current_announcement(db),
         "attention": attention,
         "activity": sorted(activity, key=lambda a: a["time"], reverse=True)[:14],
         "totals": {"users": db.one("SELECT COUNT(*) n FROM users")["n"],
@@ -188,7 +283,7 @@ USER_ROWS = (
     "(SELECT COUNT(*) FROM jobs j WHERE j.user_id = u.id) AS jobs, "
     "(SELECT MAX(j.created) FROM jobs j WHERE j.user_id = u.id) AS last_job, "
     "(SELECT MAX(s.created) FROM sessions s WHERE s.user_id = u.id) AS last_sign_in, "
-    "(SELECT -COALESCE(SUM(c.amount), 0) FROM credit_events c WHERE c.user_id = u.id AND c.{}) AS spent "
+    "(SELECT -COALESCE(SUM(c.amount), 0) FROM credit_events c WHERE c.user_id = u.id AND c.{}) AS spent, u.daily_cap "
     "FROM users u ").format(SPEND)
 
 
@@ -212,10 +307,14 @@ async def user_detail(user_id: int, request: Request, user: dict = Depends(admin
     if found is None:
         raise HTTPException(404, "No such user.")
     stats = db.one(
-        "SELECT SUM(status = 'done') AS done, SUM(status = 'failed') AS failed, SUM(status = 'cancelled') AS cancelled, "
+        "SELECT " + DONE_FAILED + ", " + COUNT_IF.format("status = 'cancelled'") + " AS cancelled, "
         "SUM(CASE WHEN status = 'done' THEN finished - started ELSE 0 END) AS gpu_seconds FROM jobs WHERE user_id = ?", (user_id,))
+    state = request.app.state
+    limits = {"own": found["daily_cap"], "studio": state.credits.daily_cap, "in_force": state.credits.cap_for(found),
+              "spent_today": state.credits.spent_today(user_id), "exempt": found["role"] == "admin"}
     return {
         "user": found,
+        "limits": limits,
         "stats": {k: v or 0 for k, v in stats.items()},
         "storage_bytes": (db.one("SELECT SUM(size) n FROM generations WHERE user_id = ?", (user_id,))["n"] or 0)
         + (db.one("SELECT SUM(size) n FROM assets WHERE user_id = ?", (user_id,))["n"] or 0),
@@ -260,6 +359,11 @@ async def update_user(user_id: int, body: dict, request: Request, user: dict = D
         if user_id != user["id"]:
             state.db.run("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         audit.record(request, user, "Set a new password", email)
+    if "daily_cap" in body:
+        own = None if body["daily_cap"] in (None, "") else int(_number(body, "daily_cap", 10000000))
+        state.db.run("UPDATE users SET daily_cap = ? WHERE id = ?", (own, user_id))
+        audit.record(request, user, "Set a daily credit limit", email,
+                     "follows the studio's limit" if own is None else "no limit" if own == 0 else "{} credits".format(own))
     if body.get("mfa_off"):
         state.db.run("UPDATE users SET mfa_enabled = 0, mfa_secret = '', mfa_step = 0, mfa_recovery = '[]' WHERE id = ?", (user_id,))
         state.db.run("DELETE FROM sessions WHERE user_id = ?", (user_id,))
@@ -303,7 +407,7 @@ async def list_jobs(request: Request, status: str = "", q: str = "", offset: int
     for job in jobs:
         live = state.jobs.live.get(job["id"], {})
         job.update(step=live.get("step", 0), steps=live.get("steps", 0), clip=live.get("clip", 0),
-                   clips=live.get("clips", 0), node=live.get("node", ""))
+                   clips=live.get("clips", 0), node=live.get("node", ""), explained=explain(job["error"]))
     return {"jobs": jobs, "total": total}
 
 
@@ -316,7 +420,60 @@ async def job_detail(job_id: str, request: Request, user: dict = Depends(admin_u
         raise HTTPException(404, "No such job.")
     job["settings"] = json.loads(job["settings"])
     job["items"] = db.all("SELECT id, kind, name, filename, size FROM generations WHERE job_id = ?", (job_id,))
+    job["explained"] = explain(job["error"])
     return job
+
+
+@router.post("/jobs/{job_id}/front")
+async def job_to_front(job_id: str, request: Request, user: dict = Depends(admin_user)):
+    """Put a waiting job ahead of the others."""
+    state = request.app.state
+    job = state.db.one("SELECT j.status, j.name, u.email FROM jobs j JOIN users u ON u.id = j.user_id WHERE j.id = ?", (job_id,))
+    if job is None:
+        raise HTTPException(404, "No such job.")
+    if job["status"] != "queued":
+        raise HTTPException(400, "Only a waiting job can be moved.")
+    state.jobs.to_front(job_id)
+    audit.record(request, user, "Moved a job to the front", job["email"], job["name"])
+    return {"ok": True}
+
+
+@router.post("/jobs/{job_id}/retry")
+async def retry_job(job_id: str, body: dict, request: Request, user: dict = Depends(admin_user)):
+    """Run a failed or cancelled job again, for its user, with the same settings. Its first run was refunded, so the
+    retry is charged like a new job, unless the admin makes it free ({"free": true}) when the failure was the studio's."""
+    state = request.app.state
+    job = state.db.one("SELECT j.*, u.email, u.disabled FROM jobs j JOIN users u ON u.id = j.user_id WHERE j.id = ?", (job_id,))
+    if job is None:
+        raise HTTPException(404, "No such job.")
+    if job["status"] not in ("failed", "cancelled"):
+        raise HTTPException(400, "Only a failed or cancelled job can be run again.")
+    if job["disabled"]:
+        raise HTTPException(400, "This user's account is disabled.")
+    free = body.get("free") is True
+    cost = 0 if free else job["cost"]
+    if cost and not state.credits.charge(job["user_id"], cost, "generation", note="Run again by an admin"):
+        raise HTTPException(402, "This needs {} credits and the user has {}. Give them credits, or run it again for free.".format(
+            cost, state.credits.balance(job["user_id"])))
+    new_id = state.jobs.add(job["user_id"], job["name"], job["workflow"], json.loads(job["settings"]), job["summary"],
+                            job["est_seconds"], cost, job["project_id"], job["seconds_requested"])
+    audit.record(request, user, "Ran a job again", job["email"], "{} · {}".format(job["name"], "free" if free else "{} cr".format(cost)))
+    return {"id": new_id, "credits": cost}
+
+
+@router.put("/queue")
+async def pause_queue(body: dict, request: Request, user: dict = Depends(admin_user)):
+    """Pause or resume the renders. A job already running finishes; edits and motion graphics keep running."""
+    paused = body.get("paused") is True
+    request.app.state.jobs.pause(paused)
+    audit.record(request, user, "Paused the renders" if paused else "Resumed the renders")
+    return {"paused": paused}
+
+
+@router.post("/server/check")
+async def check_server(request: Request, user: dict = Depends(admin_user)):
+    found = await _server(request.app.state)
+    return {"online": found["online"], "since": found["since"], "url": found["url"]}
 
 
 @router.delete("/jobs/{job_id}")
@@ -379,9 +536,9 @@ async def list_library(request: Request, kind: str = "", q: str = "", owner: str
         "items": items, "total": total,
         # What the filters offer: people who have items, and their projects.
         "owners": db.all("SELECT u.id, u.name, u.email, COUNT(*) AS items FROM generations g JOIN users u ON u.id = g.user_id "
-                         "GROUP BY u.id ORDER BY u.name COLLATE NOCASE"),
+                         "GROUP BY u.id ORDER BY lower(u.name)"),
         "projects": db.all("SELECT p.id, p.name, p.user_id, u.name AS user_name FROM projects p JOIN users u ON u.id = p.user_id "
-                           "ORDER BY p.name COLLATE NOCASE"),
+                           "ORDER BY lower(p.name)"),
     }
 
 
@@ -437,6 +594,27 @@ async def credit_log(request: Request, reason: str = "", q: str = "", user: dict
     }
 
 
+@router.post("/credits/everyone")
+async def credits_for_everyone(body: dict, request: Request, user: dict = Depends(admin_user)):
+    """Give every account that is not disabled the same number of credits, with a reason for the credit log."""
+    state = request.app.state
+    try:
+        amount = int(body.get("amount"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Credits must be a whole number.")
+    if not 1 <= amount <= 1000000:
+        raise HTTPException(400, "Enter an amount between 1 and 1,000,000.")
+    note = " ".join(str(body.get("note") or "").split())[:200]
+    if not note:
+        raise HTTPException(400, "Write a reason. It shows in every user's credit history.")
+    people = state.db.all("SELECT id FROM users WHERE disabled = 0")
+    for person in people:
+        state.credits.add(person["id"], amount, "admin grant", note=note)
+        state.notify(person["id"])
+    audit.record(request, user, "Gave everyone credits", "{} accounts".format(len(people)), "+{} · {}".format(amount, note))
+    return {"accounts": len(people), "amount": amount}
+
+
 # ---------------------------------------------------------------- workflows, system, audit
 
 @router.get("/workflows")
@@ -444,7 +622,7 @@ async def workflow_report(request: Request, user: dict = Depends(admin_user)):
     """Each workflow file: whether it can be read, whether it has presets, and how much it is used."""
     state = request.app.state
     usage = {r["workflow"]: r for r in state.db.all(
-        "SELECT workflow, COUNT(*) AS jobs, SUM(status = 'done') AS done, SUM(status = 'failed') AS failed, "
+        "SELECT workflow, COUNT(*) AS jobs, " + DONE_FAILED + ", "
         "AVG(CASE WHEN status = 'done' THEN finished - started END) AS avg_seconds, MAX(created) AS last_used "
         "FROM jobs GROUP BY workflow")}
     files = state.catalog.files()
@@ -473,20 +651,83 @@ async def system(request: Request, user: dict = Depends(admin_user)):
         ffmpeg = media.ffmpeg_path()
     except media.MediaError:
         ffmpeg = None
-    database = storage / "scene.db"
     return {
         "server": server,
         "app": {"version": __version__, "python": platform.python_version(), "os": "{} {}".format(platform.system(), platform.release()),
                 "uptime_seconds": time.time() - state.started, "ffmpeg": bool(ffmpeg),
                 "online_users": state.hub.online(), "open_connections": sum(len(s) for s in state.hub.sockets.values())},
         "storage": {"folder": str(storage), "disk_total": disk.total, "disk_free": disk.free,
-                    "database": database.stat().st_size if database.is_file() else 0,
+                    "database": state.db.size(), "database_kind": state.db.kind,
                     "library": db.one("SELECT SUM(size) n FROM generations")["n"] or 0,
                     "assets": db.one("SELECT SUM(size) n FROM assets")["n"] or 0,
                     "backup_folder": str(state.backup_dir), "last_backup": backup.newest(state.backup_dir)},
         "counts": {name: db.one("SELECT COUNT(*) n FROM " + name)["n"]
                    for name in ("users", "sessions", "jobs", "generations", "assets", "projects", "credit_events", "audit_log")},
     }
+
+
+@router.get("/backups")
+async def list_backups(request: Request, user: dict = Depends(admin_user)):
+    """The dated copies in the backup folder, newest first, and how they are made."""
+    state = request.app.state
+    folder = state.backup_dir
+    copies = []
+    if folder.is_dir():
+        for f in folder.iterdir():
+            if f.is_file() and (f.name.startswith("scene_") or f.name.startswith("config_")) and f.suffix in (".db", ".dump", ".json"):
+                info = f.stat()
+                copies.append({"name": f.name, "what": "settings (config.json)" if f.suffix == ".json" else "database",
+                               "bytes": info.st_size, "made": info.st_mtime})
+    copies.sort(key=lambda c: c["made"], reverse=True)
+    return {"folder": str(folder), "keep": state.settings.backup_keep, "on": state.settings.backup_keep > 0,
+            "database_kind": state.db.kind, "storage": str(state.storage_dir), "copies": copies}
+
+
+@router.post("/backups")
+async def back_up_now(request: Request, user: dict = Depends(admin_user)):
+    """Make today's copy now, in place of today's earlier one."""
+    state = request.app.state
+    if state.settings.backup_keep <= 0:
+        raise HTTPException(400, "Backups are switched off on this installation (backup_keep is 0 in config.json).")
+    try:
+        target = await asyncio.to_thread(backup.make, state.db, state.backup_dir, state.settings.config_file, state.settings.backup_keep)
+    except Exception as error:
+        raise HTTPException(400, "The backup failed: {}".format(error))
+    audit.record(request, user, "Backed up the database", target.name)
+    return {"ok": True, "name": target.name, "bytes": target.stat().st_size}
+
+
+def _folder_size(folder):
+    """(files, bytes) of everything under a folder; a folder that is not there is (0, 0)."""
+    files = total = 0
+    for root, _, names in os.walk(folder):
+        for name in names:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+                files += 1
+            except OSError:
+                pass
+    return files, total
+
+
+@router.get("/storage")
+async def storage_report(request: Request, user: dict = Depends(admin_user)):
+    """Disk space per user (their finished work and saved assets), the largest files, and the reference files the
+    studio has put on the render server."""
+    state, db = request.app.state, request.app.state.db
+    people = []
+    for person in db.all("SELECT id, name, email FROM users ORDER BY id"):
+        files, used = await asyncio.to_thread(_folder_size, state.outputs.folder(person["id"]))
+        asset_files, asset_bytes = await asyncio.to_thread(_folder_size, state.assets_dir / str(person["id"]))
+        people.append(dict(person, files=files, bytes=used, asset_files=asset_files, asset_bytes=asset_bytes))
+    people.sort(key=lambda p: p["bytes"] + p["asset_bytes"], reverse=True)
+    largest = db.all("SELECT g.id, g.name, g.kind, g.size, g.created, g.filename, u.name AS user_name, u.email AS user_email "
+                     "FROM generations g JOIN users u ON u.id = g.user_id WHERE g.size IS NOT NULL ORDER BY g.size DESC LIMIT 12")
+    uploads = db.all("SELECT u.name AS user_name, u.email AS user_email, COUNT(*) AS files, MAX(x.created) AS newest "
+                     "FROM uploads x JOIN users u ON u.id = x.user_id GROUP BY u.id ORDER BY files DESC")
+    return {"people": people, "largest": largest,
+            "render_server": {"by_user": uploads, "total": sum(u["files"] for u in uploads),
+                              "newest": db.all("SELECT name, created FROM uploads ORDER BY created DESC LIMIT 10")}}
 
 
 @router.get("/audit")
@@ -519,11 +760,43 @@ async def put_settings(body: dict, request: Request, user: dict = Depends(admin_
         state.db.set_setting("allow_signup", "1" if body["allow_signup"] else "0")
     if "signup_credits" in body:
         state.db.set_setting("signup_credits", int(_number(body, "signup_credits", 1000000)))
+    if "daily_cap" in body:
+        state.db.set_setting("daily_cap", int(_number(body, "daily_cap", 10000000)))
+    if "admin_mfa" in body:
+        # Turning it on locks out every admin without two-step sign-in, so the one who turns it on must have it.
+        if body["admin_mfa"] and not user["mfa_enabled"]:
+            raise HTTPException(400, "Turn on two-step sign-in for your own account first (Settings, Two-step sign-in), "
+                                     "so this does not lock you out.")
+        state.db.set_setting("admin_mfa", "1" if body["admin_mfa"] else "0")
     after = _settings(state)
     changed = ["{}: {} to {}".format(k.replace("_", " "), before[k], after[k]) for k in after if after[k] != before[k]]
     if changed:
         audit.record(request, user, "Changed settings", "", "; ".join(changed))
     return after
+
+
+@router.get("/admins")
+async def admins_without_mfa(request: Request, user: dict = Depends(admin_user)):
+    """The admins, and whether each has two-step sign-in: who would be locked out if it were required."""
+    return {"admins": request.app.state.db.all("SELECT id, name, email, mfa_enabled FROM users WHERE role = 'admin' AND disabled = 0 ORDER BY id")}
+
+
+@router.put("/announcement")
+async def set_announcement(body: dict, request: Request, user: dict = Depends(admin_user)):
+    """A message every user sees at the top of the studio: {text, level: info|warning, hours: 0 for until removed}.
+    Empty text removes it."""
+    db = request.app.state.db
+    text = " ".join(str(body.get("text") or "").split())[:300]
+    if not text:
+        db.set_setting("announcement", "{}")
+        audit.record(request, user, "Removed the announcement")
+        return {}
+    hours = _number(body, "hours", 24 * 30) if body.get("hours") not in (None, "") else 0
+    found = {"text": text, "level": "warning" if body.get("level") == "warning" else "info",
+             "until": time.time() + hours * 3600 if hours else None, "set": time.time()}
+    db.set_setting("announcement", json.dumps(found))
+    audit.record(request, user, "Published an announcement", "", text[:200])
+    return current_announcement(db)
 
 
 # ---------------------------------------------------------------- pricing
@@ -599,6 +872,36 @@ async def get_pricing(request: Request, user: dict = Depends(admin_user)):
     return _pricing(request.app.state, await request.app.state.catalog.listing())
 
 
+@router.get("/pricing/llm")
+async def get_llm_pricing(request: Request, user: dict = Depends(admin_user)):
+    """What a message to the agent costs with each model it can use (and any model that has a price but is not there now)."""
+    state = request.app.state
+    try:
+        models = await state.agent.models()
+    except AgentError:
+        models = []
+    prices = state.credits.llm_prices()
+    return {"models": [{"model": m, "credits": prices.get(m, 0), "available": m in models} for m in [*models, *(p for p in prices if p not in models)]],
+            "inr_per_1000_credits": state.credits.inr_per_1000}
+
+
+@router.put("/pricing/llm")
+async def put_llm_pricing(body: dict, request: Request, user: dict = Depends(admin_user)):
+    """Set what a message to the agent costs with one model: {"model", "credits"}; 0 makes it free."""
+    state = request.app.state
+    model = str(body.get("model") or "").strip()[:120]
+    if not model:
+        raise HTTPException(400, "Name the model.")
+    value = _amount(body.get("credits"), "Credits per message", maximum=1e5)
+    if value is None or value != int(value):
+        raise HTTPException(400, "Credits per message is a whole number.")
+    before = state.credits.llm_cost(model)
+    state.credits.set_llm_price(model, int(value))
+    if int(value) != before:
+        audit.record(request, user, "Changed agent model pricing", model, "{} cr to {} cr a message".format(before, int(value)))
+    return await get_llm_pricing(request, user)
+
+
 @router.put("/pricing")
 async def put_pricing(body: dict, request: Request, user: dict = Depends(admin_user)):
     """Change the rate of a kind, what credits are worth, or the price of electricity."""
@@ -638,7 +941,8 @@ async def put_workflow_pricing(body: dict, request: Request, user: dict = Depend
         "fallback_servers": " ".join(str(body.get("fallback_servers") or "").split())[:200],
         "enabled": 0 if body.get("enabled") is False else 1,
     }
-    state.db.run("INSERT OR REPLACE INTO workflow_pricing (workflow, {}) VALUES (?, {})".format(", ".join(row), ", ".join("?" * len(row))),
+    state.db.run("INSERT INTO workflow_pricing (workflow, {}) VALUES (?, {}) ON CONFLICT (workflow) DO UPDATE SET {}".format(
+        ", ".join(row), ", ".join("?" * len(row)), ", ".join("{0} = excluded.{0}".format(key) for key in row)),
                  (workflow, *row.values()))
     base, per_second, multiplier = state.credits.rate_for(workflow)
     audit.record(request, user, "Changed workflow pricing", workflow, "{:g} cr + {:g} cr/s × {:g}{}".format(
@@ -651,19 +955,22 @@ async def economics(request: Request, days: int = 30, user: dict = Depends(admin
     """What each workflow earned and what it cost to run, from the jobs of the last `days` days. The cost is
     electricity only: the time a job ran, at the power of the server it ran on. Edits and motion graphics are jobs
     too, made on the machine that hosts the studio."""
-    state, db = request.app.state, request.app.state.db
-    days = days if days in RANGES else 30
+    state = request.app.state
+    return _economics(state, days if days in RANGES else 30, {w["id"]: w for w in await state.catalog.listing()})
+
+
+def _economics(state, days, titles):
+    db = state.db
     since = time.time() - days * DAY
     servers = db.all("SELECT name, generation_power_w, renders, active FROM servers ORDER BY id")
     watts = {s["name"]: s["generation_power_w"] for s in servers}
     usual = next((s["generation_power_w"] for s in servers if s["renders"] and s["active"]), None)   # for jobs from before servers were recorded
     per_kwh, per_credit = state.credits.electricity_rate, state.credits.inr_per_1000 / 1000
-    titles = {w["id"]: w for w in await state.catalog.listing()}
 
     found = {}
     for row in db.all(
-            "SELECT workflow, server, COUNT(*) AS jobs, SUM(status = 'done') AS done, SUM(status = 'failed') AS failed, "
-            "SUM(status = 'cancelled') AS cancelled, SUM(retries) AS retries, SUM(output_size) AS output_bytes, "
+            "SELECT workflow, server, COUNT(*) AS jobs, " + DONE_FAILED + ", "
+            + COUNT_IF.format("status = 'cancelled'") + " AS cancelled, SUM(retries) AS retries, SUM(output_size) AS output_bytes, "
             "SUM(CASE WHEN started IS NOT NULL THEN finished - started ELSE 0 END) AS run_seconds, "
             "SUM(CASE WHEN status = 'done' THEN finished - started ELSE 0 END) AS done_seconds, "
             "SUM(CASE WHEN status = 'done' THEN seconds_requested ELSE 0 END) AS seconds_made, "
@@ -753,18 +1060,19 @@ async def delete_pricing_row(table: str, row_id: int, request: Request, user: di
 
 # ---------------------------------------------------------------- export
 
+# Each export is SQL with {created} where the time of the row goes, written as text the way the database knows how.
 EXPORTS = {
-    "users": "SELECT u.id, u.name, u.email, u.role, u.credits, u.disabled, datetime(u.created, 'unixepoch') AS created_utc, "
+    "users": "SELECT u.id, u.name, u.email, u.role, u.credits, u.disabled, {created} AS created_utc, "
              "(SELECT COUNT(*) FROM jobs j WHERE j.user_id = u.id) AS jobs, "
              "(SELECT COUNT(*) FROM generations g WHERE g.user_id = u.id) AS items FROM users u ORDER BY u.id",
     "jobs": "SELECT j.id, u.email AS user, j.name, j.workflow, j.summary, j.status, j.cost AS credits, "
             "j.credits_required, j.credits_reserved, j.credits_consumed, j.credits_refunded, j.seconds_requested, j.server, "
             "j.retries, j.output_size, "
-            "datetime(j.created, 'unixepoch') AS created_utc, round(j.started - j.created, 1) AS wait_seconds, "
-            "round(j.finished - j.started, 1) AS run_seconds, j.error FROM jobs j JOIN users u ON u.id = j.user_id ORDER BY j.created DESC",
-    "credits": "SELECT c.id, u.email AS user, c.amount, c.reason, c.job_id, datetime(c.created, 'unixepoch') AS created_utc "
+            "{created} AS created_utc, round(CAST(j.started - j.created AS NUMERIC), 1) AS wait_seconds, "
+            "round(CAST(j.finished - j.started AS NUMERIC), 1) AS run_seconds, j.error FROM jobs j JOIN users u ON u.id = j.user_id ORDER BY j.created DESC",
+    "credits": "SELECT c.id, u.email AS user, c.amount, c.reason, c.job_id, {created} AS created_utc "
                "FROM credit_events c JOIN users u ON u.id = c.user_id ORDER BY c.id DESC",
-    "audit": "SELECT id, actor_email AS actor, action, target, detail, ip, datetime(created, 'unixepoch') AS created_utc "
+    "audit": "SELECT id, actor_email AS actor, action, target, detail, ip, {created} AS created_utc "
              "FROM audit_log ORDER BY id DESC",
 }
 
@@ -780,7 +1088,9 @@ def _cell(value):
 async def export(name: str, request: Request, user: dict = Depends(admin_user)):
     if name not in EXPORTS:
         raise HTTPException(404, "No such export.")
-    rows = request.app.state.db.all(EXPORTS[name])
+    db = request.app.state.db
+    table = {"users": "u", "jobs": "j", "credits": "c"}.get(name)
+    rows = db.all(EXPORTS[name].format(created=db.utc_text(table + ".created" if table else "created")))
     out = io.StringIO()
     writer = csv.writer(out)
     if rows:

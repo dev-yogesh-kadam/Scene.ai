@@ -1,16 +1,6 @@
 {
   "title": "MiniMax H3",
-  "description": "The one MiniMax H3 workflow: a new scene built from reference images, or a first frame animated exactly as it is. Saved at high quality (CRF 16).",
-  "replaces": [
-    "video/h3_director",
-    "video/video_minimax_h3_i2v",
-    "video/video_minimax_h3_r2v",
-    "video/ai_influencer",
-    "video/MiniMax_H3_AI_Influencer",
-    "video/MiniMax_H3_AI_Influencer_v2",
-    "video/ref2va_vsa_4step_rtx4090_v2",
-    "video/comfy_plus_codex"
-  ],
+  "description": "The main MiniMax H3 workflow: a new scene built from reference images, or a first frame animated exactly as it is. Saved at high quality (CRF 16).",
   "output_name": "16.filename_prefix",
   "defaults": {"100:value": ""},
   "hide": ["105", "107", "108", "109", "113", "114"],

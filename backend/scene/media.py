@@ -81,6 +81,15 @@ async def poster(video):
     raise MediaError("That video can't be read.")
 
 
+async def frame_at(video, seconds, target, width=POSTER_WIDTH):
+    """Save the frame of a video at `seconds` as a JPEG no wider than `width`. Returns the target, or None when the
+    video has no frame there."""
+    target.unlink(missing_ok=True)
+    await _ffmpeg("-loglevel", "error", "-ss", "{:.3f}".format(max(0.0, seconds)), "-i", video, "-frames:v", "1",
+                  "-vf", "scale='min({},iw)':-2".format(width), "-q:v", "3", "-update", "1", target, check=False)
+    return target if target.is_file() and target.stat().st_size else None
+
+
 async def cut_audio(source, start, seconds, target):
     """Save a piece of an audio (or video) file's sound as a WAV file."""
     await _ffmpeg("-loglevel", "error", "-ss", "{:.3f}".format(start), "-t", "{:.3f}".format(seconds),

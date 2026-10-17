@@ -1,0 +1,32 @@
+{
+  "title": "H3 AI Influencer v2",
+  "description": "Animates your image as the first frame, after SeedVR2 restores it to the video size: sharper faces from small or soft pictures.",
+  "output_name": "55.filename_prefix",
+  "labels": {
+    "1:image": "First frame: your image (<Picture 1> in the prompt)",
+    "100:value": "Describe the motion, the speech and the sound. Refer to your image as <Picture 1>.",
+    "105:value": "Steps (20 fast, 30 quality)",
+    "60:seed": "Seed of the image restore (SeedVR2)"
+  },
+  "defaults": {"100:value": ""},
+  "required_refs": ["1:image"],
+  "hide": ["108", "113"],
+  "options": [
+    {
+      "id": "speed", "label": "Speed", "default": "standard",
+      "choices": [
+        {"id": "standard", "label": "Standard", "hint": "full model, the steps below"},
+        {"id": "turbo", "label": "Turbo", "hint": "8-step LoRA: faster, slightly less detail"}
+      ]
+    }
+  ],
+  "rules": [
+    {"when": {"speed": "standard"}, "set": {"108.value": false}},
+    {"when": {"speed": "turbo"}, "set": {"108.value": true, "113.value": 8}}
+  ],
+  "hints": [
+    "Good for small or soft source images: SeedVR2 restores the first frame before it is animated.",
+    "Write the timeline of the shot in the prompt: who speaks when, and what they say in quotes.",
+    "5-6 s clips give the steadiest faces. For longer videos use Long video, which chains clips."
+  ]
+}

@@ -70,7 +70,9 @@ const SERVER = [
 ];
 
 export async function pricing(ctx) {
-  const data = await api('/api/admin/pricing');
+  // The agent models' prices come from a call of their own: when it fails (a server not restarted since it was added),
+  // the rest of the section still shows.
+  const [data, llm] = await Promise.all([api('/api/admin/pricing'), api('/api/admin/pricing/llm').catch((e) => ({ models: [], error: e.message }))]);
   const perJob = (kind) => data.per_job.includes(kind);
   const worth = (credits) => rupees((credits * data.inr_per_1000_credits) / 1000);
   const price = (credits) => `${number(credits)} cr · ${worth(credits)}`;
@@ -126,6 +128,23 @@ export async function pricing(ctx) {
     el('p', { class: 'muted small', style: 'margin-top:10px' },
       'Select a workflow to give it its own rate or multipliers, or to switch it off. The server is recorded for the scheduler; jobs are not routed by it yet.'));
 
+  // ---- what a message to the agent costs with each model
+  const llmNote = el('p', { class: 'notice' });
+  const llmCard = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', {}, 'Agent models')),
+    el('p', { class: 'muted small' }, 'Credits taken for each message to the agent, by the model that answers it. 0 is free. Improving a prompt and the agent checking a result stay free.'),
+    table(['Model', 'Credits per message', 'Worth', 'Status'], llm.models.map((m) => {
+      const box = el('input', { type: 'number', min: 0, step: 1, value: m.credits, style: 'width:110px', 'aria-label': `Credits per message for ${m.model}`,
+        onchange: async (e) => {
+          try { await api('/api/admin/pricing/llm', { method: 'PUT', json: { model: m.model, credits: e.target.value } }); ctx.draw(); } catch (err) {
+            llmNote.className = 'notice error'; llmNote.textContent = err.message;
+          }
+        } });
+      return [el('b', {}, m.model), box, m.credits ? worth(m.credits) : el('span', { class: 'muted' }, 'Free'),
+        el('span', { class: 'pill ' + (m.available ? 'done' : 'cancelled') }, m.available ? 'Available' : 'Not there now')];
+    }), { empty: llm.error ? 'The prices of agent models could not be loaded. Restart the studio app, then open this tab again.' : 'No agent models are reachable now.' }),
+    llmNote);
+
   // ---- credit packages
   const rowDialog = (list, what, fields, row) => editDialog(row ? row.name : 'New ' + what, null, fields, row || { active: true }, {
     save: (values) => api(`/api/admin/pricing/${list}` + (row ? '/' + row.id : ''), { method: row ? 'PUT' : 'POST', json: values }).then(ctx.draw),
@@ -158,5 +177,5 @@ export async function pricing(ctx) {
     el('p', { class: 'muted small', style: 'margin-top:10px' },
       'Electricity only: cooling, depreciation, storage and failed runs are not counted here. Replace an assumed power with one measured at the wall.'));
 
-  return [ratesCard, workflowsCard, packagesCard, serversCard];
+  return [ratesCard, workflowsCard, llmCard, packagesCard, serversCard];
 }

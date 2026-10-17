@@ -37,7 +37,7 @@ async def main():
     print("  a key in a staged file     :", any(git("grep", "--cached", "-q", "-F", k).returncode == 0 for k in keys))
     print("  a key in a past commit     :", any(git("log", "--all", "--oneline", "-S", k).stdout.strip() for k in keys))
 
-    brain = Agent(s.ollama_url, s.agent_model, services)
+    brain = Agent(s.ollama_url, s.agent_model, services, local=s.ollama_models)
     question = [{"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": "Reply with the JSON object {\"ok\": true}."}]
 

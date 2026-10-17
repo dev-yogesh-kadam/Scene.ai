@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, Response
 
 from .. import media
 from ..catalog import KINDS
-from ..references import upload_reference
+from ..references import media_kind, read_upload, safe_name, upload_reference
 from .deps import current_user
 
 router = APIRouter(prefix="/api", tags=["library"])
@@ -62,6 +62,46 @@ async def list_items(request: Request, kind: str = "", q: str = "", project: str
     return {"items": items}
 
 
+UPLOADED = "upload/file"   # what an item the user brought in is filed under: it was not made with a workflow
+
+
+@router.post("/library/upload")
+async def upload_item(request: Request, user: dict = Depends(current_user)):
+    """Multipart form with "file" (an image, a video or a sound) and "project_id". The file joins the library and the
+    project's canvas like a finished generation, so it can be a frame to start on, a reference or a clip on the
+    timeline. Nothing is charged."""
+    form = await request.form()
+    upload = form.get("file")
+    if not hasattr(upload, "filename"):
+        raise HTTPException(400, "Choose a file.")
+    data = await read_upload(upload)   # refuses what is too large or is not the image, video or sound it says it is
+    kind = media_kind(upload.filename)
+    project = str(form.get("project_id") or "")
+    project_id = _own_project(request, user, int(project))["id"] if project.isdigit() and int(project) else None
+    folder = request.app.state.outputs.folder(user["id"])
+    folder.mkdir(parents=True, exist_ok=True)
+    name = (upload.filename.rsplit(".", 1)[0].strip() or kind)[:80]
+    target = folder / "{}_{}_{}".format("upload", time.strftime("%Y%m%d_%H%M%S"), safe_name(upload.filename))
+    target.write_bytes(data)
+    context = {}
+    if kind in ("video", "image"):
+        found = await media.probe(target)
+        context = {k: v for k, v in (("width", found["width"]), ("height", found["height"])) if v}
+        if kind == "video" and found["seconds"]:
+            context["duration"] = round(found["seconds"], 2)
+    elif kind == "audio":
+        found = await media.probe(target)
+        if found["seconds"]:
+            context["duration"] = round(found["seconds"], 2)
+    db = request.app.state.db
+    db.run("INSERT INTO generations (user_id, job_id, project_id, workflow, kind, name, filename, summary, settings, "
+           "context, seconds, size, created) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+           (user["id"], project_id, UPLOADED, kind, name, target.name, "Uploaded", json.dumps({"name": name, "prompt": ""}),
+            json.dumps(context), len(data), time.time()))
+    row = db.one("SELECT * FROM generations WHERE user_id = ? AND filename = ?", (user["id"], target.name))
+    return dict(row, settings=json.loads(row["settings"]), context=json.loads(row["context"]))
+
+
 @router.get("/library/{item_id}/file")
 async def get_file(item_id: int, request: Request, download: bool = False, user: dict = Depends(current_user)):
     row = _own(request, user, item_id)
@@ -90,13 +130,36 @@ async def get_poster(item_id: int, request: Request, user: dict = Depends(curren
     return await poster_response(request, _path(request, _own(request, user, item_id)))
 
 
+@router.get("/library/{item_id}/frame")
+async def get_frame(item_id: int, request: Request, at: float = 0.0, user: dict = Depends(current_user)):
+    """The frame of a video at `at` seconds, for the keyframes the agent shows under a result. Made once and kept,
+    per tenth of a second, next to the video's poster."""
+    row = _own(request, user, item_id)
+    if row["kind"] != "video":
+        raise HTTPException(400, "Only a video has frames.")
+    path = _path(request, row)
+    if not path.is_file():
+        raise HTTPException(404, "The file is missing from storage.")
+    tenth = max(0, min(int(round(at * 10)), 36000))
+    target = media.poster_path(path).with_name("{}.{}.jpg".format(path.name, tenth))
+    if not (target.is_file() and target.stat().st_mtime >= path.stat().st_mtime):
+        target.parent.mkdir(exist_ok=True)
+        if not await media.frame_at(path, tenth / 10, target):
+            raise HTTPException(404, "The video has no frame there.")
+    return FileResponse(target, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
 @router.put("/library/{item_id}")
 async def update_item(item_id: int, body: dict, request: Request, user: dict = Depends(current_user)):
-    """Rename an item or move it to a project (project_id null = no project)."""
+    """Rename an item, move it to a project (project_id null = no project) or rate it (rating 1, -1, or 0 to clear)."""
     _own(request, user, item_id)
     db = request.app.state.db
     if "name" in body and str(body["name"]).strip():
         db.run("UPDATE generations SET name = ? WHERE id = ?", (str(body["name"]).strip()[:80], item_id))
+    if "rating" in body:
+        if body["rating"] not in (1, -1, 0) or isinstance(body["rating"], bool):
+            raise HTTPException(400, "A rating is 1, -1 or 0.")
+        db.run("UPDATE generations SET rating = ? WHERE id = ?", (body["rating"], item_id))
     if "project_id" in body:
         if body["project_id"] is not None:
             _own_project(request, user, body["project_id"])
@@ -146,7 +209,7 @@ async def list_projects(request: Request, user: dict = Depends(current_user)):
         "(SELECT g.id FROM generations g WHERE g.project_id = p.id ORDER BY g.created DESC LIMIT 1) AS cover_id, "
         "(SELECT g.kind FROM generations g WHERE g.project_id = p.id ORDER BY g.created DESC LIMIT 1) AS cover_kind, "
         "(SELECT MAX(g.created) FROM generations g WHERE g.project_id = p.id) AS updated "
-        "FROM projects p WHERE p.user_id = ? ORDER BY p.name COLLATE NOCASE", (user["id"],))}
+        "FROM projects p WHERE p.user_id = ? ORDER BY lower(p.name)", (user["id"],))}
 
 
 @router.post("/projects")
@@ -176,5 +239,6 @@ async def delete_project(project_id: int, request: Request, user: dict = Depends
     db = request.app.state.db
     db.run("UPDATE generations SET project_id = NULL WHERE project_id = ?", (project_id,))
     db.run("UPDATE jobs SET project_id = NULL WHERE project_id = ?", (project_id,))
+    db.run("UPDATE assets SET project_id = NULL WHERE project_id = ?", (project_id,))   # its uploads too
     db.run("DELETE FROM projects WHERE id = ?", (project_id,))
     return {"ok": True}

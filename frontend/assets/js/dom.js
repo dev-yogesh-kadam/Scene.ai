@@ -30,6 +30,7 @@ const ICONS = {
   pencil: '<path d="M14.5 5.5l4 4L8 20H4v-4z"/>',
   trash: '<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l.8 13h9.4l.8-13"/>',
   chat: '<path d="M4 5h16v11H10l-5 4v-4H4z"/>',
+  memory: '<path d="M12 3.5 3.5 8 12 12.5 20.5 8z"/><path d="M3.5 12 12 16.5 20.5 12"/><path d="M3.5 16 12 20.5 20.5 16"/>',
   bolt: '<path d="M13 3 5 13.5h6L10 21l9-11h-6z"/>',
   back: '<path d="M14.5 6 8.5 12l6 6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -38,6 +39,37 @@ const ICONS = {
   audio: '<path d="M5 10v4M9 6v12M13 9v6M17 4v16M21 10v4"/>',
   title: '<path d="M5 7V5h14v2M12 5v14M9 19h6"/>',
   upscale: '<path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/>',
+  // the agent's composer and approval card
+  hand: '<path d="M8 12V6.5a1.5 1.5 0 0 1 3 0V11M11 10.5V5a1.5 1.5 0 0 1 3 0v5.5M14 10.5V6.5a1.5 1.5 0 0 1 3 0V14c0 3.6-2.4 6.5-6 6.5-2.6 0-4.2-1.4-5.4-3.6L4 13.5a1.4 1.4 0 0 1 2.3-1.6L8 14"/>',
+  handvideo: '<path d="M7 13V7.5a1.4 1.4 0 0 1 2.8 0V11M9.8 10.5V6a1.4 1.4 0 0 1 2.8 0v5M12.6 11V8a1.4 1.4 0 0 1 2.8 0v6c0 3.3-2.2 6-5.5 6-2.4 0-3.8-1.3-4.9-3.3L3.5 14a1.3 1.3 0 0 1 2.1-1.5L7 14.5"/><path d="M17 4.5h3.5v3H17zM20.5 5.2 22 4.5v3l-1.5-.7"/>',
+  forward: '<path d="M4 6.5v11l7-5.5zM12.5 6.5v11l7-5.5z"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  frame: '<path d="M8 3.5v17M16 3.5v17M3.5 8h17M3.5 16h17"/>',
+  gem: '<path d="M7 4.5h10l3.5 5L12 20 3.5 9.5z"/><path d="M3.5 9.5h17M9.5 4.5 8 9.5l4 10.5 4-10.5-1.5-5"/>',
+  bars: '<path d="M5 20V10M9.5 20V6M14 20v-8M18.5 20V4"/>',
+  expand: '<path d="M14 4h6v6M20 4l-6 6M10 20H4v-6M4 20l6-6"/>',
+  arrowup: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  // the agent's conversation: its work, its thoughts and what it made
+  bulb: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1.1 1.3 1.1 2.2h5c0-.9.5-1.7 1.1-2.2A6 6 0 0 0 12 3z"/>',
+  wrench: '<path d="M15 4.5a4.5 4.5 0 0 0-4.3 5.8L4.6 16.4a1.9 1.9 0 0 0 2.7 2.7l6.1-6.1A4.5 4.5 0 0 0 19.5 9l-2.6 2.6-2.4-.6-.6-2.4L16.5 6A4.5 4.5 0 0 0 15 4.5z"/>',
+  book: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5"/>',
+  eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
+  skill: '<path d="M4.5 4.5h15v15h-15z"/><path d="M9 15l6-6"/>',
+  skip: '<circle cx="12" cy="12" r="8.5"/><path d="M8 12h8"/>',
+  retry: '<path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4h4"/>',
+  queue: '<path d="M4 7h16M4 12h16M4 17h10"/>',
+  branch: '<circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="9" r="2"/><path d="M6 8v8M18 11c0 3-3 4-6 4H6"/>',
+  thumbup: '<path d="M7 11v9H4v-9zM7 11l4-7a2 2 0 0 1 2.5 2.4L12.8 10H18a2 2 0 0 1 2 2.3l-1.2 6a2 2 0 0 1-2 1.7H7"/>',
+  thumbdown: '<path d="M7 13V4H4v9zM7 13l4 7a2 2 0 0 0 2.5-2.4L12.8 14H18a2 2 0 0 0 2-2.3l-1.2-6a2 2 0 0 0-2-1.7H7"/>',
+  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
+  film: '<path d="M4 4h16v16H4z"/><path d="M8 4v16M16 4v16M4 8h4M4 12h4M4 16h4M16 8h4M16 12h4M16 16h4"/>',
+  down: '<path d="M6 9l6 6 6-6"/>',
+  right: '<path d="M9 6l6 6-6 6"/>',
+  target: '<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="2.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  copy: '<path d="M8.5 8.5h11v11h-11z"/><path d="M5.5 15.5h-1v-11h11v1"/>',
+  attachment: '<path d="M8 12.5l6.5-6.5a3 3 0 0 1 4.2 4.2l-8 8a5 5 0 0 1-7-7l7.5-7.5"/>',
+  upload: '<path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4.5 14.5v4a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-4"/>',
+  menu: '<path d="M8 10l4 4 4-4"/>',
 };
 
 export function icon(name) {
@@ -54,6 +86,26 @@ export function still(url, kind, name = '') {
   if (kind === 'video') return el('img', { src: url.replace(/\/file$/, '/poster'), alt: name, loading: 'lazy', draggable: 'false' });
   if (kind === 'audio') return el('div', { class: 'sound' }, icon('audio'), el('span', {}, name));
   return el('img', { src: url, alt: name, loading: 'lazy', draggable: 'false' });
+}
+
+// The spill: a made item, far out of focus, lighting the top of a page. show() takes a library item id and kind,
+// or nothing for the studio's own faint light. The picture is loaded first, so the light fades in instead of popping.
+export function spill() {
+  const node = el('div', { class: 'spill wait', 'aria-hidden': 'true' });
+  let shown = null;
+  const show = (id, kind) => {
+    const url = id && kind !== 'audio' ? `/api/library/${id}/${kind === 'video' ? 'poster' : 'file'}` : '';
+    if (url === shown) return;
+    shown = url;
+    node.classList.add('wait');
+    const lit = () => { if (shown !== url) return; node.style.setProperty('--spill-image', url ? `url("${url}")` : ''); node.classList.remove('wait'); };
+    if (!url) return lit();
+    const picture = new Image();
+    picture.onload = lit;
+    picture.onerror = () => { shown = null; show(); };
+    picture.src = url;
+  };
+  return { node, show };
 }
 
 // The running Gate: two brackets circling a frame while it is being made.

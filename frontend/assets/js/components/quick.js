@@ -3,7 +3,7 @@
 
 import { api } from '../api.js';
 import { el, icon, segmented } from '../dom.js';
-import { subscribe, refreshJobs } from '../store.js';
+import { store, subscribe, refreshJobs } from '../store.js';
 import { pickAsset } from './assets.js';
 import { motionForm, sequenceForm } from './motion.js';
 
@@ -20,10 +20,10 @@ const SHOWN = 3;   // reference boxes in view before "More references" is presse
 const capital = (text) => text[0].toUpperCase() + text.slice(1);
 const short = (label) => label.split(' (')[0];   // "First frame (the video starts on this image)" -> "First frame"
 
-// startFrom(): the library item a new video should start on (the canvas selection), or null.
+// startFrom(): the item selected on the canvas, or null. An upscale takes it; a title laid over a video goes on it.
 // projectId(): the project new work is filed under, or null.
 export function quickActions({ startFrom = () => null, projectId = () => null } = {}) {
-  const form = { catalog: [], wf: null, values: {}, options: {}, resolution: null, orientation: null, useStart: true,
+  const form = { catalog: [], wf: null, values: {}, options: {}, resolution: null, orientation: null,
     kind: 'video', refs: {}, allRefs: false };   // refs: slot id -> {file}, {assetId} or {itemId} (a library item, as the cast is), plus {name, url}
   let page = 'home';
   const node = el('div', { class: 'quick' });
@@ -89,7 +89,7 @@ export function quickActions({ startFrom = () => null, projectId = () => null } 
       el('div', { class: 'quick-head' },
         el('button', { class: 'icon-btn', title: 'Back to quick actions', 'aria-label': 'Back to quick actions', onclick: () => show('home') }, icon('back')),
         title),
-      el('div', { class: 'quick-body' }, model, about, modes, start, source,
+      el('div', { class: 'quick-body' }, model, about, modes, source,
 promptField, texts, note),
       el('div', { class: 'quick-foot' }, pills, button));
     if (form.wf && !changed) draw(); else loadCatalog().catch(showError);
@@ -102,7 +102,6 @@ promptField, texts, note),
   const model = el('div', { class: 'field' });
   const about = el('p', { class: 'muted small' });
   const modes = el('div');   // the choices a presets file puts first, such as which of a workflow's two modes to use
-  const start = el('div', { class: 'composer-start' });
   const source = el('div', { class: 'field' });
   const prompt = el('textarea', { rows: 5, 'aria-label': 'Prompt', placeholder: 'Describe the shot',
     oninput: (e) => { setPrompt(e.target.value); original = null; drawImprove(); },
@@ -145,7 +144,6 @@ promptField, texts, note),
   const button = el('button', { class: 'btn generate', title: 'Generate (Ctrl or ⌘ + Enter)', onclick: () => generate() }, label, cost);
 
   const byRole = (role) => form.wf && form.wf.controls.find((c) => c.role === role);
-  const firstFrame = () => form.wf && form.wf.refs.find((r) => r.id === form.wf.slots.first_frame);
   // Whether the workflow reads this slot with the choices made: some belong to one mode only. A file left in a slot
   // that is out of use stays there for when the mode is switched back, and is not sent.
   const inUse = (slot) => Object.entries(slot.when || {}).every(([k, v]) => [].concat(v).includes(form.options[k]));
@@ -158,7 +156,7 @@ promptField, texts, note),
     form.wf = null;
     button.disabled = !form.catalog.length;
     if (!form.catalog.length) {
-      for (const part of [model, about, modes, start, source, pills]) part.replaceChildren();
+      for (const part of [model, about, modes, source, pills]) part.replaceChildren();
       return showError(new Error(`No ${form.kind} workflows yet. Save a ComfyUI workflow into the workflows/${form.kind} folder, then reload.`));
     }
     const wanted = localStorage.getItem('scene.workflow.' + form.kind) || list.default;
@@ -179,7 +177,6 @@ promptField, texts, note),
     if (byRole('prompt')) form.values[byRole('prompt').id] = text;   // keep what was typed when the workflow changes
     localStorage.setItem('scene.workflow.' + form.kind, id);
     note.textContent = '';
-    follow();
     draw();
     recast();
   }
@@ -194,19 +191,6 @@ promptField, texts, note),
     if (item && item.kind === 'video') {
       form.refs[slot.id] = { itemId: item.id, name: item.name, takes: 'video', shown: 'image', url: `/api/library/${item.id}/poster`, selection: true };
     } else delete form.refs[slot.id];
-  }
-
-  // A video that starts on a frame takes that frame's shape: a portrait picture in a landscape video comes out squashed.
-  function follow() {
-    const item = form.wf && firstFrame() && !form.refs[firstFrame().id] ? startFrom() : null;
-    const made = item && item.context;
-    if (!made || !made.width || !made.height) return;
-    const ratio = made.width / made.height;
-    if (form.wf.size) form.orientation = ratio > 1.15 ? 'landscape' : ratio < 0.87 ? 'portrait' : 'square';
-    const of = (choice) => { const m = /^\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)/.exec(String(choice)); return m ? m[1] / m[2] : null; };
-    const aspect = form.wf.controls.find((c) => c.input === 'aspect_ratio' && c.choices);
-    const fits = aspect ? aspect.choices.filter(of) : [];
-    if (fits.length) form.values[aspect.id] = fits.reduce((best, c) => (Math.abs(Math.log(of(c) / ratio)) < Math.abs(Math.log(of(best) / ratio)) ? c : best));
   }
 
   // Put the project's cast into the slots this workflow has for it. A slot the user filled is left alone.
@@ -264,7 +248,7 @@ promptField, texts, note),
     for (const o of wf.options.filter((x) => !x.top)) {
       set.push(pill(o.label, o.choices.map((c) => ({ id: c.id, label: `${o.label}: ${c.label}` })), form.options[o.id], (id) => { form.options[o.id] = id; }));
     }
-    if (form.kind !== 'upscaler') set.push(el('a', { class: 'opt', href: '#/create', title: 'Open the full form on the Create page' }, 'All settings'));
+    if (form.kind !== 'upscaler') set.push(el('a', { class: 'opt', href: '#/create', title: 'Open the full form on the Create page', onclick: () => { store.from = '#/canvas'; } }, 'All settings'));
     pills.replaceChildren(...set);
     refreshEstimate();
   }
@@ -318,12 +302,6 @@ promptField, texts, note),
 
   function drawSource() {
     const wf = form.wf;
-    const item = startFrom();
-    if (item && firstFrame() && !form.refs[firstFrame().id]) {
-      start.replaceChildren(el('label', { class: 'check' },
-        el('input', { type: 'checkbox', checked: form.useStart, onchange: (e) => { form.useStart = e.target.checked; } }),
-        (item.kind === 'video' ? 'Continue from the end of ' : 'Start on ') + item.name));
-    } else start.replaceChildren();
     const refs = wf.refs.filter(inUse);
     source.classList.toggle('hidden', !refs.length);
     prompt.placeholder = { image: 'Describe the image', audio: 'Describe the music' }[form.kind] || 'Describe the shot';
@@ -376,9 +354,7 @@ promptField, texts, note),
     note.textContent = '';
     if (!form.wf || button.disabled) return;
     if (byRole('prompt') && !prompt.value.trim()) return showError(new Error('Write a prompt first.'));
-    const first = firstFrame();
-    const item = form.useStart && first && !form.refs[first.id] ? startFrom() : null;
-    const missing = form.wf.refs.filter(inUse).find((r) => !r.optional && !form.refs[r.id] && !(item && r.id === first.id));
+    const missing = form.wf.refs.filter(inUse).find((r) => !r.optional && !form.refs[r.id]);
     if (missing) return showError(new Error(`Add a file for "${short(missing.label)}".`));
     const hits = warnings();
     if (hits.length && !confirm(hits.map((h) => h.message).join('\n') + `\n\nEstimated time: ${time.textContent || 'unknown'}\n\nGenerate anyway?`)) return;
@@ -386,10 +362,6 @@ promptField, texts, note),
     label.textContent = 'Sending…';
     try {
       const extra = {};
-      if (item) {
-        const ref = await api(`/api/library/${item.id}/reference`, { method: 'POST' });
-        extra[first.id] = { comfy_name: ref.comfy_name, name: ref.name };
-      }
       for (const [slot, r] of Object.entries(form.refs)) {   // library items, such as the cast, are sent to the render server now
         if (!r.itemId || !used().has(slot)) continue;
         const ref = await api(`/api/library/${r.itemId}/reference?kind=${r.takes}`, { method: 'POST' });
@@ -397,7 +369,7 @@ promptField, texts, note),
       }
       const data = new FormData();
       const made = upscaled() && form.refs[upscaled().id];   // an upscaled video joins the row of the video it is made from
-      data.append('settings', JSON.stringify(settings(extra, item ? item.id : made && made.itemId ? made.itemId : null)));
+      data.append('settings', JSON.stringify(settings(extra, made && made.itemId ? made.itemId : null)));
       for (const [id, r] of Object.entries(form.refs)) if (r.file && used().has(id)) data.append('ref:' + id, r.file, r.name);
       await api('/api/jobs', { method: 'POST', body: data });
       refreshJobs();
@@ -411,12 +383,11 @@ promptField, texts, note),
   const unsubscribe = subscribe((change) => { if (change === 'credits' && page !== 'home' && page !== 'motion') refreshEstimate(); });
   return {
     node,
-    // refresh(): call when the selection changes, so the "start on" line follows it.
+    // refresh(): call when the selection changes (an upscale takes the selected video; a motion overlay goes on it).
     recast,   // the project's cast changed
     refresh: () => {
-      form.useStart = true;
       if (page === 'motion') motionPage.refresh();
-      else if (form.wf && page !== 'home') { follow(); draw(); }
+      else if (form.wf && page !== 'home') draw();
     },
     focus: () => { if (page !== 'home' && page !== 'motion') prompt.focus(); },
     destroy: () => { unsubscribe(); for (const ref of Object.values(form.refs)) if (ref.file) URL.revokeObjectURL(ref.url); },

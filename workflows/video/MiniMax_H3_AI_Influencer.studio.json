@@ -1,0 +1,57 @@
+{
+  "title": "H3 AI Influencer (upscaled)",
+  "description": "One character kept the same from shot to shot, from up to five reference images, motion videos and audio, then upscaled with RealESRGAN to the output size.",
+  "output_name": "46.filename_prefix",
+  "labels": {
+    "1:value": "Say what happens. Refer to your references as <Picture 1>, <Video 1>, <Audio 1>.",
+    "21:image": "Character 1: face and full look (<Picture 1>)",
+    "22:image": "Character 2: another angle, or a second person (<Picture 2>)",
+    "23:image": "Location 1 (<Picture 3>)",
+    "24:image": "Location 2: lighting and background detail (<Picture 4>)",
+    "48:image": "Outfit or style (<Picture 5>)",
+    "25:file": "Motion video 1 (<Video 1>)",
+    "26:file": "Motion video 2 (<Video 2>)",
+    "29:audio": "Audio 1 (<Audio 1>)",
+    "30:audio": "Audio 2 (<Audio 2>)",
+    "18:image": "First frame (the video starts on this image; empty = text to video)",
+    "19:image": "Last frame (the video ends on this image)",
+    "2:value": "Clip duration",
+    "3:value": "Output width (1920 / 2560 / 3840)",
+    "4:value": "Output height (1080 / 1440 / 2160)",
+    "6:value": "Upscale to the output size (off = native 768p)",
+    "7:value": "Steps (20 fast, 30 quality, 40 max)"
+  },
+  "defaults": {"1:value": "", "2:value": 5},
+  "required_refs": ["21:image"],
+  "hide": ["5"],
+  "options": [
+    {
+      "id": "engine", "label": "Mode", "default": "reference", "top": true,
+      "choices": [
+        {"id": "reference", "label": "Reference mode", "hint": "The character, location, outfit, motion videos and audio guide a new scene."},
+        {"id": "first_frame", "label": "First-frame mode", "hint": "Animates the first frame as it is. With no first frame it is text to video."}
+      ]
+    }
+  ],
+  "rules": [
+    {"when": {"engine": "reference"}, "set": {"5.value": true}},
+    {"when": {"engine": "first_frame"}, "set": {"5.value": false}}
+  ],
+  "refs_when": [
+    {"when": {"engine": "reference"}, "refs": ["21:image", "22:image", "23:image", "24:image", "48:image", "25:file", "26:file", "29:audio", "30:audio"]},
+    {"when": {"engine": "first_frame"}, "refs": ["18:image", "19:image"]}
+  ],
+  "confirm": [
+    {
+      "when": {"engine": "reference", "clips": [2, 3, 4, 6]},
+      "message": "A long video continues each clip from the last frame of the one before, which only first-frame mode reads. In reference mode every clip starts fresh.",
+      "alt": {"label": "Use first-frame mode", "set": {"engine": "first_frame"}}
+    }
+  ],
+  "hints": [
+    "Refer to your references in the prompt: <Picture 1> is character 1, <Picture 3> location 1, <Video 1> the first motion video.",
+    "Character 1 is the one that matters most: a sharp, well-lit picture of the face and the full look.",
+    "Upscaling to 2560 x 1080 or 3840 x 2160 adds time after the render. Turn it off for drafts.",
+    "5-6 s clips keep the character most consistent."
+  ]
+}

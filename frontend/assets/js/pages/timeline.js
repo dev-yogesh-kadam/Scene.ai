@@ -24,8 +24,7 @@ export function render(view) {
   let scale = 60;        // pixels per second
   let dragged = -1;
 
-  const picker = el('select', { 'aria-label': 'Project', style: 'max-width:220px',
-    onchange: (e) => { project = Number(e.target.value) || 0; localStorage.setItem('scene.project', project || ''); load(); } });
+  const picker = el('b', { class: 'canvas-project', title: 'This project. Open another from All projects.' });   // the project of the canvas; it does not switch
   const name = el('input', { type: 'text', value: 'Timeline', 'aria-label': 'Name of the exported video', style: 'max-width:200px', oninput: save });
   const exportButton = el('button', { class: 'btn primary', onclick: exportCut }, 'Export');
   const notice = el('p', { class: 'notice' });
@@ -205,8 +204,7 @@ export function render(view) {
     try {
       const [projects, library, board] = await Promise.all([api('/api/projects'),
         api('/api/library?kind=video' + (project ? '&project=' + project : '')), api('/api/boards/timeline?project=' + project)]);
-      picker.replaceChildren(el('option', { value: '' }, 'All work'),
-        ...projects.projects.map((p) => el('option', { value: p.id, selected: p.id === project }, p.name)));
+      picker.textContent = (projects.projects.find((p) => p.id === project) || { name: 'All work' }).name;
       tabTitle((projects.projects.find((p) => p.id === project) || { name: 'Timeline' }).name);
       videos = library.items;
       name.value = board.data.name || 'Timeline';

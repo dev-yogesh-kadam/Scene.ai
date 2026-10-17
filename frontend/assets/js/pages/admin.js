@@ -1,7 +1,7 @@
 // The admin console shell: its own tab bar, and one section per tab (see pages/admin/).
 
 import { el } from '../dom.js';
-import { store } from '../store.js';
+import { store, subscribe } from '../store.js';
 import { overview } from './admin/overview.js';
 import { users, jobs, library, credits, workflows, system, audit, settings } from './admin/sections.js';
 import { pricing } from './admin/pricing.js';
@@ -31,7 +31,17 @@ export function render(view) {
   let drawn = 0;
   const nav = el('nav', { class: 'tabs', 'aria-label': 'Admin sections' });
   const body = el('div');
-  view.replaceChildren(el('div', { class: 'page-head' }, el('h1', {}, 'Admin console')), nav, body);
+  // How many people have the studio open, kept up to date by the live connection as they come and go.
+  const people = el('b');
+  const live = el('div', { class: 'live-count', role: 'status', 'aria-live': 'polite', title: 'People with the studio open right now. Several tabs count once.' },
+    el('span', { class: 'dot online' }), people, el('span', { class: 'muted' }));
+  const showPeople = (changed) => {
+    people.textContent = store.people == null ? '…' : store.people;
+    live.lastChild.textContent = store.people === 1 ? 'person live now' : 'people live now';
+    if (changed) { live.classList.remove('bump'); void live.offsetWidth; live.classList.add('bump'); }
+  };
+  showPeople(false);
+  view.replaceChildren(el('div', { class: 'page-head' }, el('h1', {}, 'Admin console'), live), nav, body);
 
   // What each section remembers while the console is open: filters, searches, the period.
   const ctx = {
@@ -75,5 +85,12 @@ export function render(view) {
     const busy = document.querySelector('dialog[open], .drawer-backdrop, .chart:hover, .chart:focus-within') || body.contains(document.activeElement);
     if (live && !busy && !document.hidden && Date.now() - drawn >= live) draw();
   }, 1000);
-  return () => { clearInterval(timer); document.querySelectorAll('.drawer-backdrop').forEach((d) => d.remove()); };
+  const unsubscribe = subscribe((change) => {
+    if (change !== 'people') return;
+    showPeople(true);
+    // The overview lists who is online: it follows the count, unless the admin is in the middle of something.
+    const busy = document.querySelector('dialog[open], .drawer-backdrop') || body.contains(document.activeElement);
+    if (tab === 'overview' && !busy) draw();
+  });
+  return () => { unsubscribe(); clearInterval(timer); document.querySelectorAll('.drawer-backdrop').forEach((d) => d.remove()); };
 }

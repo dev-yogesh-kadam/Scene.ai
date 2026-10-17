@@ -9,10 +9,10 @@ const POINTS = [
   'Keep your characters, outfits and voices to reuse',
 ];
 
-export async function renderAuth(root, onSignedIn) {
+export async function renderAuth(root, onSignedIn, start = 'login') {
   let info = { first_run: false, signup_open: false };
   try { info = await api('/api/auth/state'); } catch (e) { /* show sign-in anyway */ }
-  let mode = 'login';
+  let mode = start;   // 'login' or 'register'
   let second = null;   // {email, password} once the password was right and an authenticator code is asked for
 
   const draw = (message) => {
@@ -86,7 +86,8 @@ export async function renderAuth(root, onSignedIn) {
   const page = (...card) => {
     root.replaceChildren(el('div', { class: 'auth' },
       el('div', { class: 'auth-hero' },
-        el('div', { class: 'brand' }, el('img', { src: '/assets/img/logo.svg', alt: '' }), 'Scene.ai'),
+        el('div', { class: 'auth-frame', 'aria-hidden': 'true' }),
+        el('a', { class: 'brand', href: '#/', title: 'About Scene.ai' }, el('img', { src: '/assets/img/logo.svg', alt: '' }), 'Scene.ai'),
         el('div', {},
           el('h2', {}, 'Direct your scene.'),
           el('p', {}, 'A studio for making videos and images with AI, without the node graphs.')),

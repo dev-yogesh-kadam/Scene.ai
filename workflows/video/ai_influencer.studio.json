@@ -1,0 +1,45 @@
+{
+  "title": "H3 AI Influencer",
+  "description": "Animates your image as the first frame: a talking-head, vlog or podcast shot. Add a voice track and the lips follow it.",
+  "output_name": "55.filename_prefix",
+  "labels": {
+    "1:image": "First frame: your image (<Picture 1> in the prompt)",
+    "70:audio": "Voice track (the lips follow this audio, or the sound of a video)",
+    "100:value": "Describe the motion, the speech and the sound. Refer to your image as <Picture 1>.",
+    "105:value": "Steps (20 fast, 30 quality, 40 max)"
+  },
+  "defaults": {"100:value": "", "102:value": 5},
+  "required_refs": ["1:image", "70:audio"],
+  "hide": ["108", "113", "130"],
+  "options": [
+    {
+      "id": "voice", "label": "Voice track", "default": "off",
+      "choices": [
+        {"id": "off", "label": "Off", "hint": "the model writes the voices from the prompt"},
+        {"id": "on", "label": "On", "hint": "the lips follow the audio file you add"}
+      ]
+    },
+    {
+      "id": "speed", "label": "Speed", "default": "standard",
+      "choices": [
+        {"id": "standard", "label": "Standard", "hint": "full model, the steps below"},
+        {"id": "turbo", "label": "Turbo", "hint": "8-step LoRA: faster, slightly less detail"}
+      ]
+    }
+  ],
+  "rules": [
+    {"when": {"voice": "off"}, "set": {"130.value": false, "72.on_true": ["34", 0]}},
+    {"when": {"voice": "on"}, "set": {"130.value": true}},
+    {"when": {"speed": "standard"}, "set": {"108.value": false}},
+    {"when": {"speed": "turbo"}, "set": {"108.value": true, "113.value": 8}}
+  ],
+  "refs_when": [
+    {"when": {"voice": "on"}, "refs": ["70:audio"]}
+  ],
+  "hints": [
+    "Write the timeline of the shot in the prompt: who speaks when, and what they say in quotes.",
+    "With a voice track, keep one speaker per clip and say who is speaking in the prompt.",
+    "5-6 s clips give the steadiest faces. For longer videos use Long video, which chains clips.",
+    "Use an image of at least 1024 px with no watermark or text on it."
+  ]
+}

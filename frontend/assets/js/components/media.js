@@ -1,7 +1,7 @@
 // Cards for finished images and videos, and the viewer with its details panel.
 
 import { api } from '../api.js';
-import { still, el, duration, when } from '../dom.js';
+import { still, el, icon, duration, when } from '../dom.js';
 import { store } from '../store.js';
 import { saveAssetDialog } from './assets.js';
 
@@ -54,7 +54,21 @@ export function openViewer(item, { base = '/api/library', owner = false, actions
     setTimeout(() => { copy.textContent = 'Copy'; }, 1500);
   } }, 'Copy');
   const download = el('a', { class: 'btn primary', href: url + '?download=true', download: item.filename, title: 'Download (D)' }, 'Download');
+  // The user's thumbs on their own result: the agent reuses what they liked and never what they turned down.
+  const thumbs = base === '/api/library' && !owner && item.workflow && el('span', { class: 'rate viewer-rate' });
+  const drawThumbs = () => thumbs && thumbs.replaceChildren(...[[1, 'thumbup', 'Good: the agent will reuse it'], [-1, 'thumbdown', 'Not good: the agent will not use it']].map(([value, glyph, tip]) =>
+    el('button', { type: 'button', class: 'icon-btn' + (item.rating === value ? ' on' + (value < 0 ? ' bad' : '') : ''), title: tip, 'aria-label': tip,
+      'aria-pressed': String(item.rating === value), onclick: async () => {
+        const before = item.rating || 0;
+        item.rating = before === value ? 0 : value;
+        drawThumbs();
+        try { await api('/api/library/' + item.id, { method: 'PUT', json: { rating: item.rating } }); } catch (e) { item.rating = before; drawThumbs(); alert(e.message); }
+      } }, icon(glyph))));
+  drawThumbs();
+  // Cinema: the studio goes dark and the picture's own colours glow around it, like light off a screen.
+  const glow = item.kind === 'audio' ? '' : item.kind === 'video' ? `${base}/${item.id}/poster` : url;
   const dialog = el('dialog', { class: 'viewer' },
+    glow && el('div', { class: 'viewer-glow', 'aria-hidden': 'true', style: `--spill-image:url("${glow}")` }),
     el('div', { class: 'viewer-grid' },
       el('div', { class: 'viewer-media' }, media),
       el('aside', { class: 'viewer-panel' },
@@ -65,6 +79,7 @@ export function openViewer(item, { base = '/api/library', owner = false, actions
             el('dl', { class: 'facts' }, detailsOf(item, { owner }).flatMap(([k, v]) => [el('dt', {}, k), el('dd', {}, v)])))),
         el('div', { class: 'viewer-actions' },
           download,
+          thumbs,
           actions.map((a) => el('button', { class: 'btn' + (a.danger ? ' danger' : ''), onclick: () => a.run(dialog) }, a.label))))));
   dialog.addEventListener('close', () => dialog.remove());
   dialog.addEventListener('keydown', (e) => {
@@ -72,7 +87,8 @@ export function openViewer(item, { base = '/api/library', owner = false, actions
     e.preventDefault();
     download.click();
   });
-  dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+  // A click in the dark around the picture closes it, as a click outside a smaller dialog would.
+  dialog.addEventListener('click', (e) => { if (e.target === dialog || e.target.classList.contains('viewer-media')) dialog.close(); });
   document.body.append(dialog);
   dialog.showModal();
   return dialog;
@@ -106,13 +122,15 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
       onChanged();
     } catch (err) { alert(err.message); }
   };
-  const edited = item.workflow.startsWith('edit/');   // a timeline export: there is no form to re-run
+  const edited = /^(edit|upload)\//.test(item.workflow);   // a timeline export or an upload: there is no form to re-run
   const view = () => openViewer(item, { actions: [
     !edited && { label: 'Re-run', run: (dialog) => { dialog.close(); rerun(); } },
     !sound && { label: next, run: async (dialog) => { if (await useAsFirstFrame(item)) dialog.close(); } },
   ].filter(Boolean) });
   return el('div', { class: 'media' },
-    el('div', { class: 'thumb', onclick: view }, thumb, el('span', { class: 'kind' }, item.kind)),
+    el('div', { class: 'thumb', onclick: view }, thumb, el('span', { class: 'kind' }, item.kind),
+      item.rating ? el('span', { class: 'rated' + (item.rating < 0 ? ' bad' : ''), title: item.rating > 0 ? 'You liked it' : 'You turned it down' },
+        icon(item.rating > 0 ? 'thumbup' : 'thumbdown')) : null),
     el('div', { class: 'meta' },
       el('div', { class: 'title', title: item.name }, item.name),
       el('div', { class: 'sub' }, [item.summary, item.seconds && 'took ' + duration(item.seconds)].filter(Boolean).join(' · ') || when(item.created)),

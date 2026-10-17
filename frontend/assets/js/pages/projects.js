@@ -1,7 +1,7 @@
 // The All projects page: every project as a card with its newest item as the thumbnail. Opening one goes to its Canvas.
 
 import { api } from '../api.js';
-import { still, el, icon, ago, initials } from '../dom.js';
+import { still, el, icon, ago, initials, spill } from '../dom.js';
 import { subscribe } from '../store.js';
 import { projectDialog } from '../components/projects.js';
 
@@ -14,7 +14,8 @@ export function render(view) {
   const tools = el('div', { class: 'row' }, search,
     el('button', { class: 'btn', title: 'Everything you have made, in or out of a project', onclick: () => open(0) }, 'Open all work'),
     el('button', { class: 'btn primary', onclick: create }, 'New project'));
-  view.replaceChildren(el('div', { class: 'page-head' }, el('h1', {}, 'All projects'), tools), body);
+  const light = spill();   // the cover of the project worked on last lights the top of the page
+  view.replaceChildren(light.node, el('div', { class: 'page-head' }, el('h1', {}, 'All projects'), tools), body);
 
   function open(id) {
     localStorage.setItem('scene.project', id || '');
@@ -61,6 +62,8 @@ export function render(view) {
   async function load() {
     try {
       projects = (await api('/api/projects')).projects.sort((a, b) => (b.updated || b.created) - (a.updated || a.created));
+      const lit = projects.find((p) => p.cover_id && p.cover_kind !== 'audio');
+      light.show(lit && lit.cover_id, lit && lit.cover_kind);
       draw();
     } catch (e) {
       body.replaceChildren(el('p', { class: 'error' }, e.message));
