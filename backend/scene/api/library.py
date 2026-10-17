@@ -130,13 +130,36 @@ async def get_poster(item_id: int, request: Request, user: dict = Depends(curren
     return await poster_response(request, _path(request, _own(request, user, item_id)))
 
 
+@router.get("/library/{item_id}/frame")
+async def get_frame(item_id: int, request: Request, at: float = 0.0, user: dict = Depends(current_user)):
+    """The frame of a video at `at` seconds, for the keyframes the agent shows under a result. Made once and kept,
+    per tenth of a second, next to the video's poster."""
+    row = _own(request, user, item_id)
+    if row["kind"] != "video":
+        raise HTTPException(400, "Only a video has frames.")
+    path = _path(request, row)
+    if not path.is_file():
+        raise HTTPException(404, "The file is missing from storage.")
+    tenth = max(0, min(int(round(at * 10)), 36000))
+    target = media.poster_path(path).with_name("{}.{}.jpg".format(path.name, tenth))
+    if not (target.is_file() and target.stat().st_mtime >= path.stat().st_mtime):
+        target.parent.mkdir(exist_ok=True)
+        if not await media.frame_at(path, tenth / 10, target):
+            raise HTTPException(404, "The video has no frame there.")
+    return FileResponse(target, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
 @router.put("/library/{item_id}")
 async def update_item(item_id: int, body: dict, request: Request, user: dict = Depends(current_user)):
-    """Rename an item or move it to a project (project_id null = no project)."""
+    """Rename an item, move it to a project (project_id null = no project) or rate it (rating 1, -1, or 0 to clear)."""
     _own(request, user, item_id)
     db = request.app.state.db
     if "name" in body and str(body["name"]).strip():
         db.run("UPDATE generations SET name = ? WHERE id = ?", (str(body["name"]).strip()[:80], item_id))
+    if "rating" in body:
+        if body["rating"] not in (1, -1, 0) or isinstance(body["rating"], bool):
+            raise HTTPException(400, "A rating is 1, -1 or 0.")
+        db.run("UPDATE generations SET rating = ? WHERE id = ?", (body["rating"], item_id))
     if "project_id" in body:
         if body["project_id"] is not None:
             _own_project(request, user, body["project_id"])

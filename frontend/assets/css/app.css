@@ -510,13 +510,8 @@ svg.run rect { fill: none; rx: 12px; stroke: var(--accent); stroke-width: 2; str
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'%3E%3Cpath d='M0 4.5V0h4.5M0 91.5V96h4.5M91.5 0H96v4.5M91.5 96H96v-4.5' fill='none' stroke='%23000'/%3E%3C/svg%3E") var(--grid-x, 0) var(--grid-y, 0) / var(--grid, 96px) var(--grid, 96px); }
 .canvas-stage.far::before { display: none; }
 .canvas-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
-/* A shot is a strip of film: a faint lane behind its frames with a row of sprocket holes along each edge.
-   --inv keeps the holes the same size on screen at any zoom. */
-.lane { position: absolute; pointer-events: none; border-radius: calc(14px * var(--inv, 1)); background-color: color-mix(in srgb, var(--text) 5%, transparent); box-shadow: inset 0 0 0 calc(1px * var(--inv, 1)) color-mix(in srgb, var(--text) 6%, transparent);
-  --hole: calc(10px * var(--inv, 1));
-  background-image: linear-gradient(90deg, color-mix(in srgb, var(--text) 16%, transparent) 50%, transparent 0), linear-gradient(90deg, color-mix(in srgb, var(--text) 16%, transparent) 50%, transparent 0);
-  background-size: calc(var(--hole) * 2) calc(5px * var(--inv, 1)); background-repeat: repeat-x; background-position: var(--hole) calc(7px * var(--inv, 1)), var(--hole) calc(100% - 7px * var(--inv, 1)); }
-.canvas-stage.far .lane { background-image: none; }
+/* A shot is a faint lane behind its frames. */
+.lane { position: absolute; pointer-events: none; border-radius: calc(14px * var(--inv, 1)); background-color: color-mix(in srgb, var(--text) 5%, transparent); box-shadow: inset 0 0 0 calc(1px * var(--inv, 1)) color-mix(in srgb, var(--text) 6%, transparent); }
 .frame { position: absolute; width: 240px; cursor: grab; user-select: none; }
 /* Every frame has a line around it, so a dark picture stands out from the canvas. --inv keeps it the same width on screen at any zoom. */
 .frame .shot { background: var(--media-ground); border-radius: var(--radius-media); box-shadow: 0 0 0 calc(2px * var(--inv, 1)) var(--text); }
@@ -669,7 +664,6 @@ select.opt, a.opt { width: auto; max-width: 100%; height: 28px; padding: 0 10px;
 select.opt:hover, a.opt:hover { background: var(--active); }
 a.opt { color: var(--muted); display: inline-block; }
 .quick-foot .btn.generate { height: 44px; width: 100%; }
-select.agent-model { max-width: 190px; height: 26px; color: var(--muted); }
 .agent-panel.soon { align-items: center; justify-content: center; padding: 24px; }
 .soon-box { display: grid; justify-items: center; gap: 10px; width: 100%; max-width: 300px; padding: 28px 24px; text-align: center; border: 1px solid var(--line); border-radius: 16px; background: var(--hover); }
 .soon-box svg.icon { width: 30px; height: 30px; padding: 12px; box-sizing: content-box; border-radius: 50%; background: var(--agent-soft); color: var(--agent); }
@@ -681,8 +675,6 @@ button.chip { background: none; cursor: pointer; }
 button.chip:hover { color: var(--text); border-color: var(--control); }
 .chip { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-s); font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-log { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; display: grid; gap: 20px; align-content: start; }
-.agent-run { display: grid; gap: 14px; }
-.agent-turn h3 { margin: 0 0 4px; }
 .agent-plan { margin-top: 10px; display: grid; gap: 8px; }
 /* One step of a plan: its result (or what it will make), its settings, its prompt and the agent's check. */
 .step-list { display: grid; gap: 8px; }
@@ -692,8 +684,8 @@ button.chip:hover { color: var(--text); border-color: var(--control); }
 .step-top { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 12px; align-items: center; }
 .step-thumb { width: 52px; height: 52px; border-radius: 12px; overflow: hidden; background: var(--media-ground); display: grid; place-items: center; }
 .step-thumb img, .step-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
-.step-thumb.empty { background: var(--hover); color: var(--muted); }
-.step-thumb.empty .icon { width: 22px; height: 22px; }
+.step-thumb.blank { background: var(--hover); color: var(--muted); }
+.step-thumb.blank .icon { width: 22px; height: 22px; }
 .step-thumb.working { color: var(--agent); animation: thumb-glow 1.6s ease-in-out infinite; }
 @keyframes thumb-glow { 50% { background: var(--agent-soft); } }
 .step-title { display: grid; gap: 5px; min-width: 0; }
@@ -745,8 +737,6 @@ button.chip:hover { color: var(--text); border-color: var(--control); }
 .agent-composer .agent-input:focus { outline: none; }
 .agent-composer .agent-input[contenteditable="false"] { cursor: default; }
 .agent-composer-bar { display: flex; align-items: center; gap: 6px; padding: 4px 0 0 6px; cursor: default; }
-.agent-composer-bar select.agent-model { height: 32px; border: 0; background: none; color: var(--muted); font-size: 13px; }
-.agent-composer-bar select.agent-model:hover { color: var(--text); }
 .agent-perm { width: 34px; height: 34px; border-radius: 50%; }
 .agent-send { width: 38px; height: 38px; flex: none; display: grid; place-items: center; padding: 0; border: 0; border-radius: 50%; background: var(--agent); color: var(--bg); cursor: pointer; transition: transform .15s var(--ease), opacity .15s; }
 .agent-send:hover { transform: scale(1.05); }
@@ -1148,3 +1138,160 @@ a.brand { color: inherit; text-decoration: none; }
 .agent-spend-card .none b { font-weight: 500; }
 .agent-status { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .agent-status.error { color: var(--bad); }
+
+
+/* ---------------------------------------------------------------- the agent's conversation */
+/* Each turn: the message, what the agent did and thought (folded), its reply, its plan or what it made, and its cost. */
+.agent-log-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.agent-to-end { position: absolute; left: 50%; bottom: 12px; z-index: 3; width: 36px; height: 36px; transform: translateX(-50%); display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--raised); color: var(--text); box-shadow: var(--shadow); cursor: pointer; }
+.agent-to-end .icon { width: 18px; height: 18px; }
+.turn { display: grid; gap: 10px; }
+.agent-said .md-chip { margin: 0 2px; }
+
+.fold { display: grid; }
+.fold-head { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 2px 0; border: 0; background: none; color: var(--muted); font: 13px/20px var(--sans); text-align: left; }
+button.fold-head { cursor: pointer; }
+button.fold-head:hover .fold-title, button.fold-head:hover .fold-caret { color: var(--text); }
+.fold-head > .icon { width: 16px; height: 16px; flex: none; }
+.fold-title { flex: none; }
+.fold-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 500; }
+.fold-caret { display: inline-flex; flex: none; color: var(--muted); }
+.fold-caret .icon { width: 14px; height: 14px; }
+.fold-body { display: grid; gap: 8px; margin: 6px 0 4px 7px; padding-left: 14px; border-left: 2px solid var(--line); }
+.fold-text { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+.fold.info .fold-title { color: var(--text); font-weight: 600; }
+.fold.info .fold-sub, .fold.cancelled .fold-sub { color: var(--muted); font-weight: 400; }
+.fold.nested .fold-head { font-size: 12.5px; }
+.work-row { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 13px; line-height: 20px; }
+.work-row .icon { width: 15px; height: 15px; flex: none; margin-top: 2px; }
+.turn.live .fold.work .fold-body { animation: pop-in .2s var(--ease); }
+
+.turn-reply .md { font-size: 14px; line-height: 1.6; color: var(--text); overflow-wrap: anywhere; }
+.md p { margin: 0 0 8px; }
+.md p:last-child, .md ul:last-child, .md ol:last-child { margin-bottom: 0; }
+.md ul, .md ol { margin: 0 0 8px; padding-left: 20px; }
+.md li { margin: 3px 0; }
+.md b { font-weight: 650; }
+.md code { padding: 1px 5px; border-radius: 5px; background: var(--hover); font: 12px/1.4 var(--mono); }
+.md.clamped { max-height: 11em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 65%, transparent); mask-image: linear-gradient(#000 65%, transparent); }
+.turn-reply.error .md { color: var(--bad); }
+.more-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 0; border: 0; background: none; color: var(--muted); font-size: 12px; cursor: pointer; }
+.more-btn:hover { color: var(--text); }
+.more-btn .icon { width: 14px; height: 14px; }
+.flip { display: inline-flex; transform: rotate(180deg); }
+.md-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; max-width: 100%; padding: 0 8px 0 3px; vertical-align: middle; border: 0; border-radius: 8px; background: var(--hover); color: var(--text); font: 500 12.5px/1 var(--sans); cursor: pointer; }
+.md-chip:hover { background: var(--active); }
+.md-chip-thumb { width: 20px; height: 20px; flex: none; overflow: hidden; border-radius: 5px; background: var(--media-ground); }
+.md-chip-thumb img, .md-chip-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.md-chip-thumb .sound span { display: none; }
+.md-chip-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* What a plan made: a block per clip, sound or grid of pictures. */
+.results { display: grid; gap: 18px; }
+.result { display: grid; gap: 8px; }
+.result-head { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; }
+.result-head .muted { flex: none; }
+.dot-state { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--faint); }
+.dot-state.done { background: var(--ok); }
+.dot-state.running { background: var(--agent); animation: live-pulse 1.6s ease-in-out infinite; }
+.dot-state.queued { background: var(--warn); }
+.dot-state.failed { background: var(--bad); }
+.result-model { display: inline-flex; align-items: center; gap: 6px; min-width: 0; margin-left: 4px; padding: 2px 10px; border: 1px solid var(--line-strong); border-radius: 12px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-model::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--agent); }
+.result-name { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-wait.running { background: linear-gradient(110deg, var(--hover) 30%, var(--active) 50%, var(--hover) 70%); background-size: 200% 100%; animation: shimmer 1.8s linear infinite; }
+.result-wait.failed { background: var(--bad-soft); color: var(--bad); }
+.result-wait-inner { display: grid; justify-items: center; gap: 8px; width: 62%; text-align: center; }
+.result-bar { width: 100%; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.result-bar i { display: block; height: 100%; background: var(--agent); transition: width .4s var(--ease); }
+.result-audio audio { width: 100%; }
+.keyframes { display: flex; gap: 6px; }
+.keyframe { position: relative; width: 76px; aspect-ratio: 16 / 10; padding: 0; border: 0; border-radius: 8px; overflow: hidden; background: var(--media-ground); cursor: pointer; }
+.keyframe img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.keyframe span { position: absolute; left: 4px; bottom: 4px; padding: 1px 5px; border-radius: 5px; background: rgba(0, 0, 0, .66); color: #fff; font: 600 10px/14px var(--sans); }
+.keyframe:hover { outline: 2px solid var(--agent); outline-offset: 1px; }
+.result-foot { display: flex; align-items: center; gap: 6px; min-height: 28px; }
+.crumb { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px; border: 0; border-radius: 7px; background: none; color: var(--muted); font-size: 12px; cursor: pointer; }
+.crumb:hover { background: var(--hover); color: var(--text); }
+.crumb .icon { width: 14px; height: 14px; }
+.rate { display: inline-flex; gap: 2px; }
+.rate .icon-btn.on { color: var(--ok); }
+.rate .icon-btn.on.bad { color: var(--bad); }
+.retake { display: grid; gap: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.result-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.result-grid.one { grid-template-columns: minmax(0, 1fr); }
+.res-tile { position: relative; overflow: hidden; border-radius: 12px; background: var(--media-ground); }
+.res-tile.wait { display: grid; place-items: center; align-content: center; gap: 8px; padding: 12px; background: var(--hover); color: var(--muted); font-size: 12px; text-align: center; }
+.res-tile.wait.running { background: linear-gradient(110deg, var(--hover) 30%, var(--active) 50%, var(--hover) 70%); background-size: 200% 100%; animation: shimmer 1.8s linear infinite; }
+.res-tile.wait.failed { background: var(--bad-soft); color: var(--bad); }
+.tile-media { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: pointer; }
+.tile-media img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .25s var(--ease); }
+.res-tile:hover .tile-media img { transform: scale(1.03); }
+.tile-btn { position: absolute; width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(0, 0, 0, .6); color: #fff; cursor: pointer; }
+.tile-btn:hover { background: rgba(0, 0, 0, .82); }
+.tile-btn .icon { width: 15px; height: 15px; }
+.tile-btn.info { left: 6px; top: 6px; }
+.tile-btn.open { right: 6px; bottom: 6px; }
+.tile-rate { position: absolute; right: 6px; top: 6px; opacity: 0; transition: opacity .15s; }
+.res-tile:hover .tile-rate, .res-tile:focus-within .tile-rate, .tile-rate:has(.on) { opacity: 1; }
+.tile-rate .icon-btn { width: 28px; height: 28px; border-radius: 50%; background: rgba(0, 0, 0, .6); color: #fff; }
+.tile-rate .icon-btn.on { color: #6fe3a5; }
+.tile-rate .icon-btn.on.bad { color: #ff8f86; }
+.tile-check { position: absolute; left: 40px; top: 10px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; font: 700 11px/1 var(--sans); }
+.tile-check.passed { background: var(--ok-soft); color: var(--ok); }
+.tile-check.failed { background: var(--bad); color: #fff; }
+.grid-review { display: grid; gap: 4px; font-size: 12px; }
+.info-refs { display: flex; flex-wrap: wrap; gap: 6px; }
+.info-ref { width: 44px; height: 44px; overflow: hidden; border-radius: 8px; background: var(--media-ground); }
+.info-ref img, .info-ref video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.info-ref .sound span { display: none; }
+.pop-info { width: 300px; display: grid; gap: 6px; padding: 10px 12px; }
+.pop-info p { margin: 0; max-height: 200px; overflow-y: auto; white-space: pre-wrap; }
+.turn-foot { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.turn-foot .icon-btn.done { color: var(--ok); }
+
+/* The canvas glides to an item the conversation points at, and rings it for a moment. */
+.canvas-world.gliding { transition: transform .6s cubic-bezier(.2, .8, .2, 1); }
+.frame.spotlight::after { content: ""; position: absolute; inset: calc(-8px * var(--inv, 1)); border: calc(3px * var(--inv, 1)) solid var(--agent); border-radius: calc(var(--radius-media) + 8px); pointer-events: none; animation: spotlight 1.8s ease-out forwards; }
+@keyframes spotlight { 0% { opacity: 0; transform: scale(1.06); } 15% { opacity: 1; transform: scale(1); } 70% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .canvas-world.gliding { transition: none; }
+  .frame.spotlight::after { animation: none; opacity: 1; }
+  .result-wait.running, .res-tile.wait.running, .dot-state.running { animation: none; }
+}
+
+/* The user's thumbs on a library item: in the viewer beside Download, and as a mark on its card. */
+.viewer-rate { margin-left: auto; }
+.viewer-rate .icon-btn { width: 36px; height: 36px; }
+.media .rated { position: absolute; right: 8px; bottom: 8px; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: rgba(0, 0, 0, .6); color: #6fe3a5; }
+.media .rated.bad { color: #ff8f86; }
+.media .rated .icon { width: 14px; height: 14px; }
+
+/* Two sides: the user's messages on the right, the agent on the left. A result keeps its own shape, at most 300 px tall,
+   and is a still that opens on the canvas: clips are played there, not here. */
+.turn > :not(.agent-said) { justify-self: stretch; }
+.agent-said { max-width: 82%; }
+.agent-said p.clamped { display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+.agent-said .more-btn { padding-bottom: 0; }
+.result { justify-items: start; }
+.result > .fold, .result > .result-head, .result > .agent-review, .result > .result-foot, .result > .retake { justify-self: stretch; }
+.result-media { position: relative; display: block; max-width: 100%; padding: 0; border: 0; border-radius: 14px; overflow: hidden; background: var(--media-ground); cursor: pointer; outline: 2px solid transparent; outline-offset: 2px; transition: outline-color .15s, transform .15s var(--ease); }
+.result-media:hover, .result-media:focus-visible { outline-color: var(--agent); }
+.result-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.clip-badge { position: absolute; left: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 10px; background: rgba(0, 0, 0, .62); color: #fff; font: 600 11px/1 var(--sans); }
+.clip-badge .icon { width: 11px; height: 11px; fill: currentColor; }
+.result-wait { position: relative; display: grid; place-items: center; min-height: 90px; max-width: 100%; border-radius: 14px; background: var(--hover); color: var(--muted); font-size: 12px; overflow: hidden; }
+.result-wait.failed { justify-self: stretch; }
+.result-grid { width: min(100%, 440px); }
+
+/* The agent's model, in the bar under the message box: its name as quiet text that opens the list, with each model's price. */
+.agent-model-btn { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 220px; height: 32px; padding: 0 8px; border: 0; border-radius: 10px; background: none; color: var(--muted); font: 500 13px/1 var(--sans); cursor: pointer; }
+.agent-model-btn:hover, .agent-model-btn[aria-expanded="true"] { background: var(--hover); color: var(--text); }
+.agent-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-model-btn .icon { width: 14px; height: 14px; flex: none; }
+
+/* The name of the open project in the bar of the canvas and the timeline. */
+.canvas-project { max-width: 240px; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+
+/* A tab opened before an update: one line at the top, and Reload. */
+.update-bar { position: fixed; top: 14px; left: 50%; z-index: 80; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 16px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--raised); box-shadow: var(--shadow); font-size: 13px; animation: pop-in .2s var(--ease); }

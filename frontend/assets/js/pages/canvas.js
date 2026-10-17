@@ -74,7 +74,8 @@ export function render(view) {
   const labelLayer = el('div');
   const world = el('div', { class: 'canvas-world' }, assetLayer, labelLayer, itemLayer, jobLayer);
   const stage = el('div', { class: 'canvas-stage' }, world);
-  const picker = el('select', { 'aria-label': 'Project', onchange: (e) => { project = Number(e.target.value) || 0; localStorage.setItem('scene.project', project || ''); selected.clear(); load(); agent.reload(); shared.reload(); cast.reload().then(() => dock.recast()); } });
+  // The canvas shows one project, the one opened from All projects; its name is shown, and it does not switch.
+  const picker = el('b', { class: 'canvas-project', title: 'This project. Open another from All projects.' });
   const count = el('span', { class: 'slate-text' });
   const context = el('div', { class: 'float canvas-context hidden' });
   const zoomLabel = el('button', { class: 'btn small quiet', title: 'Zoom to 100% (0)', onclick: () => zoomTo(1) });
@@ -90,11 +91,13 @@ export function render(view) {
     el('div', { class: 'soon-box' }, icon('chat'), el('span', { class: 'soon-tag' }, 'Coming soon'), el('b', {}, 'The agent'),
       el('p', { class: 'muted small' }, 'Describe what you want and have it planned for you. It is not open on your account yet.'),
       el('button', { class: 'btn small', onclick: () => showPanel(true, 'quick') }, 'Use Quick actions'))),
-    attach: () => {}, reload: () => {}, focus: () => {}, destroy: () => {} });
+    attach: () => {}, reload: () => {}, redraw: () => {}, focus: () => {}, destroy: () => {} });
   const agent = !store.user.agent ? comingSoon() : agentTabs({
     projectId: () => project,
     onJobs: (ids) => { agentJobs = new Set(ids); for (const [id, frame] of jobFrames) frame.node.classList.toggle('by-agent', agentJobs.has(id)); },
     onMemory: () => showPanel(true, 'memory'),
+    onFocus: (id) => focusItem(id),   // a result in the conversation shows that clip on the canvas
+    locate: (id) => locate(id),
   });
   // Shared memory: the saved assets and this project's uploads, which the agent plans with.
   const shared = memoryPanel({ projectId: () => project });
@@ -423,7 +426,7 @@ export function render(view) {
       const done = job.steps ? (Math.max(job.clip, 1) - 1 + job.step / job.steps) / Math.max(job.clips, 1) : 0;
       frame.shot.style.setProperty('--developed', done.toFixed(3));
       frame.node.classList.toggle('waiting', waiting);
-      frame.clock.textContent = waiting ? 'queued' : job.steps ? `${elapsed(job)} · ${Math.round(done * 100)}%` : elapsed(job);
+      frame.clock.textContent = waiting ? 'queued' : elapsed(job);   // how long it has been at it; no percentage
       frame.fact.textContent = waiting ? `position ${job.position}` : job.steps ? `step ${job.step} of ${job.steps}` : 'starting';
     }
     hint.classList.toggle('hidden', boxes.size > 0);
@@ -474,6 +477,43 @@ export function render(view) {
     drawItems();
     drawJobs(jobs);
     settle();
+  }
+
+  // ------------------------------------------------------------ one item in view: where the agent's results lead
+
+  // Where an item is, as the agent's panel names it: "Shot 3", take 2.
+  function locate(id) {
+    const index = layout.rows.findIndex((row) => row.keys.includes(id));
+    if (index < 0) return null;
+    const row = layout.rows[index];
+    return { shot: row.name || `Shot ${index + 1}`, take: row.keys.indexOf(id) + 1 };
+  }
+
+  // Glide to one item and select it: it comes to the middle of the part of the canvas the panel leaves free, at a size
+  // it can be seen at, with a ring that shows which one it is.
+  let glide = null;
+  async function focusItem(id) {
+    if (!boxes.has(id)) {   // made a moment ago, it may not be drawn yet
+      try { await loadItems(); draw(); } catch { /* said below */ }
+    }
+    const box = boxes.get(id);
+    if (!box) return note(project ? 'That one is not in this project. Pick All work to see it.' : 'That one is no longer in the library.', { error: true });
+    const rect = stage.getBoundingClientRect();
+    const covered = isOpen() ? panelWidth + 12 : 0;
+    const room = { w: Math.max(200, rect.width - covered), h: rect.height };
+    cam.k = clamp(Math.min((room.w * 0.55) / FRAME, (room.h * 0.62) / (box.h + SLATE)), 0.35, 1.6);
+    cam.x = room.w / 2 - (box.x + FRAME / 2) * cam.k;
+    cam.y = room.h / 2 - (box.y + (box.h + SLATE) / 2) * cam.k;
+    world.classList.add('gliding');
+    applyCamera();
+    clearTimeout(glide);
+    glide = setTimeout(() => world.classList.remove('gliding'), 650);
+    selected.clear();
+    selected.add(id);
+    selectionChanged();
+    box.node.classList.remove('spotlight');
+    void box.node.offsetWidth;   // starts the ring again when it is already there
+    box.node.classList.add('spotlight');
   }
 
   // ------------------------------------------------------------ camera
@@ -667,6 +707,7 @@ export function render(view) {
 
   let saveTimer;
   function save() {
+    agent.redraw();   // where each of the agent's results is ("Shot 3 › Take 2") may have changed
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => api('/api/boards/canvas', { method: 'PUT', json: { project: project || null, data: layout } }).catch(() => {}), 400);
   }
@@ -683,8 +724,7 @@ export function render(view) {
     try {
       projects = (await api('/api/projects')).projects;
       if (project && !projects.some((p) => p.id === project)) project = 0;
-      picker.replaceChildren(el('option', { value: '' }, 'All work'),
-        ...projects.map((p) => el('option', { value: p.id, selected: p.id === project }, p.name)));
+      picker.textContent = (projects.find((p) => p.id === project) || { name: 'All work' }).name;
       tabTitle((projects.find((p) => p.id === project) || { name: 'Canvas' }).name);
       const [board] = await Promise.all([api('/api/boards/canvas?project=' + project), loadItems(), loadAssets()]);
       drawAssets();

@@ -143,9 +143,20 @@ function showApp() {
   };
 
   drawCredits();
+  // A tab opened before the studio was updated runs the old page: it says so once, and Reload brings the new one.
+  const loaded = Number((import.meta.url.match(/\/v\/(\d+)\//) || [])[1]) || null;
+  let offered = false;
+  const offerReload = () => {
+    if (offered || !loaded || !store.page || store.page <= loaded) return;
+    offered = true;
+    document.body.append(el('div', { class: 'update-bar', role: 'status' },
+      el('span', {}, 'Scene.ai has been updated.'),
+      el('button', { class: 'btn small primary', onclick: () => location.reload() }, 'Reload'),
+      el('button', { class: 'icon-btn', title: 'Later', 'aria-label': 'Later', onclick: (e) => e.currentTarget.parentNode.remove() }, '×')));
+  };
   const unsubscribe = subscribe((change) => {
     if (change === 'jobs') drawNav();
-    if (change === 'status') drawStatus();
+    if (change === 'status') { drawStatus(); offerReload(); }
     if (change === 'credits') drawCredits();
   });
   window.addEventListener('hashchange', route);

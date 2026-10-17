@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
 from .. import __version__, audit, backup, edits, media
+from ..agent import AgentError
 from ..catalog import KINDS
 from ..credits import MOTION, OVERLAY, PER_JOB, RATES
 from .auth import new_hash, password_problem, signup_open
@@ -26,7 +27,7 @@ from .studio import current_announcement
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 DAY = 86400
 RANGES = (7, 30, 90)
-SPEND = "reason IN ('generation', 'refund')"   # a charge and its refund cancel out
+SPEND = "reason IN ('generation', 'refund', 'agent')"   # a charge and its refund cancel out; messages to the agent are spending too
 COUNT_IF = "SUM(CASE WHEN {} THEN 1 ELSE 0 END)"   # how many rows meet a condition, in SQL both databases speak
 DONE_FAILED = COUNT_IF.format("status = 'done'") + " AS done, " + COUNT_IF.format("status = 'failed'") + " AS failed"
 
@@ -869,6 +870,36 @@ def _pricing(state, items):
 async def get_pricing(request: Request, user: dict = Depends(admin_user)):
     """The credit rates, each workflow's own pricing, the credit packages and the servers."""
     return _pricing(request.app.state, await request.app.state.catalog.listing())
+
+
+@router.get("/pricing/llm")
+async def get_llm_pricing(request: Request, user: dict = Depends(admin_user)):
+    """What a message to the agent costs with each model it can use (and any model that has a price but is not there now)."""
+    state = request.app.state
+    try:
+        models = await state.agent.models()
+    except AgentError:
+        models = []
+    prices = state.credits.llm_prices()
+    return {"models": [{"model": m, "credits": prices.get(m, 0), "available": m in models} for m in [*models, *(p for p in prices if p not in models)]],
+            "inr_per_1000_credits": state.credits.inr_per_1000}
+
+
+@router.put("/pricing/llm")
+async def put_llm_pricing(body: dict, request: Request, user: dict = Depends(admin_user)):
+    """Set what a message to the agent costs with one model: {"model", "credits"}; 0 makes it free."""
+    state = request.app.state
+    model = str(body.get("model") or "").strip()[:120]
+    if not model:
+        raise HTTPException(400, "Name the model.")
+    value = _amount(body.get("credits"), "Credits per message", maximum=1e5)
+    if value is None or value != int(value):
+        raise HTTPException(400, "Credits per message is a whole number.")
+    before = state.credits.llm_cost(model)
+    state.credits.set_llm_price(model, int(value))
+    if int(value) != before:
+        audit.record(request, user, "Changed agent model pricing", model, "{} cr to {} cr a message".format(before, int(value)))
+    return await get_llm_pricing(request, user)
 
 
 @router.put("/pricing")

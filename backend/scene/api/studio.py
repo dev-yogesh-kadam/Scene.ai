@@ -84,10 +84,10 @@ async def status(request: Request, user: dict = Depends(current_user)):
     try:
         stats = await state.comfy.stats()
         state.saw_server(True)
-        return {"online": True, "version": stats.get("system", {}).get("comfyui_version")}
+        return {"online": True, "version": stats.get("system", {}).get("comfyui_version"), "page": state.page_version()}
     except (httpx.HTTPError, ValueError):
         state.saw_server(False)
-        return {"online": False}
+        return {"online": False, "page": state.page_version()}   # the version of the page files, for a tab opened before a change
 
 
 @router.get("/announcement")

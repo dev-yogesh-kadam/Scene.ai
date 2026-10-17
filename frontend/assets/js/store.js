@@ -22,7 +22,11 @@ export async function refreshJobs() {
 }
 
 export async function refreshStatus() {
-  try { store.online = (await api('/api/status')).online; } catch (e) { store.online = false; }
+  try {
+    const found = await api('/api/status');
+    store.online = found.online;
+    store.page = found.page;   // the version of the page files on the server; a tab that loaded older ones offers to reload
+  } catch (e) { store.online = false; }
   emit('status');
 }
 

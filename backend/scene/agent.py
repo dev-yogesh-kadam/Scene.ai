@@ -69,6 +69,8 @@ The asset book (the project's memory):
   answer from the book. An entry marked "uploaded" is a file the user dropped into a job in this project.
 - An item with "review" was checked by you after it was made. Do not start a shot on, or use as a reference, an item
   that failed its review, and do not repeat the mistake it names in a new prompt.
+- An item marked "liked" got the user's thumbs up: prefer it as a reference or a picture to start on. Never use one
+  marked "disliked", and do not make the same picture again.
 
 Editing videos the user already has:
 - Every step has a "tool". "generate" makes something new with a workflow. The others edit the selected videos; they
@@ -185,7 +187,15 @@ the user to choose a setting.
 - If what is asked cannot be done with these workflows, return no steps and say what you can do instead.
 - With a plan, "reply" is one or two plain sentences about it. No praise, no filler. Speak only of the steps this answer
   has: never list steps you did not plan, never number them in the reply, and never ask the user to type "approve": the
-  plan shows its own Approve button."""
+  plan shows its own Approve button.
+
+Your answer:
+- "thought": two to four short sentences for the user about what you weighed before answering: what they asked for, and
+  what you chose and why (the workflow, the length, the shape, the references). Plain words, no lists. It is shown
+  folded above your reply, so do not say it again in "reply".
+- "reply" may use **bold** for a few key words and a short list with "- " at the start of each line. No headings and no
+  tables. To show an item of the asset book or an attached item as a small picture, write [[item:<its id>]]; for a
+  saved asset write [[asset:<its id>]]. Use only ids you were given."""
 
 
 IMPROVE = """You rewrite prompts for an AI {kind} model inside Scene.ai. You are given the user's prompt and you return a better one.
@@ -346,8 +356,8 @@ def reply_format(workflow_ids):
                                                "properties": {"setting": {"type": "string"}, "value": {"type": "string"}}}},
         "why": {"type": "string"},
     }}
-    return {"type": "object", "required": ["reply", "steps"], "properties": {
-        "reply": {"type": "string"}, "steps": {"type": "array", "items": step}}}
+    return {"type": "object", "required": ["thought", "reply", "steps"], "properties": {
+        "thought": {"type": "string"}, "reply": {"type": "string"}, "steps": {"type": "array", "items": step}}}
 
 
 def service(sid, name, url, key, models="", only=""):
@@ -459,6 +469,7 @@ class Agent:
             raise AgentError("The agent's model gave an answer that can't be read. Try again.")
         if stood_in:
             answer["_stood_in"] = "{} was busy, so {} answered.".format(hosted["name"], stood_in)
+        answer["_model"] = stood_in or model   # what the message is charged at
         return answer
 
     async def _ask_local(self, model, messages, answer_format, context):
@@ -582,7 +593,7 @@ class Agent:
         return json.dumps(answer, ensure_ascii=False, separators=(",", ":"))
 
     async def ask(self, system, message, workflow_ids, history=(), model=None):
-        """One question to the model; returns its answer as {"reply": str, "steps": [...]}.
+        """One question to the model; returns its answer as {"thought": str, "reply": str, "steps": [...]}.
         history: the earlier turns of the conversation, as {"role", "content"} messages."""
         answer = await self.chat([{"role": "system", "content": system}, *history, {"role": "user", "content": message}],
                                  reply_format(workflow_ids), **({"model": model} if model else {}))
@@ -590,7 +601,8 @@ class Agent:
         reply = str(answer.get("reply") or "").strip()[:1200]
         if answer.get("_stood_in"):   # say so when another model answered than the one that was picked
             reply = "{} ({})".format(reply, answer["_stood_in"]).strip()
-        return {"reply": reply, "steps": steps if isinstance(steps, list) else []}
+        thought = str(answer.get("thought") or "").strip()[:800]   # shown folded above the reply
+        return {"thought": thought, "reply": reply, "steps": steps if isinstance(steps, list) else [], "model": answer.get("_model")}
 
 
 # Words that show an instruction is about the items the user selected. Without any, the selection is left out of the
@@ -763,6 +775,24 @@ def carry_over(instruction, history):
 
 
 MAKE = re.compile(r"\b(generate|make|create|render|produce|start|go|approve|proceed|do it|yes|ok|okay)\b", re.IGNORECASE)
+
+
+CHIP = re.compile(r"\[\[(item|asset):(\d+)\]\]")
+
+
+def chips_in(reply, items, assets):
+    """The items and assets a reply names as [[item:12]] or [[asset:3]], for the browser to show as small pictures:
+    ({"item:12": {"name", "kind"}}, the reply). A token with an id the model was not given is taken out."""
+    found = {}
+
+    def keep(match):
+        table, number = match.group(1), int(match.group(2))
+        known = (items if table == "item" else assets).get(number)
+        if not known:
+            return ""
+        found["{}:{}".format(table, number)] = {"name": known["name"], "kind": known["kind"]}
+        return match.group(0)
+    return found, re.sub(r"[ \t]{2,}", " ", CHIP.sub(keep, str(reply or ""))).strip()
 
 
 def claims_work(instruction, reply):

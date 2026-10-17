@@ -588,7 +588,7 @@ def test_the_agent_uses_the_model_the_user_picked_when_the_server_has_it(client,
     monkeypatch.setattr(brain, "ask", fake_ask)
     monkeypatch.setattr(brain, "model", "small:9b")
     found = client.get("/api/agent/status").json()
-    assert found == {"online": True, "model": "small:9b", "models": ["small:9b", "large:27b"], "hosted": []}
+    assert found == {"online": True, "model": "small:9b", "models": ["small:9b", "large:27b"], "hosted": [], "prices": {}}
     for picked in ("large:27b", "not-installed", "", None):
         client.post("/api/agent/plan", json={"instruction": "hi", "model": picked})
     assert used == ["large:27b", "small:9b", "small:9b", "small:9b"]
@@ -623,10 +623,10 @@ def test_a_hosted_model_is_listed_beside_the_local_ones_and_asked_over_its_api(m
     asyncio.run(brain.ask("You plan.", "hi", [], model="gemini/gemini-flash"))
     assert sent.pop()["url"] == "https://g.example.com/openai/chat/completions" and sent.pop()["auth"] == "Bearer g-key"
     answer = asyncio.run(brain.ask("You plan.", "hi", ["video/h3_master"], model="kimi/kimi-k2.6"))
-    assert answer == {"reply": "Hello.", "steps": []}
+    assert answer == {"thought": "", "reply": "Hello.", "steps": [], "model": "kimi/kimi-k2.6"}
     assert [s["url"] for s in sent] == ["https://api.example.com/v1/chat/completions"] * 2 and sent[0]["auth"] == "Bearer secret-key"
     assert sent[1]["body"]["model"] == "kimi-k2.6" and "temperature" not in sent[1]["body"]            # asked again without it
-    assert sent[1]["body"]["response_format"] == {"type": "json_object"} and '"required": ["reply", "steps"]' in sent[1]["body"]["messages"][0]["content"]
+    assert sent[1]["body"]["response_format"] == {"type": "json_object"} and '"required": ["thought", "reply", "steps"]' in sent[1]["body"]["messages"][0]["content"]
 
     # a busy service is tried again, and when it stays busy the smallest local model answers and the reply says so
     calls = []
@@ -662,22 +662,14 @@ def test_a_hosted_model_is_listed_beside_the_local_ones_and_asked_over_its_api(m
     assert asyncio.run(Agent("http://127.0.0.1:9")._hosted_models()) == []                                    # no services, no hosted models
 
 
-def test_the_agent_is_for_admins_and_for_users_an_admin_gives_it_to(client):
+def test_every_account_has_the_agent(client):
     admin = register(client)
     assert admin["agent"] is True and client.get("/api/agent/status").status_code == 200
     client.post("/api/auth/logout")
     bob = client.post("/api/auth/register", json={"email": "bob@example.com", "password": "another one"}).json()
-    assert bob["agent"] is False and client.get("/api/auth/me").json()["agent"] is False
-    for refused in (client.get("/api/agent/status"), client.post("/api/agent/plan", json={"instruction": "hi"})):
-        assert refused.status_code == 403 and "coming soon" in refused.json()["detail"]
-    assert client.get("/api/motion/templates").status_code == 200           # the rest of the panel stays open
-    client.post("/api/auth/logout")
-    client.post("/api/auth/login", json=ADMIN)
-    assert client.put("/api/admin/users/%d" % bob["id"], json={"agent": True}).status_code == 200
-    assert [u["agent"] for u in client.get("/api/admin/users").json()["users"]] == [0, 1]
-    client.post("/api/auth/logout")
-    assert client.post("/api/auth/login", json={"email": "bob@example.com", "password": "another one"}).json()["agent"] is True
+    assert bob["agent"] is True and client.get("/api/auth/me").json()["agent"] is True   # the same studio as an admin
     assert client.get("/api/agent/status").status_code == 200
+    assert client.post("/api/agent/plan", json={"instruction": "hi"}).status_code != 403
 
 
 def test_agent_says_so_when_its_model_server_is_down(client):

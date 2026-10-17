@@ -22,8 +22,9 @@ def user_for_token(db, token):
 
 
 def may_use_agent(user):
-    """The agent is open to admins and to the users an admin has given it to. For everyone else it is "coming soon"."""
-    return user["role"] == "admin" or bool(user.get("agent"))
+    """Every account has the agent (17 October: every user sees the same studio). What a message costs is set per
+    model in the admin console's Pricing. The `agent` column of users is no longer read."""
+    return True
 
 
 async def current_user(request: Request):

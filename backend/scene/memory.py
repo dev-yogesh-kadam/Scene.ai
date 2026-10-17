@@ -91,13 +91,15 @@ def _item_entry(row, in_cast):
     checked = review.summary(review.load(row))
     if checked:   # what the agent found when it looked at it: a later plan does not repeat a failed shot
         entry["review"] = checked
+    if row.get("rating"):   # the user's thumbs: reuse what they liked, never what they did not
+        entry["liked" if row["rating"] > 0 else "disliked"] = True
     return entry
 
 
 def _project_items(db, user_id, project, limit, kinds=("image", "video")):
     where, params = ("project_id = ?", (user_id, project)) if project else ("project_id IS NULL", (user_id,))
     marks = ", ".join("?" for _ in kinds)
-    return db.all("SELECT id, name, kind, filename, about, settings, workflow, created, review FROM generations WHERE user_id = ? AND "
+    return db.all("SELECT id, name, kind, filename, about, settings, workflow, created, review, rating FROM generations WHERE user_id = ? AND "
                   + where + " AND kind IN (" + marks + ") ORDER BY created DESC LIMIT ?", (*params, *kinds, limit))
 
 
@@ -123,7 +125,7 @@ def book(db, user_id, project, pinned=None):
     rows = _project_items(db, user_id, project, BOOK_ITEMS)
     listed = {row["id"] for row in rows}
     for item_id in in_cast - listed:   # a cast picture from another project is in the book too
-        row = db.one("SELECT id, name, kind, filename, about, settings, workflow, created, review FROM generations "
+        row = db.one("SELECT id, name, kind, filename, about, settings, workflow, created, review, rating FROM generations "
                      "WHERE id = ? AND user_id = ?", (item_id, user_id))
         if row:
             rows.insert(0, row)

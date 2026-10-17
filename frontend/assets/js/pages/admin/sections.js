@@ -80,8 +80,6 @@ function userActions(ctx, u, after) {
     !self && el('button', { class: 'btn small', onclick: () => {
       if (confirm(`Make ${u.name} ${u.role === 'admin' ? 'a normal user' : 'an admin'}?`)) put({ role: u.role === 'admin' ? 'user' : 'admin' });
     } }, u.role === 'admin' ? 'Make user' : 'Make admin'),
-    u.role !== 'admin' && el('button', { class: 'btn small', title: 'The agent is "coming soon" for users who have not been given it. Admins always have it.',
-      onclick: () => put({ agent: !u.agent }) }, u.agent ? 'Take agent away' : 'Give agent access'),
     u.mfa_enabled && el('button', { class: 'btn small', onclick: () => {
       if (confirm(`Turn off two-step sign-in for ${u.name}? Do this only when you know it is them asking, for example after a lost phone. They are signed out everywhere.`)) put({ mfa_off: true });
     } }, 'Turn off two-step sign-in'),

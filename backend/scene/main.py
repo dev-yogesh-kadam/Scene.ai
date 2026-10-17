@@ -207,6 +207,12 @@ def create_app(settings=None):
 
     frontend = settings.path("frontend_dir").resolve()
 
+    def page_version():
+        """The time of the last change to a script or the stylesheet of the page. A tab opened before it runs old code:
+        /api/status says this, and the tab offers to reload."""
+        return int(max((f.stat().st_mtime for f in (frontend / "assets").rglob("*") if f.suffix in (".js", ".css")), default=0))
+    app.state.page_version = page_version
+
     @app.get("/", include_in_schema=False)
     @app.get("/index.html", include_in_schema=False)
     async def page():
@@ -216,10 +222,10 @@ def create_app(settings=None):
         address, and a change to any file gives all of them a new one. A browser or a network in between that keeps
         files for hours (Cloudflare tells browsers to, by default) then cannot run old code against new, or the
         other way round."""
-        changed = max((f.stat().st_mtime for f in (frontend / "assets").rglob("*") if f.suffix in (".js", ".css")), default=0)
+        changed = page_version()
         html = (frontend / "index.html").read_text(encoding="utf-8")
         for name in ("/assets/css/app.css", "/assets/js/theme.js", "/assets/js/main.js"):
-            html = html.replace(name, "/v/{}{}".format(int(changed), name))
+            html = html.replace(name, "/v/{}{}".format(changed, name))
         return HTMLResponse(html)
 
     @app.get("/v/{version}/assets/{path:path}", include_in_schema=False)

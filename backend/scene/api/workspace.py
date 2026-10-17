@@ -6,6 +6,7 @@ import re
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from .. import agent, cast, credits, edits, media, memory, motion, review, sequence, skills
 from ..comfy import workflows
@@ -238,7 +239,10 @@ async def agent_status(request: Request, user: dict = Depends(agent_user)):
     try:
         # "model" is the one used when the user has not picked another; "models" is what they can pick from.
         brain = request.app.state.agent
-        return {"online": True, "model": await brain.pick_model(), "models": await brain.models(), "hosted": brain.hosted()}
+        models = await brain.models()
+        prices = request.app.state.credits.llm_prices()
+        return {"online": True, "model": await brain.pick_model(), "models": models, "hosted": brain.hosted(),
+                "prices": {m: prices[m] for m in models if m in prices}}   # credits per message; a model not listed is free
     except agent.AgentError as error:
         return {"online": False, "detail": str(error)}
 
@@ -434,12 +438,49 @@ async def agent_step(body: dict, request: Request, user: dict = Depends(agent_us
 
 @router.post("/agent/plan")
 async def agent_plan(body: dict, request: Request, user: dict = Depends(agent_user)):
-    """Ask the agent for a plan. Each step comes back as checked, priced job settings; nothing is queued or charged."""
-    state = request.app.state
+    """Ask the agent for a plan. Each step comes back as checked, priced job settings; nothing is queued or charged.
+
+    Asked with "Accept: application/x-ndjson", it answers as it works: one JSON line per thing it does ("status" while
+    it is busy, "activity" and "thought" for its log), then the plan ({"type": "plan", ...}) or {"type": "error"}.
+    Otherwise it answers once, with the plan and its log."""
     instruction = str(body.get("instruction") or "").strip()[:2000]
     if not instruction:
         raise HTTPException(400, "Write a message for the agent.")
     project = _project_id(request, user, body.get("project_id"))
+    events = _planning(request, user, body, instruction, project)
+    if "application/x-ndjson" in request.headers.get("accept", ""):
+        async def lines():
+            try:
+                async for event in events:
+                    yield json.dumps(event, ensure_ascii=False) + "\n"
+            except Exception as error:   # the stream has started: the error goes in it, not in the status code
+                detail = getattr(error, "detail", None) or str(error) or "The agent stopped. Try again."
+                yield json.dumps({"type": "error", "message": str(detail)}, ensure_ascii=False) + "\n"
+        return StreamingResponse(lines(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    plan = None
+    async for event in events:
+        if event["type"] == "plan":
+            plan = event
+    return {k: v for k, v in plan.items() if k != "type"}
+
+
+async def _planning(request, user, body, instruction, project):
+    """The work behind a plan, as events: what the agent does, as it does it, and at the end the plan."""
+    state = request.app.state
+    started = time.monotonic()
+    log = []   # what the user sees of the work afterwards: {"type": "activity" | "thought", ...}
+
+    def logged(event):
+        event["at"] = round(time.monotonic() - started, 1)
+        log.append(event)
+        return event
+
+    def activity(icon, text):
+        return logged({"type": "activity", "icon": icon, "text": text})
+
+    def status(text):   # what it is doing right now; shown while it works, not kept
+        return {"type": "status", "text": text}
+
     selection, shapes = [], {}   # shapes: item id -> [width, height], for shots that start on an item
     chosen = (body.get("selection") or [])[:8] if agent.points_at_selection(instruction) else []
     for item_id in chosen:
@@ -456,6 +497,8 @@ async def agent_plan(body: dict, request: Request, user: dict = Depends(agent_us
             path = state.outputs.folder(user["id"]) / row["filename"]
             if row["kind"] == "video" and path.is_file():   # the length is what the editing tools cut by
                 selection[-1]["seconds"] = round((await media.probe(path))["seconds"], 2)
+    if selection:
+        yield activity("attach", "Read what you attached: " + ", ".join(s["name"] for s in selection))
 
     # What was made lately here, so "the music you just made" can be put on "this video" without attaching either.
     recent = [{"id": r["id"], "kind": r["kind"], "name": r["name"]} for r in state.db.all(
@@ -479,14 +522,37 @@ async def agent_plan(body: dict, request: Request, user: dict = Depends(agent_us
     pinned = cast.load(state.db, user["id"], project)
     # The asset book: what the agent knows of the project by name. Pictures it has not looked at yet are described now.
     book = memory.book(state.db, user["id"], project, pinned)
-    await memory.describe_missing(state, user["id"], book)
+    if book:
+        yield activity("book", "Opened the asset book: {} {}".format(len(book), "entry" if len(book) == 1 else "entries"))
+    yield status("Looking at new pictures…")
+    looked = await memory.describe_missing(state, user["id"], book)
+    if looked:
+        yield activity("look", "Looked at {} new {}".format(looked, "picture" if looked == 1 else "pictures"))
     book_items, book_assets = memory.lookup(book)
     # A workflow that must be given reference files can run when something is attached or the book has a picture.
     can_fill = bool(selection) or any(entry["kind"] in ("image", "video") for entry in book)
     offers = [o for o in (agent.offer(schema, can_fill) for schema in schemas.values()) if o]
     if not offers:
         raise HTTPException(400, "There is no workflow the agent can use yet.")
-    guides = skills.guide(skills.pick(instruction, body.get("history")))
+    # A message costs what the chosen model costs: the user must have it before the model is asked.
+    chosen_model = body.get("model") or state.agent.model or ""
+    if state.credits.llm_prices():   # only worth asking which model answers when some model has a price
+        try:
+            chosen_model = await state.agent.pick_model(body.get("model"))
+        except agent.AgentError:
+            pass   # the model is asked below, and that says what is wrong
+    price = state.credits.llm_cost(chosen_model)
+    if price:
+        if state.credits.balance(user["id"]) < price:
+            raise HTTPException(400, "A message to {} costs {} cr, and you have {} cr.".format(chosen_model, price, state.credits.balance(user["id"])))
+        problem = state.credits.cap_problem(user["id"], price)
+        if problem:
+            raise HTTPException(400, problem)
+    charged = {"credits": 0, "model": chosen_model}
+    picked = skills.pick(instruction, body.get("history"))
+    for skill in picked:
+        yield activity("skill", "Read the skill “{}”".format(skill["title"]))
+    guides = skills.guide(picked)
     # every prompt follows the studio's one prompt structure
     guides = (guides + "\n\n" if guides else "") + agent.STRUCTURE_GUIDE.format(structure=agent.PROMPT_STRUCTURE)
     names = {s["id"]: s["name"] for s in selection}
@@ -495,12 +561,21 @@ async def agent_plan(body: dict, request: Request, user: dict = Depends(agent_us
     videos = [s for s in selection if s.get("seconds")]
 
     async def plan(message):
+        """One answer of the model, timed, and the steps of it that can run. Returns (answer, steps, dropped, seconds)."""
+        asked = time.monotonic()
         answer = await state.agent.ask(agent.SYSTEM.format(max_steps=agent.MAX_STEPS),
                                        agent.question(message, offers, selection,
                                                       state.catalog.current(state.settings.default_workflow), agent.past_turns(body.get("history")), pinned, recent,
                                                       memory.book_for_model(book), guides),
                                        [o["id"] for o in offers], **_model(body))
-        steps = []
+        seconds = time.monotonic() - asked
+        # Each answer is charged at the price of the model that gave it (another one may have stood in for a busy one).
+        used = answer.get("model") or chosen_model
+        cost = state.credits.llm_cost(used)
+        if cost and state.credits.charge(user["id"], cost, "agent", note=used):
+            charged["credits"] += cost
+            charged["model"] = used
+        steps, dropped = [], []
         made_by = {}   # the number the model gave a step (1 for its first) -> where that step's result is in `steps`
         for number, proposed in enumerate(answer["steps"][:agent.MAX_STEPS], start=1):
             made_by[number] = len(steps)   # taken back below if the step is dropped
@@ -510,34 +585,57 @@ async def agent_plan(body: dict, request: Request, user: dict = Depends(agent_us
                 if made:   # a sound on a video: queued on Approve through the sound endpoint, which costs nothing
                     steps.append({"name": made["name"], "workflow_title": "Sound", "kind": "video", "prompt": "", "facts": made["facts"],
                                   "time": "a few seconds", "credits": 0, "settings": None, "start": None, "sound": made["sound"]})
+                reason = None if made else "there was no video and sound to put together"
             else:
-                await _plan_step(state, proposed, instruction, steps, made_by, schemas, names, kinds, videos, pinned, project, shapes, book_assets, menu)
+                reason = await _plan_step(state, proposed, instruction, steps, made_by, schemas, names, kinds, videos, pinned, project, shapes, book_assets, menu)
             if len(steps) == before:
                 del made_by[number]
-        return answer, steps
+                if reason:
+                    dropped.append(((proposed.get("name") if isinstance(proposed, dict) else "") or "a step", reason))
+        return answer, steps, dropped, seconds
+
+    def thought(answer, seconds):
+        return logged({"type": "thought", "text": str(answer.get("thought") or ""), "seconds": round(seconds, 1)})
 
     message = agent.carry_over(instruction, body.get("history"))
-    answer, steps = await plan(message)
+    yield status("Thinking…")
+    answer, steps, dropped, seconds = await plan(message)
+    yield thought(answer, seconds)
     # A reply that says it is making something while no step survived would leave the user waiting for nothing:
     # the model is asked once more, and if it still plans nothing, the reply says plainly that nothing was made.
     if not steps and agent.claims_work(instruction, answer["reply"]):
-        answer, steps = await plan(message + "\n" + agent.NO_STEPS)
+        yield activity("retry", "The first answer said it was making something but planned nothing, so I asked again")
+        yield status("Thinking again…")
+        answer, steps, dropped, seconds = await plan(message + "\n" + agent.NO_STEPS)
+        yield thought(answer, seconds)
         if not steps and agent.claims_work(instruction, answer["reply"]):
             answer["reply"] = agent.EMPTY_CLAIM
+    for name, reason in dropped:
+        yield activity("skip", "Left out “{}”: {}".format(name, reason))
     if not steps and agent.wants_sound(instruction, body.get("history")):
         made = agent.sound_for({}, known)   # the model only talked: make the step that was asked for
         if made:
             steps.append({"name": made["name"], "workflow_title": "Sound", "kind": "video", "prompt": "", "facts": made["facts"],
                           "time": "a few seconds", "credits": 0, "settings": None, "start": None, "sound": made["sound"]})
             answer["reply"] = "I'll put {}. Approve to make it.".format(made["facts"])
-    return {"reply": answer["reply"] or ("Here is the plan." if steps else "Tell me what you would like to see and I will plan it."),
-            "steps": steps[:agent.MAX_STEPS], "total": sum(s["credits"] for s in steps[:agent.MAX_STEPS]), "balance": state.credits.balance(user["id"])}
+    steps = steps[:agent.MAX_STEPS]
+    if steps:
+        yield activity("plan", "Checked and priced {} {}".format(len(steps), "step" if len(steps) == 1 else "steps"))
+    # Items the reply names as [[item:12]] or [[asset:3]] are shown as small pictures; the browser gets their names.
+    chips, reply = agent.chips_in(answer["reply"], {**book_items, **known}, book_assets)
+    if charged["credits"]:
+        state.notify(user["id"])   # the open pages show the new balance
+    yield {"type": "plan", "reply": reply or ("Here is the plan." if steps else "Tell me what you would like to see and I will plan it."),
+           "thought": str(answer.get("thought") or ""), "activity": log, "seconds": round(time.monotonic() - started, 1),
+           "chips": chips, "steps": steps, "total": sum(s["credits"] for s in steps), "llm": charged,
+           "balance": state.credits.balance(user["id"])}
 
 
 async def _plan_step(state, proposed, instruction, steps, made_by, schemas, names, kinds, videos, pinned, project, shapes, assets=None, menu=None):
-    """Check one step the model proposed and add what can be carried out to `steps`. A step that can't run adds nothing."""
+    """Check one step the model proposed and add what can be carried out to `steps`. A step that can't run adds nothing,
+    and the reason is returned (None when the step was added, or when leaving it out is not worth saying)."""
     if not isinstance(proposed, dict):
-        return
+        return "it could not be read"
     if proposed.get("tool") in agent.MOTION_TOOLS:
         # Words and shapes drawn by HyperFrames: queued on Approve through the motion endpoint, which charges by the length.
         made = agent.motion_for(proposed, videos)
@@ -548,20 +646,24 @@ async def _plan_step(state, proposed, instruction, steps, made_by, schemas, name
                           "facts": made["facts"], "time": "under a minute", "why": agent.why(proposed),
                           "credits": state.credits.cost(MOTION_WORKFLOW if scenes else credits.OVERLAY, seconds),
                           "settings": None, "start": None, "motion": made["motion"]})
-        return
+            return None
+        return "it had no words to show, or no selected video to put them on"
     if proposed.get("tool") == "trim" and agent.parts_asked(instruction):
         if any("edit" in step for step in steps):
             return   # the split is already planned; a second trim of the same video adds nothing
         proposed = dict(proposed, tool="split", parts=agent.parts_asked(instruction))   # the user asked for pieces, not for one cut
     if proposed.get("tool") in agent.EDIT_TOOLS:
         # An edit of videos the user has: the browser runs it through the timeline export, which costs nothing.
-        for edit in agent.edits_for(proposed, videos):
+        cuts = agent.edits_for(proposed, videos)
+        for edit in cuts:
             steps.append({"name": edit["name"], "workflow_title": "Edit", "kind": "video", "prompt": "", "facts": edit["facts"],
                           "time": "a few seconds", "credits": 0, "settings": None, "start": None, "edit": {"clips": edit["clips"]}})
-        return
+        return None if cuts else "select the video to cut on the canvas first"
     schema = schemas.get(proposed.get("workflow"))
-    if not schema or not agent.offer(schema):
-        return
+    if not schema:
+        return "there is no workflow “{}” it can use".format(proposed.get("workflow") or "")
+    if not agent.offer(schema):
+        return "{} needs reference files, and none were attached".format(schema["title"])
     uses = agent.uses_for(schema, proposed, kinds, assets)
     # A step can start on what an earlier step of this plan makes, if that is a picture or a video
     # and this workflow has a first frame to put it in.
@@ -578,7 +680,7 @@ async def _plan_step(state, proposed, instruction, steps, made_by, schemas, name
     built = agent.settings_for(schema, proposed, set(names), project or None,
                                {use["slot"] for use in uses}, {use["id"] for use in uses if use["id"]}, chained)
     if not built:
-        return
+        return "it had no prompt, or {} needs files it was not given".format(schema["title"])
     settings, start = built
     # A shot takes the shape of the picture it starts on: a portrait picture in a landscape video comes out squashed.
     agent.shape_like(schema, settings, steps[earlier].get("shape") if chained else shapes.get(start))
@@ -588,6 +690,7 @@ async def _plan_step(state, proposed, instruction, steps, made_by, schemas, name
     steps.append(await _shown_step(state, schema, settings, menu or [], uses,
                                    {"id": start, "name": names[start], "slot": first_frame} if start else None,
                                    {"step": earlier, "slot": first_frame} if chained else None, agent.why(proposed)))
+    return None
 
 
 def _orientation(schema, settings, ctx):

@@ -201,6 +201,8 @@ COLUMNS = [
     ("assets", "project_id", "INTEGER"),
     # Review: the agent's verdict on a library item it looked at after it was made (JSON, see review.py).
     ("generations", "review", "TEXT NOT NULL DEFAULT ''"),
+    # The user's thumbs on a result: 1 up, -1 down, 0 not rated. The agent reuses what was liked and avoids the rest.
+    ("generations", "rating", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # The studio's two machines, added to an installation that has no servers yet. Every value can be changed in the
