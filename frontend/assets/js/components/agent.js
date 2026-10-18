@@ -574,6 +574,11 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     return button;
   }
 
+  // What a plan costs: the steps that are not left out.
+  function recount(run) {
+    run.total = run.steps.reduce((sum, s) => sum + (s.skipped ? 0 : s.credits || 0), 0);
+  }
+
   // Change one step on its card. The server builds it again with the same checks as a planned step, and prices it.
   async function changeStep(run, index, change) {
     const step = run.steps[index];
@@ -593,7 +598,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       step.error = e.message;
     }
     step.updating = false;
-    run.total = run.steps.reduce((sum, s) => sum + (s.credits || 0), 0);
+    recount(run);
     saveRuns();
     drawLog();
   }
@@ -671,11 +676,16 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       el('div', { class: 'prompt-section' }, p.head && el('b', {}, p.head), el('p', {}, p.text.trim()))));
   }
 
+  // The camera of a shot in words: size, angle, move.
+  const CAMERA_WORDS = { ECU: 'extreme close-up', CU: 'close-up', MCU: 'medium close-up', MS: 'medium shot', WS: 'wide shot', EWS: 'extreme wide',
+    eye: 'eye level', low: 'low angle', high: 'high angle', top: 'top-down', OTS: 'over the shoulder' };
+  const cameraOf = (step) => (step.camera ? [CAMERA_WORDS[step.camera.shot_size], CAMERA_WORDS[step.camera.angle], step.camera.move].filter(Boolean).join(' · ') : '');
+
   // The settings of a step as short words: model, shape, size, length, clips, quality.
   const tagsOf = (step) => {
     const current = step.current || {};
     return (step.settings
-      ? [step.workflow_title, current.orientation && SHAPE_NAMES[current.orientation], current.resolution && current.resolution + 'p',
+      ? [step.workflow_title, cameraOf(step), current.orientation && SHAPE_NAMES[current.orientation], current.resolution && current.resolution + 'p',
         current.duration && current.duration + 's', step.settings.clips > 1 && '× ' + step.settings.clips + ' clips',
         step.settings.options && step.settings.options.quality && step.settings.options.quality + ' quality']
       : [step.workflow_title, step.facts]).filter(Boolean);
@@ -736,6 +746,15 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   const tokens = (n) => el('span', { class: 'token-amount', title: `${n} credits` },
     creditMark('credits'), String(n));
 
+  // Leave a shot out of the plan, or put it back. A shot that a later one starts on cannot be left out.
+  function skipButton(run, step) {
+    const index = run.steps.indexOf(step);
+    const needed = run.steps.some((s, i) => i !== index && !s.skipped && s.after && s.after.step === index);
+    return el('button', { type: 'button', class: 'btn small quiet step-skip', disabled: needed || working,
+      title: needed ? 'A later shot starts on this one' : step.skipped ? 'Put it back in the plan' : 'Leave this shot out of the plan',
+      onclick: () => { step.skipped = !step.skipped; recount(run); saveRuns(); drawLog(); } }, step.skipped ? 'Include' : 'Skip');
+  }
+
   // One step of a plan waiting for approval (or one that was turned down): what it makes, its settings and its prompt.
   function drawStep(run, step) {
     const proposed = run.state === 'proposed';
@@ -743,13 +762,14 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     const glyph = step.motion ? 'title' : step.sound ? 'audio' : KIND_ICONS[step.kind] || 'video';
     const editable = proposed && step.menu && !step.editing;
     const links = linksOf(step);
-    return el('div', { class: 'step-card ' + chipState[0] },
+    return el('div', { class: 'step-card ' + chipState[0] + (step.skipped ? ' skipped' : '') },
       el('div', { class: 'step-top' }, el('span', { class: 'step-thumb blank' + (step.updating ? ' working' : '') }, icon(glyph)),
         el('div', { class: 'step-title' },
           el('b', {}, step.name),
           !editable && el('div', { class: 'step-tags' }, tagsOf(step).map((t) => el('span', {}, t)))),
         // The price is shown once, in the Approve button; the corner only says when a step is being changed or could not be.
-        chipState[0] !== 'price' && el('span', { class: 'step-chip ' + chipState[0] }, chipState[0] === 'running' && el('i', { class: 'cell-mark stepping' }), chipState[1])),
+        chipState[0] !== 'price' && el('span', { class: 'step-chip ' + chipState[0] }, chipState[0] === 'running' && el('i', { class: 'cell-mark stepping' }), chipState[1]),
+        proposed && run.steps.length > 1 && skipButton(run, step)),
       editable && stepSettings(run, step),
       usesOf(step),
       links.length > 0 && el('div', { class: 'step-links' }, links.join(' · ')),
@@ -865,6 +885,37 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       step.why && el('div', { class: 'step-why' }, step.why)] });
   }
 
+  // Another take of a finished shot: the same prompt with a new seed, priced first and made only when the user says so.
+  async function reroll(run, step) {
+    step.rollBusy = true;
+    step.rollError = null;
+    drawLog();
+    try { step.rolling = (await api('/api/agent/reroll', { method: 'POST', json: { item: step.made } })).retake; } catch (e) { step.rollError = e.message; }
+    step.rollBusy = false;
+    drawLog();
+  }
+
+  function rollBar(run, step) {
+    if (!step.made || !step.settings || step.take2 || working || step.kind === 'audio') return null;
+    if (step.rolling) {
+      const plan = step.rolling;
+      return el('div', { class: 'row' },
+        el('button', { class: 'btn small primary', disabled: plan.credits > Number(store.user.credits ?? 0),
+          onclick: () => { step.retake = plan; step.rolling = null; retake(run, step); } }, `Make take 2 · ${plan.credits} cr`),
+        el('button', { class: 'btn small quiet', onclick: () => { step.rolling = null; drawLog(); } }, 'Cancel'));
+    }
+    return el('div', { class: 'row' }, el('button', { class: 'btn small quiet', disabled: step.rollBusy, title: 'Make this shot again with a new seed',
+      onclick: () => reroll(run, step) }, icon('retry'), step.rollBusy ? 'Pricing…' : 'Roll again'), step.rollError && el('span', { class: 'small error' }, step.rollError));
+  }
+
+  // Which take of a shot goes on: the first or the second, once there are two.
+  function takePick(run, step) {
+    if (!step.take2 || !step.take2.made || !step.made) return null;
+    const now = usedTake(step) === step.take2 ? 2 : 1;
+    return el('div', { class: 'row take-pick' }, el('span', { class: 'small muted' }, 'Goes on with:'), [1, 2].map((n) =>
+      el('button', { class: 'btn small ' + (now === n ? 'primary' : 'quiet'), onclick: () => { step.chosen = n; saveRuns(); drawLog(); } }, 'Take ' + n)));
+  }
+
   // One result: its information, the clip (or picture, or sound), its frames, where it is, the thumbs and the check.
   function resultBlock(run, step) {
     const p = progressOf(step, step);
@@ -882,9 +933,11 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       keyframes(step, step),
       step.made && el('div', { class: 'result-foot' }, crumb(step), el('span', { style: 'flex:1' }), rating(run, step)),
       drawReview(run, step),
+      rollBar(run, step),
       step.take2 && el('div', { class: 'retake' }, el('div', { class: 'result-name' }, 'Take 2: ' + step.name),
         resultMedia(step.take2, step), keyframes(step.take2, step),
-        step.take2.made && el('div', { class: 'result-foot' }, crumb(step.take2), el('span', { style: 'flex:1' }), rating(run, step.take2))));
+        step.take2.made && el('div', { class: 'result-foot' }, crumb(step.take2), el('span', { style: 'flex:1' }), rating(run, step.take2))),
+      takePick(run, step));
   }
 
   // Pictures made by the steps of one plan, side by side: each opens on the canvas, ⓘ shows how it was made, ⤢ opens it large.
@@ -930,6 +983,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     const blocks = [];
     let grid = null;
     for (const step of run.steps) {
+      if (step.skipped) continue;
       if (step.kind === 'image' && step.settings) {
         if (!grid) { grid = []; blocks.push(grid); }
         grid.push(step);
@@ -1144,6 +1198,77 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   // The newest plan that waits for approval: its bar goes in the dock.
   const docked = () => [...runs].reverse().find((r) => r.state === 'proposed') || null;
 
+  // ------------------------------------------------------------ stages: stills first, then the clips
+
+  // The video shots of a plan that can be drawn as stills first.
+  const eligible = (run) => run.steps.filter((s) => s.proposal && s.shot_id && s.kind === 'video' && !s.skipped && s.settings);
+  let boarding = false;   // a storyboard or an animation is being planned
+
+  // The take of a shot the cut and the next stage use: the first, or the retake when the user (or a failed review) chose it.
+  const usedTake = (step) => (step.take2 && step.take2.made && (step.chosen === 2 || (step.chosen == null && step.review && !step.review.passed))
+    ? step.take2 : step);
+
+  // A staged plan goes to the conversation as a plan of its own, waiting for approval like any other.
+  function stage(from, label, made, reply, rest) {
+    from.state = 'dismissed';
+    from.revised = label;
+    runs.push({ instruction: label, parts: [{ text: label }], reply, thought: '', activity: [], seconds: 0, chips: {}, steps: [...made.steps, ...rest],
+      total: 0, state: 'proposed', at: Date.now(), ui: {}, llm: null, rest: made.rest || [] });
+    const run = runs[runs.length - 1];
+    recount(run);
+    saveRuns();
+  }
+
+  async function storyboard(run) {
+    boarding = true;
+    drawLog();
+    try {
+      const shots = eligible(run);
+      const made = await api('/api/agent/storyboard', { method: 'POST', json: { project_id: projectId() || null, shots: shots.map((s) => ({ shot_id: s.shot_id, proposal: s.proposal })) } });
+      // What is not a video shot (music, titles, an edit) waits for the clips, so it is carried to the next stage.
+      const rest = run.steps.filter((s) => !shots.includes(s) && !s.skipped).map((s) => ({ ...s, after: null }));
+      const left = made.dropped.length ? ` Left out: ${made.dropped.map((d) => d[0]).join(', ')}.` : '';
+      stage(run, 'Storyboard first', { steps: made.steps, rest }, `Here are ${made.steps.length} stills, one for each shot, for ${made.total} credits. Approve to draw them, `
+        + `then choose the ones to animate.${left}`, []);
+    } catch (e) { run.ui.note = ''; say(e.message); }
+    boarding = false;
+    drawLog();
+  }
+
+  async function animate(run) {
+    boarding = true;
+    drawLog();
+    try {
+      const stills = run.steps.filter((s) => s.stage === 'still' && s.made && !s.out);
+      const made = await api('/api/agent/animate', { method: 'POST', json: { project_id: projectId() || null,
+        shots: stills.map((s) => ({ shot_id: s.shot_id, item: usedTake(s).made, proposal: s.proposal })) } });
+      if (!made.steps.length) throw new Error('None of the stills could be animated.');
+      run.animated = true;
+      const left = made.dropped.length ? ` Left out: ${made.dropped.map((d) => d[0]).join(', ')}.` : '';
+      runs.push({ instruction: 'Animate the stills', parts: [{ text: 'Animate the stills' }], reply: `Each still starts its clip: ${made.steps.length} `
+        + `${made.steps.length === 1 ? 'shot' : 'shots'} for ${made.total} credits. Approve to make them.${left}`, thought: '', activity: [], seconds: 0, chips: {},
+      steps: [...made.steps, ...(run.rest || [])], total: 0, state: 'proposed', at: Date.now(), ui: {}, llm: null });
+      recount(runs[runs.length - 1]);
+      saveRuns();
+    } catch (e) { say(e.message); }
+    boarding = false;
+    drawLog();
+  }
+
+  // Under the stills of a storyboard once they are drawn: tap one to leave it out, then animate the rest.
+  function animateBar(run) {
+    const stills = run.steps.filter((s) => s.stage === 'still' && s.made);
+    const chosen = stills.filter((s) => !s.out);
+    return el('div', { class: 'agent-animate' },
+      el('div', { class: 'small muted' }, 'The stills are ready. Tap one to leave it out, then animate the rest.'),
+      el('div', { class: 'animate-tiles' }, stills.map((s) => el('button', { type: 'button', class: 'animate-tile' + (s.out ? ' out' : ''), title: s.name + (s.out ? ' (left out)' : ''),
+        onclick: () => { s.out = !s.out; saveRuns(); drawLog(); } }, el('img', { src: `/api/library/${usedTake(s).made}/file`, alt: s.name, loading: 'lazy' }),
+        el('span', {}, s.name.replace(/^Still · /, ''))))),
+      el('div', { class: 'row' }, el('span', { style: 'flex:1' }),
+        el('button', { class: 'btn small primary', disabled: !chosen.length || busy || working || boarding, onclick: () => animate(run) },
+          `Animate ${chosen.length} ${chosen.length === 1 ? 'shot' : 'shots'}`)));
+  }
+
   // What to do with a plan: say what to change, Dismiss, or Approve with its price.
   function approveBar(run) {
     const balance = Number(store.user.credits ?? 0);
@@ -1151,7 +1276,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     // Instead of approving as it is, the user can say what to do differently ("make the cast first") and the agent
     // plans again with that. The draft lives on the run, since the bar is drawn again while jobs move.
     const change = el('button', { class: 'btn small primary' + (run.ui.note ? '' : ' hidden'), disabled: busy || working, onclick: () => revise(run) }, 'Send change');
-    const go = el('button', { class: 'btn small primary' + (run.ui.note ? ' hidden' : ''), disabled: working || short, title: `You have ${balance} credits`,
+    const go = el('button', { class: 'btn small primary' + (run.ui.note ? ' hidden' : ''), disabled: working || short || run.steps.every((s) => s.skipped), title: `You have ${balance} credits`,
       onclick: () => approve(run) }, 'Approve · ', tokens(run.total));
     const note = el('input', { type: 'text', class: 'approve-note', placeholder: short ? `Needs ${run.total} credits, you have ${balance}. Or say what to change…`
       : 'Want something different? e.g. make the assets first', 'aria-label': 'What to change in this plan', 'data-run': run.at,
@@ -1162,6 +1287,8 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     if (noteFocus === run.at) requestAnimationFrame(() => { note.focus(); note.setSelectionRange(note.value.length, note.value.length); });
     return el('div', { class: 'agent-approve' }, note,
       el('span', { class: 'row' },
+        eligible(run).length > 3 && el('button', { class: 'btn small quiet', disabled: working || busy || boarding,
+          title: 'Draw a cheap still for each shot first; animate the ones you keep', onclick: () => storyboard(run) }, 'Storyboard first'),
         el('button', { class: 'btn small quiet', onclick: () => { run.state = 'dismissed'; saveRuns(); drawLog(); } }, 'Dismiss'),
         change, go));
   }
@@ -1195,9 +1322,11 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       if (run === docked()) return null;
       return el('div', { class: 'agent-plan' }, el('div', { class: 'step-list' }, run.steps.map((step) => drawStep(run, step))), approveBar(run));
     }
-    return el('div', { class: 'agent-plan' }, results(run),
+    const stills = run.steps.filter((s) => s.stage === 'still' && !s.skipped);
+    const ready = stills.length > 0 && !run.animated && stills.every((s) => s.made || progressOf(s, s).state === 'failed') && stills.some((s) => s.made);
+    return el('div', { class: 'agent-plan' }, results(run), ready && !working && animateBar(run),
       // An approved plan with steps still to carry out: it was interrupted, or a step failed. Resume goes on from there.
-      run.state === 'approved' && !working && run.steps.some((step) => !step.job && !step.made) && el('div', { class: 'agent-approve' },
+      run.state === 'approved' && !working && run.steps.some((step) => !step.job && !step.made && !step.skipped) && el('div', { class: 'agent-approve' },
         el('span', { class: 'slate-text' }, 'Not every step was carried out.'),
         el('button', { class: 'btn small primary', onclick: () => approve(run) }, 'Resume')));
   }
@@ -1418,7 +1547,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     run.approvedAt = run.approvedAt || Date.now();
     drawLog();
     for (const step of run.steps) {
-      if (step.job || step.made) continue;
+      if (step.job || step.made || step.skipped) continue;
       step.error = null;
       try {
         // Work done on the studio's own machine is queued like a generation, in a lane that does not wait for the GPU.

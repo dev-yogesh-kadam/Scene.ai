@@ -1482,3 +1482,15 @@ button.fold-head:hover .fold-title, button.fold-head:hover .fold-caret { color: 
 .skill-editor textarea { font: 12.5px/1.6 var(--mono); }
 .skill-editor .field + .field { margin-top: 12px; }
 .skill-row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* Shot board: a shot left out of the plan, and the stills to choose from before they are animated. */
+.step-card.skipped { opacity: .5; }
+.step-skip { margin-left: auto; flex: none; }
+.agent-animate { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--raised); }
+.animate-tiles { display: flex; flex-wrap: wrap; gap: 8px; }
+.animate-tile { display: grid; gap: 4px; width: 88px; padding: 4px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--field); color: inherit; cursor: pointer; font: inherit; }
+.animate-tile img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 7px; }
+.animate-tile span { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.animate-tile.out { opacity: .4; }
+.animate-tile.out img { filter: grayscale(1); }
+.take-pick { align-items: center; }
