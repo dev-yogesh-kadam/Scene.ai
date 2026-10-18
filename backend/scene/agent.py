@@ -301,6 +301,22 @@ class AgentBusy(AgentError):
 BUSY = re.compile(r"high demand|overloaded|try again later|temporarily|unavailable|rate limit|quota|resource.exhausted", re.IGNORECASE)
 
 
+DIRECTION_CHARS = 3000   # the durable notes of a conversation, kept whole and sent with every message
+
+COMPACT = """You keep the notes of a film studio's assistant. Fold the conversation into the Direction: short durable notes
+that the assistant reads before every message, in place of the old turns. Keep: what is being made and for whom, the style
+and look, the people and places with the names they were given, the shot list as agreed (numbered, one line each, marking
+which are made), the length and shape, and what the user turned down or insisted on. Keep names exactly. Drop greetings,
+repeats and anything that was changed later. Plain lines, no more than 2,500 characters. Write only the notes."""
+
+
+def clean_direction(text):
+    """The direction as kept: one string, lines trimmed, at most DIRECTION_CHARS."""
+    if not isinstance(text, str):
+        return ""
+    return chr(10).join(line.rstrip() for line in text.strip().splitlines())[:DIRECTION_CHARS]
+
+
 def reply_format(workflow_ids):
     """The JSON shape the model must answer in."""
     # Every field is required so the model has to decide each one; values a workflow can't take are dropped later.
@@ -335,8 +351,9 @@ def reply_format(workflow_ids):
             "as": {"type": "string", "enum": ["", "character", "outfit", "location", "prop", "voice", "style"]}, "name": {"type": "string"}}},
         "why": {"type": "string"},
     }}
-    return {"type": "object", "required": ["thought", "reply", "steps"], "properties": {
-        "thought": {"type": "string"}, "reply": {"type": "string"}, "steps": {"type": "array", "items": step}}}
+    return {"type": "object", "required": ["thought", "reply", "steps", "direction"], "properties": {
+        "thought": {"type": "string"}, "reply": {"type": "string"}, "steps": {"type": "array", "items": step},
+        "direction": {"type": "string"}}}
 
 
 def service(sid, name, url, key, models="", only=""):
@@ -583,7 +600,23 @@ class Agent:
         if answer.get("_stood_in"):   # say so when another model answered than the one that was picked
             reply = "{} ({})".format(reply, answer["_stood_in"]).strip()
         thought = str(answer.get("thought") or "").strip()[:800]   # shown folded above the reply
-        return {"thought": thought, "reply": reply, "steps": steps if isinstance(steps, list) else [], "model": answer.get("_model")}
+        direction = clean_direction(answer.get("direction"))
+        return {"thought": thought, "reply": reply, "steps": steps if isinstance(steps, list) else [], "model": answer.get("_model"),
+                "direction": direction}
+
+    async def compact(self, turns, direction="", model=None):
+        """The conversation boiled down to a Direction: the durable notes (what the film is, the style, the people, the
+        shot list, what was turned down) that replace the old turns. turns: from past_turns(). Returns the new text."""
+        said = "\n".join("{}: {}".format("User" if t["role"] == "user" else "You", t["content"]) for t in turns)
+        message = "Current direction:\n{}\n\nConversation to fold in, oldest first:\n{}\n\nWrite the new direction.".format(
+            direction or "(none yet)", said or "(nothing)")
+        answer = await self.chat([{"role": "system", "content": COMPACT}, {"role": "user", "content": message}],
+                                 {"type": "object", "required": ["direction"], "properties": {"direction": {"type": "string"}}},
+                                 **({"model": model} if model else {}))
+        text = clean_direction(answer.get("direction"))
+        if not text:
+            raise AgentError("The agent's model gave no summary back. Try again.")
+        return text
 
 
 # Words that show an instruction is about the items the user selected. Without any, the selection is left out of the
@@ -820,7 +853,7 @@ def past_turns(history):
     return turns
 
 
-def question(instruction, offers, selection, default="", history=(), project_cast=None, recent=(), book=(), guides=""):
+def question(instruction, offers, selection, default="", history=(), project_cast=None, recent=(), book=(), guides="", direction=""):
     """Everything the model is given for one message. history: the earlier turns, from past_turns().
     book: the project's asset book, from memory.book(). guides: the skills that fit the message, from skills.guide().
 
@@ -835,7 +868,10 @@ def question(instruction, offers, selection, default="", history=(), project_cas
                                                        or "(empty: nothing is saved for reuse yet)"),
              *(["How to do this kind of work (follow it where it fits the message):\n" + guides] if guides else []),
              "Workflows:\n" + "\n".join(json.dumps(o) for o in offers),
-             "Conversation so far, oldest first:\n" + ("\n".join(said) or "(this is the first message)"),
+             "Direction, the notes of this conversation that you keep (they stand in for turns no longer shown; when "
+             "something durable changes, answer with the whole updated direction in \"direction\", else repeat it as it is):\n"
+             + (clean_direction(direction) or "(empty)"),
+             "Conversation so far, oldest first:\n" +("\n".join(said) or "(this is the first message)"),
              "Recent items, newest first (what was made lately in this project; for the \"sound\" tool only):\n"
              + ("\n".join(json.dumps(r) for r in recent) or "(none)"),
              "Items attached to the new message:\n" + ("\n".join(json.dumps(s) for s in selection)

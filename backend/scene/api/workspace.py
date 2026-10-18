@@ -373,6 +373,20 @@ async def agent_improve(body: dict, request: Request, user: dict = Depends(curre
 
 
 
+@router.post("/agent/compact")
+async def agent_compact(body: dict, request: Request, user: dict = Depends(current_user)):
+    """Fold a conversation into the Direction, the durable notes the agent reads in place of old turns.
+    Body: {"history": [...as for plan], "direction"?: the notes so far}. Returns {"direction"}. Nothing is queued."""
+    turns = agent.past_turns(body.get("history"))
+    if not turns and not body.get("direction"):
+        raise HTTPException(400, "There is nothing to fold yet.")
+    try:
+        text = await request.app.state.agent.compact(turns, str(body.get("direction") or ""), **_model(body))
+    except agent.AgentError as e:
+        raise HTTPException(502, str(e))
+    return {"direction": text}
+
+
 async def _menu(state):
     """The workflows an approval card can switch a step to: every readable one that is switched on."""
     return [{"id": w["id"], "title": w["title"], "kind": w["kind"]} for w in await state.catalog.listing()
@@ -585,7 +599,7 @@ async def _planning(request, user, body, instruction, project):
         answer = await state.agent.ask(agent.SYSTEM.format(max_steps=agent.MAX_STEPS),
                                        agent.question(message, offers, selection,
                                                       state.catalog.current(state.settings.default_workflow), agent.past_turns(body.get("history")), pinned, recent,
-                                                      memory.book_for_model(book), guides),
+                                                      memory.book_for_model(book), guides, body.get("direction") or ""),
                                        [o["id"] for o in offers], **_model(body))
         seconds = time.monotonic() - asked
         # Each answer is charged at the price of the model that gave it (another one may have stood in for a busy one).
@@ -646,7 +660,7 @@ async def _planning(request, user, body, instruction, project):
         state.notify(user["id"])   # the open pages show the new balance
     yield {"type": "plan", "reply": reply or ("Here is the plan." if steps else "Tell me what you would like to see and I will plan it."),
            "thought": str(answer.get("thought") or ""), "activity": log, "seconds": round(time.monotonic() - started, 1),
-           "chips": chips, "steps": steps, "total": sum(s["credits"] for s in steps), "llm": charged,
+           "chips": chips, "direction": answer.get("direction") or "", "steps": steps, "total": sum(s["credits"] for s in steps), "llm": charged,
            "balance": state.credits.balance(user["id"])}
 
 

@@ -123,6 +123,8 @@ export function spendCard(anchor, spent, { above = false } = {}) {
 // The page calls attach(item) when a frame is clicked: the item goes into the message as a chip, where the cursor is.
 export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = null, session = null, onSaved = () => {},
   onFocus = () => {}, locate = () => null, selection = () => [], items = () => [], pickCanvas = null, onUploaded = () => {} } = {}) {
+  let direction = '';  // the durable notes of this conversation (what the film is, the style, the shot list), kept beside the turns
+  let folded = 0;      // how many turns from the start are folded into the direction and no longer sent
   let runs = [];       // the turns: {instruction, parts, reply, thought, activity, chips, steps, total, state, work, ui}
   let busy = false;       // a message is with the model
   let pending = null;     // the message being answered: {instruction, parts, stop, events, status, started}
@@ -148,6 +150,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
         name === models.current ? icon('check') : el('span')))], 'pop-perm');
   }
   const permission = () => (PERMISSIONS.find((p) => p.id === localStorage.getItem('scene.agent.permission')) || PERMISSIONS[2]);
+  const compactButton = el('button', { type: 'button', class: 'icon-btn agent-compact', onclick: compact }, icon('book'));
   const permButton = el('button', { type: 'button', class: 'icon-btn agent-perm', 'aria-haspopup': 'menu', onclick: () => openPermissions() });
   const drawPermission = () => {
     const p = permission();
@@ -438,7 +441,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       { icon: 'book', label: 'From library', run: async () => { const item = await pickLibraryItem(); if (item) { attach(item); drawSuggest(); input.focus(); } } },
     ]) }, icon('plus'));
   const composer = el('div', { class: 'agent-composer', onclick: (e) => { if (e.target === e.currentTarget) input.focus(); } }, input, upload,
-    el('div', { class: 'agent-composer-bar' }, addButton, suggest, el('span', { style: 'flex:1' }), status, skillsButton, modelPicker, permButton, sendButton));
+    el('div', { class: 'agent-composer-bar' }, addButton, suggest, el('span', { style: 'flex:1' }), status, compactButton, skillsButton, modelPicker, permButton, sendButton));
   // The approval bar of the newest plan waiting for approval sits here, on top of the message box, and does not
   // scroll with the conversation.
   const dock = el('div', { class: 'agent-dock hidden' });
@@ -451,8 +454,41 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   const talk = session ? 'agent-' + session : 'agent';   // the board this conversation is kept in
   const saveRuns = () => {
     onSaved({ spent: spentBy(runs, store.jobs), updated: Date.now() });
-    return keep(talk, { runs: runs.slice(-KEPT) }).catch(() => {});
+    const drop = Math.max(0, runs.length - KEPT);
+    return keep(talk, { runs: runs.slice(-KEPT), direction, folded: Math.max(0, folded - drop) }).catch(() => {});
   };
+  // The turns sent along with a message: the newest ones, less those already folded into the direction.
+  const recalled = () => runs.slice(Math.max(folded, runs.length - RECALLED)).filter((r) => !r.error).map((r) => ({
+    instruction: r.instruction, reply: r.reply, steps: r.steps.map((s) => ({ name: s.name, uses: (s.uses || []).map((u) => u.name) })) }));
+  // Fold the conversation so far into the direction, so the agent keeps the whole of it in a few lines.
+  // A short word in the place of the model's name, then the name again.
+  function say(text) {
+    const was = [status.textContent, status.classList.contains('hidden')];
+    status.textContent = text; status.classList.remove('hidden');
+    setTimeout(() => { status.textContent = was[0]; status.classList.toggle('hidden', was[1]); }, 4000);
+  }
+  async function compact() {
+    if (busy || !runs.length) return;
+    compactButton.disabled = true;
+    compactButton.title = 'Folding the conversation…';
+    try {
+      const done = await api('/api/agent/compact', { method: 'POST', json: { direction, model: localStorage.getItem('scene.agent.model') || null,
+        history: runs.filter((r) => !r.error).map((r) => ({ instruction: r.instruction, reply: r.reply,
+          steps: r.steps.map((s) => ({ name: s.name, uses: (s.uses || []).map((u) => u.name) })) })) } });
+      direction = done.direction;
+      folded = Math.max(folded, runs.length - 2);   // the last two turns stay as they are
+      saveRuns();
+      say('Conversation folded into the direction.');
+    } catch (e) { say(e.message); }
+    compactButton.disabled = false;
+    drawCompact();
+  }
+  function drawCompact() {
+    compactButton.classList.toggle('hidden', !runs.length);
+    compactButton.title = direction ? 'Direction kept (' + direction.split(/\n/).length + ' lines). Fold the conversation into it again.'
+      : 'Fold the conversation into short notes the agent keeps (Direction)';
+    compactButton.ariaLabel = 'Compact the conversation';
+  }
   const startedJobs = () => runs.flatMap((r) => r.steps.flatMap((s) => [s.job, s.take2 && s.take2.job])).filter(Boolean);
   // A line of the work done for a plan after it was approved: queued, waited, ready, checked.
   const work = (run, glyph, text) => (run.work = run.work || []).push({ icon: glyph, text, at: Date.now() });
@@ -1234,6 +1270,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   // follow: something new arrived (a message, an answer), so the log goes to its end. Otherwise it stays where it is,
   // so opening a fold or changing a setting does not move what is being looked at.
   function drawLog(follow = false) {
+    drawCompact();
     const active = document.activeElement;
     if (!follow && active && log.contains(active) && active.matches('textarea, input')) { deferred = true; return; }
     deferred = false;
@@ -1316,8 +1353,8 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     try {
       let answer = null;
       await apiLines('/api/agent/plan', { signal: controller.signal, json: { instruction: text, project_id: projectId() || null, selection: ids,
-        model: localStorage.getItem('scene.agent.model') || null,
-        history: runs.slice(-RECALLED).map((r) => ({ instruction: r.instruction, reply: r.reply,
+        model: localStorage.getItem('scene.agent.model') || null, direction,
+        history: recalled().map((r) => ({ instruction: r.instruction, reply: r.reply,
           steps: r.steps.map((s) => ({ name: s.name, uses: (s.uses || []).map((u) => u.name) })) })) } }, (event) => {
         if (event.type === 'error') throw new Error(event.message);
         if (event.type === 'plan') answer = event;
@@ -1329,6 +1366,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       made = { instruction, parts, reply: answer.reply, thought: answer.thought, activity: answer.activity || [], seconds: answer.seconds,
         chips: answer.chips || {}, steps: answer.steps, total: answer.total, state: answer.steps.length ? 'proposed' : 'answered', at: Date.now(), ui: {},
         llm: answer.llm || null };
+      if (answer.direction) direction = answer.direction;   // the agent kept its notes up to date
       if (store.user && answer.balance != null) { store.user.credits = answer.balance; }   // the message itself may have cost credits
       runs.push(made);
       saveRuns();
@@ -1442,10 +1480,14 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
 
   async function load() {
     runs = [];
+    direction = '';
+    folded = 0;
     drawLog();
     try {
       const [saved, state] = await Promise.all([api(board(talk)), api('/api/agent/status')]);
       runs = saved.data.runs || [];
+      direction = saved.data.direction || '';
+      folded = Math.min(saved.data.folded || 0, runs.length);
       onSaved({ spent: spentBy(runs, store.jobs), updated: null });   // what it spent, without counting as use
       for (const run of runs) {
         run.ui = run.ui || {};
