@@ -4,11 +4,12 @@ import json
 import math
 import re
 import time
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from .. import agent, cast, credits, edits, media, memory, motion, review, sequence, skills
+from .. import agent, camera, cast, credits, edits, media, memory, motion, review, sequence, skills
 from ..comfy import workflows
 from .deps import agent_user, current_user
 from .studio import price
@@ -337,6 +338,9 @@ async def _retake(state, user, item, verdict, previous):
     settings["values"] = dict(settings.get("values") or {}, **{roles["prompt"]["id"]: fix["prompt"]})
     settings.update(workflow=schema["id"], seed_mode="random", parent=item["id"], project_id=item["project_id"],
                     name=(item["name"] + " · retake")[:80])
+    shot = settings.get("shot")
+    if isinstance(shot, dict) and shot.get("id"):
+        settings["shot"] = {"id": shot["id"], "take": int(shot.get("take") or 1) + 1}
     start = None
     first_frame = (schema.get("slots") or {}).get("first_frame")
     if fix.get("start_from_previous") and previous and first_frame:
@@ -385,6 +389,123 @@ async def agent_compact(body: dict, request: Request, user: dict = Depends(curre
     except agent.AgentError as e:
         raise HTTPException(502, str(e))
     return {"direction": text}
+
+
+STILL_WORKFLOWS = ("z_image", "sdxl")   # cheap picture workflows, in the order the storyboard prefers them
+
+
+async def _still_workflow(state):
+    """The workflow that draws a storyboard still: a cheap picture workflow that is switched on. None when there is none."""
+    found = [w for w in await state.catalog.listing() if w["kind"] == "image" and not w.get("error") and state.credits.enabled(w["id"])]
+    for word in STILL_WORKFLOWS:
+        for w in found:
+            if word in w["id"]:
+                return w["id"]
+    return found[0]["id"] if found else None
+
+
+def _proposals(shots):
+    """The shots of a staged plan as sent by the browser: [(shot id, the model's proposal for it, the shot)], the usable ones."""
+    out = []
+    for shot in (shots if isinstance(shots, list) else [])[:agent.MAX_STEPS]:
+        proposal = shot.get("proposal") if isinstance(shot, dict) else None
+        ident = memory.clean_shot({"id": shot.get("shot_id")}) if isinstance(shot, dict) else None
+        if isinstance(proposal, dict) and ident and proposal.get("tool", "generate") == "generate" \
+                and str(proposal.get("workflow") or "").startswith("video/"):
+            out.append((ident["id"], proposal, shot))
+    return out
+
+
+def _as_shot(step, shot_id):
+    step["shot_id"] = shot_id
+    step["settings"]["shot"] = {"id": shot_id, "take": 1}
+    return step
+
+
+@router.post("/agent/storyboard")
+async def agent_storyboard(body: dict, request: Request, user: dict = Depends(agent_user)):
+    """Stage one of a long film: a cheap still for each planned video shot, to look at before any clip is made.
+    Body: {"shots": [{"shot_id", "proposal"}], "project_id"?}. Returns {"steps": [...], "dropped": [...], "total"};
+    nothing is queued or charged: the browser queues the stills on Approve, as for any plan."""
+    state = request.app.state
+    project = _project_id(request, user, body.get("project_id"))
+    wanted = _proposals(body.get("shots"))
+    if not wanted:
+        raise HTTPException(400, "There are no video shots to draw first.")
+    still = await _still_workflow(state)
+    if not still:
+        raise HTTPException(400, "No picture workflow is switched on to draw the stills with.")
+    schemas = {still: workflows.describe(await state.catalog.load(still))}
+    pinned, menu = cast.load(state.db, user["id"], project), await _menu(state)
+    steps, dropped = [], []
+    for shot_id, proposal, _ in wanted:
+        card = {key: proposal.get(key) for key in ("prompt", "orientation", "shot_size", "angle", "end_state")}
+        card.update(tool="generate", workflow=still, name="Still · " + str(proposal.get("name") or "shot")[:70])
+        before = len(steps)
+        reason = await _plan_step(state, card, "", steps, {}, schemas, {}, {}, [], pinned, project or None, {}, [], menu)
+        if len(steps) == before:
+            dropped.append((proposal.get("name") or "a shot", reason or "it could not be drawn"))
+            continue
+        _as_shot(steps[-1], shot_id)
+        steps[-1].update(stage="still", proposal=proposal)   # the video proposal travels with the still, to animate it later
+    return {"steps": steps, "dropped": dropped, "total": sum(s["credits"] for s in steps)}
+
+
+@router.post("/agent/animate")
+async def agent_animate(body: dict, request: Request, user: dict = Depends(agent_user)):
+    """Stage two: each approved still becomes the first frame of its clip. Body: {"shots": [{"shot_id", "item", "proposal"}],
+    "project_id"?}, item being the library id of the still. Returns {"steps", "dropped", "total"}, not queued."""
+    state = request.app.state
+    project = _project_id(request, user, body.get("project_id"))
+    steps, dropped, names, kinds, shapes, schemas, wanted = [], [], {}, {}, {}, {}, []
+    for shot_id, proposal, shot in _proposals(body.get("shots")):
+        row = state.db.one("SELECT id, name, kind, context FROM generations WHERE id = ? AND user_id = ?", (shot.get("item"), user["id"])) \
+            if isinstance(shot.get("item"), int) else None
+        if row is None or row["kind"] != "image":
+            dropped.append((proposal.get("name") or "a shot", "its still is not there"))
+            continue
+        made = json.loads(row["context"] or "{}")
+        names[row["id"]], kinds[row["id"]] = row["name"], {"name": row["name"], "kind": "image"}
+        if made.get("width") and made.get("height"):
+            shapes[row["id"]] = [made["width"], made["height"]]
+        wanted.append((shot_id, proposal, row["id"]))
+        if proposal["workflow"] not in schemas:
+            try:
+                schemas[proposal["workflow"]] = workflows.describe(await state.catalog.load(proposal["workflow"]))
+            except (workflows.WorkflowError, HTTPException):
+                pass
+    pinned, menu = cast.load(state.db, user["id"], project), await _menu(state)
+    for shot_id, proposal, item in wanted:
+        before = len(steps)
+        reason = await _plan_step(state, dict(proposal, start_from=item, after=0, uses=[]), "", steps, {}, schemas, names, kinds, [],
+                                  pinned, project or None, shapes, [], menu)
+        if len(steps) == before:
+            dropped.append((proposal.get("name") or "a shot", reason or "it could not be planned"))
+            continue
+        _as_shot(steps[-1], shot_id)
+    return {"steps": steps, "dropped": dropped, "total": sum(s["credits"] for s in steps)}
+
+
+@router.post("/agent/reroll")
+async def agent_reroll(body: dict, request: Request, user: dict = Depends(agent_user)):
+    """Another take of a finished shot: the same prompt and settings with a new seed, priced and not queued.
+    Body: {"item", "prompt"?}. Returns {"retake"}, as the review does for a failed shot."""
+    state = request.app.state
+    item = state.db.one("SELECT * FROM generations WHERE id = ? AND user_id = ?", (body.get("item"), user["id"])) \
+        if isinstance(body.get("item"), int) else None
+    if item is None:
+        raise HTTPException(404, "No such item.")
+    try:
+        schema = workflows.describe(await state.catalog.load(item["workflow"]))
+    except (workflows.WorkflowError, HTTPException):
+        raise HTTPException(400, "The workflow that made this is gone.")
+    roles = {c["role"]: c for c in schema["controls"] if c["role"]}
+    made_with = (json.loads(item["settings"] or "{}").get("values") or {}).get((roles.get("prompt") or {}).get("id"))
+    prompt = str(body.get("prompt") or "").strip() or str(made_with or "")
+    retake = await _retake(state, user, item, {"fix": {"prompt": prompt, "why": "Another take of the same shot."}}, None) if prompt else None
+    if retake is None:
+        raise HTTPException(400, "This one cannot be made again.")
+    return {"retake": retake}
 
 
 async def _menu(state):
@@ -652,6 +773,10 @@ async def _planning(request, user, body, instruction, project):
                           "time": "a few seconds", "credits": 0, "settings": None, "start": None, "sound": made["sound"]})
             answer["reply"] = "I'll put {}. Approve to make it.".format(made["facts"])
     steps = steps[:agent.MAX_STEPS]
+    for step in steps:   # every generation is a shot with an id of its own: a retake becomes take 2 of the same shot
+        if step.get("settings"):
+            step["shot_id"] = uuid.uuid4().hex[:8]
+            step["settings"]["shot"] = {"id": step["shot_id"], "take": 1}
     if steps:
         yield activity("plan", "Checked and priced {} {}".format(len(steps), "step" if len(steps) == 1 else "steps"))
     # Items the reply names as [[item:12]] or [[asset:3]] are shown as small pictures; the browser gets their names.
@@ -693,6 +818,9 @@ async def _plan_step(state, proposed, instruction, steps, made_by, schemas, name
                           "time": "a few seconds", "credits": 0, "settings": None, "start": None, "edit": {"clips": edit["clips"]}})
         return None if cuts else "select the video to cut on the canvas first"
     schema = schemas.get(proposed.get("workflow"))
+    original = proposed   # kept on the step, so the shot can be made again as a still and then as a clip
+    if schema and proposed.get("tool", "generate") == "generate":   # the camera the agent chose is said in the prompt
+        proposed = dict(proposed, prompt=camera.apply(proposed.get("prompt"), camera.clean(proposed), schema["id"].split("/", 1)[0]))
     if not schema:
         return "there is no workflow “{}” it can use".format(proposed.get("workflow") or "")
     if not agent.offer(schema):
@@ -726,6 +854,8 @@ async def _plan_step(state, proposed, instruction, steps, made_by, schemas, name
     steps.append(await _shown_step(state, schema, settings, menu or [], uses,
                                    {"id": start, "name": names[start], "slot": first_frame} if start else None,
                                    {"step": earlier, "slot": first_frame} if chained else None, agent.why(proposed)))
+    steps[-1]["camera"] = camera.clean(proposed)
+    steps[-1]["proposal"] = original
     return None
 
 

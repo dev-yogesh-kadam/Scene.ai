@@ -86,6 +86,15 @@ def clean_keep(keep, kind=None):
     return {"tag": tag, "name": name}
 
 
+def clean_shot(shot):
+    """{"id", "take"} naming the shot a job belongs to and which try at it this is, or None."""
+    if not isinstance(shot, dict):
+        return None
+    ident = re.sub(r"[^a-z0-9-]", "", str(shot.get("id") or "").lower())[:24]
+    take = shot.get("take")
+    return {"id": ident, "take": take if isinstance(take, int) and 1 <= take <= 9 else 1} if ident else None
+
+
 def keep_made(db, folder, user_id, item_id, source, kind, keep):
     """Keep what a step made as a saved asset under the name it was planned with ("Maya", a character), so every agent
     tab, every project and the Shared memory tab know it. The file is copied, so deleting either leaves the other.

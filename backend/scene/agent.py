@@ -11,9 +11,9 @@ import re
 
 import httpx
 
-from . import cast, sequence
+from . import camera, cast, sequence
 
-MAX_STEPS = 6
+MAX_STEPS = 12   # a longer film runs in stages (cast, stills, clips), each priced and approved on its own
 SHOT_SECONDS = (4, 15)  # the length the agent may give one video shot; the workflow takes any number of seconds
 WORDS_PER_SECOND = 2.5  # how fast people speak in a shot, for the time spoken words need
 LONG_SHOT = 10          # a shot longer than this is not made at the largest resolution: it may not fit in memory
@@ -92,6 +92,11 @@ Tools, and which to use:
   under "How to do this kind of work"; follow it. The field defaults always hold: for "generate" set source, start,
   end, parts and audio to 0 and leave "scenes" empty; for an editing tool set prompt to "" and clips to 1; for "motion"
   and "overlay" set prompt to "" and fill "scenes".
+- Camera: for a "generate" step that shows a scene, fill "shot_size" (ECU, CU, MCU, MS, WS, EWS), "angle" (eye, low, high,
+  top, OTS), "move" (static, push in, pull back, pan, track, crane, handheld, orbit) and "end_state" (where the people and
+  the camera end up, in a few words). They are turned into words in the prompt for you, so do not repeat them there. Open
+  a scene wide, go closer for the action, keep the people moving the same way across shots. For anything that is not a
+  scene (an edit, text, music) leave them "" .
 - Never write a tag such as @1 in a prompt: the video model does not know what it means. Describe what is seen.
 
 Rules for a plan:
@@ -322,7 +327,7 @@ def reply_format(workflow_ids):
     # Every field is required so the model has to decide each one; values a workflow can't take are dropped later.
     step = {"type": "object", "required": ["tool", "workflow", "name", "prompt", "resolution", "orientation", "duration", "clips",
                                            "start_from", "after", "uses", "source", "start", "end", "parts", "audio", "replace", "scenes", "look",
-                                           "choices", "keep", "why"], "properties": {
+                                           "choices", "keep", "shot_size", "angle", "move", "end_state", "why"], "properties": {
         "tool": {"type": "string", "enum": ["generate", *EDIT_TOOLS, SOUND_TOOL, *MOTION_TOOLS]},
         "workflow": {"type": "string", "enum": workflow_ids},
         "name": {"type": "string"},
@@ -349,6 +354,10 @@ def reply_format(workflow_ids):
                                                "properties": {"setting": {"type": "string"}, "value": {"type": "string"}}}},
         "keep": {"type": "object", "required": ["as", "name"], "properties": {
             "as": {"type": "string", "enum": ["", "character", "outfit", "location", "prop", "voice", "style"]}, "name": {"type": "string"}}},
+        "shot_size": {"type": "string", "enum": camera.choices("shot_size")},
+        "angle": {"type": "string", "enum": camera.choices("angle")},
+        "move": {"type": "string", "enum": camera.choices("move")},
+        "end_state": {"type": "string"},
         "why": {"type": "string"},
     }}
     return {"type": "object", "required": ["thought", "reply", "steps", "direction"], "properties": {
