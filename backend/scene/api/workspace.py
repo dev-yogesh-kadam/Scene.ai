@@ -103,6 +103,47 @@ async def export_timeline(body: dict, request: Request, user: dict = Depends(cur
     return {"job": job_id, "name": name}
 
 
+@router.post("/edit/assemble")
+async def assemble(body: dict, request: Request, user: dict = Depends(current_user)):
+    """Queue the finished cut: the clips in order, a title card and an end card, music under it. Costs no credits.
+    Body: {"name"?, "clips": [{"id", "start"?, "end"?}], "music"?: audio item id, "title"?, "end"?: {"heading", "text"},
+    "look"?, "shape"?, "project_id"?}."""
+    state = request.app.state
+    clips = body.get("clips") if isinstance(body.get("clips"), list) else []
+    if not 1 <= len(clips) <= MAX_CLIPS:
+        raise HTTPException(400, "Put between 1 and {} clips in the cut.".format(MAX_CLIPS))
+    folder = state.outputs.folder(user["id"])
+    parts = []
+    for clip in clips:
+        row = state.db.one("SELECT * FROM generations WHERE id = ? AND user_id = ? AND kind = 'video'", (clip.get("id") if isinstance(clip, dict) else None, user["id"]))
+        if row is None or not (folder / row["filename"]).is_file():
+            raise HTTPException(404, "A shot of the cut is no longer in your library.")
+        try:
+            parts.append({"id": row["id"], "start": float(clip.get("start") or 0), "end": float(clip.get("end") or 0)})
+        except (TypeError, ValueError):
+            raise HTTPException(400, "The start and end of {} must be numbers.".format(row["name"]))
+    music = None
+    if body.get("music"):
+        row = state.db.one("SELECT * FROM generations WHERE id = ? AND user_id = ? AND kind = 'audio'", (body["music"], user["id"]))
+        if row is None or not (folder / row["filename"]).is_file():
+            raise HTTPException(404, "The music of the cut is no longer in your library.")
+        music = row["id"]
+
+    def card(kind):
+        given = body.get(kind) if isinstance(body.get(kind), dict) else None
+        scenes = sequence.clean_scenes([{"kind": kind, "heading": given.get("heading"), "text": given.get("text"), "seconds": given.get("seconds") or None}]) if given else []
+        return scenes[0] if scenes else None
+
+    settings = {"workflow_title": "Final cut", "clips": parts, "music": music, "title": card("title"), "end": card("end"),
+                "look": body.get("look") if body.get("look") in sequence.LOOKS else "dark",
+                "shape": body.get("shape") if body.get("shape") in agent.ORIENTATIONS else "landscape", "parent": parts[0]["id"]}
+    name = " ".join(str(body.get("name") or "").split())[:80] or "Final cut"
+    facts = "{} {}{}{}{}".format(len(parts), "shot" if len(parts) == 1 else "shots", " · title card" if settings["title"] else "",
+                                 " · music" if music else "", " · end card" if settings["end"] else "")
+    project_id = _project_id(request, user, body.get("project_id")) or None
+    return {"job": state.jobs.add(user["id"], name, edits.ASSEMBLE, settings, facts, None, 0, project_id), "name": name}
+
+
 @router.post("/edit/sound")
 async def add_sound(body: dict, request: Request, user: dict = Depends(current_user)):
     """Queue a job that puts one of the user's sounds on one of their videos, for the library. Costs no credits."""
@@ -811,6 +852,17 @@ async def _planning(request, user, body, instruction, project):
                     steps.append({"name": made["name"], "workflow_title": "Sound", "kind": "video", "prompt": "", "facts": made["facts"],
                                   "time": "a few seconds", "credits": 0, "settings": None, "start": None, "sound": made["sound"]})
                 reason = None if made else "there was no video and sound to put together"
+            elif isinstance(proposed, dict) and proposed.get("tool") == agent.ASSEMBLE_TOOL:
+                planned = [n for n, s in enumerate(steps) if s["kind"] == "video" and s.get("settings")]
+                music_at = made_by.get(proposed.get("after"))
+                music_planned = music_at is not None and music_at < len(steps) and steps[music_at]["kind"] == "audio" and bool(steps[music_at].get("settings"))
+                made = agent.assemble_for(proposed, planned, videos, known, music_planned,
+                                          ((steps[planned[0]].get("current") or {}).get("orientation") if planned else None))
+                if made:   # the finished cut: queued on Approve once the shots (and music) are made
+                    made["assemble"]["music_step"] = music_at if music_planned else None
+                    steps.append({"name": made["name"], "workflow_title": "Final cut", "kind": "video", "prompt": "", "facts": made["facts"],
+                                  "time": "under a minute", "credits": 0, "settings": None, "start": None, "assemble": made["assemble"]})
+                reason = None if made else "there were no shots or selected videos to put together"
             else:
                 reason = await _plan_step(state, proposed, instruction, steps, made_by, schemas, names, kinds, videos, pinned, project, shapes, book_assets, menu)
             if len(steps) == before:

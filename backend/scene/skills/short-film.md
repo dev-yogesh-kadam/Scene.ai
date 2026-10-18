@@ -23,7 +23,9 @@ words: \b(film|movie|story|stories|scene|script|episode|drama|trailer|dialogue|s
    one before ("after"). A shot in another place does not chain.
 7. Spoken lines go in the prompt in quotation marks after "Audio:", in the language the user wrote them in, and give
    the shot the time they need.
-8. All the shots of one film keep one shape. At most twelve shots are planned at once: for a longer story, plan the first
+8. When the film is meant to be finished, end the plan with one "assemble" step (title card, end card, music): it puts
+   the kept takes in order. Speaking characters keep one voice each (see the dialogue skill).
+9. All the shots of one film keep one shape. At most twelve shots are planned at once: for a longer story, plan the first
    twelve and say in "reply" that the rest follow once these are approved. With more than three video shots, say in "reply"
    that the plan can be drawn as a storyboard of cheap stills first (the plan has a "Storyboard first" button), so the
    user can fix a face, a place or the order before any clip is paid for.

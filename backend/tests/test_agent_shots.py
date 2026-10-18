@@ -125,3 +125,48 @@ def test_a_local_model_still_answers_once(client, monkeypatch):
     asked = model(monkeypatch, client, {"thought": "", "reply": "Hi.", "steps": []})
     plan = client.post("/api/agent/plan", json={"instruction": "hello"}).json()
     assert plan["reply"] == "Hi." and len(asked) == 1
+
+
+# ---------------------------------------------------------------- the finished cut
+
+def test_the_assemble_step_is_planned_after_the_shots_and_waits_for_them(client, monkeypatch):
+    register(client)
+    cut = {"tool": "assemble", "workflow": "video/h3_master", "name": "The film", "orientation": "portrait",
+           "scenes": [{"kind": "title", "heading": "Rex", "text": "A dog's day", "items": [], "seconds": 3},
+                      {"kind": "end", "heading": "The end", "text": "", "items": [], "seconds": 3}]}
+    model(monkeypatch, client, {"thought": "", "reply": "Two shots and the cut.", "steps": [STEP, dict(STEP, name="Dog sleeps"), cut]})
+    steps = client.post("/api/agent/plan", json={"instruction": "a film about a dog"}).json()["steps"]
+    final = steps[-1]
+    assert [s["name"] for s in steps] == ["Dog in the park", "Dog sleeps", "The film"]
+    assert final["assemble"]["steps"] == [0, 1] and final["assemble"]["clips"] == [] and final["credits"] == 0
+    assert final["assemble"]["title"]["heading"] == "Rex" and final["assemble"]["end"]["heading"] == "The end"
+    assert final["assemble"]["shape"] == "portrait" and "2 shots · title card · end card" == final["facts"]
+    # nothing to put together: left out with the reason
+    model(monkeypatch, client, {"thought": "", "reply": "Cut.", "steps": [cut]})
+    plan = client.post("/api/agent/plan", json={"instruction": "make the final cut"}).json()
+    assert plan["steps"] == [] and any("no shots or selected videos" in e.get("text", "") for e in plan["activity"])
+
+
+def test_the_final_cut_joins_the_shots_under_music(client):
+    import asyncio
+    from scene import media
+    from test_api import made_by
+    me = register(client)
+    folder = client.app.state.outputs.folder(me["id"])
+    folder.mkdir(parents=True)
+    ids = []
+    for i, colour in enumerate(("red", "blue")):
+        asyncio.run(media._ffmpeg("-loglevel", "error", "-f", "lavfi", "-i", "color={}:s=64x64:r=24:d=1".format(colour), "-pix_fmt", "yuv420p", folder / ("c%d.mp4" % i)))
+        ids.append(client.app.state.db.run(
+            "INSERT INTO generations (user_id, workflow, kind, name, filename, settings, context, created) "
+            "VALUES (?, 'video/h3_master', 'video', ?, ?, '{}', '{}', 1)", (me["id"], "c%d" % i, "c%d.mp4" % i)))
+    asyncio.run(media._ffmpeg("-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=330:duration=1", folder / "song.mp3"))
+    song = client.app.state.db.run(
+        "INSERT INTO generations (user_id, workflow, kind, name, filename, settings, context, created) "
+        "VALUES (?, 'audio/x', 'audio', 'Song', 'song.mp3', '{}', '{}', 1)", (me["id"],))
+    assert client.post("/api/edit/assemble", json={"clips": []}).status_code == 400
+    assert client.post("/api/edit/assemble", json={"clips": [{"id": 999}]}).status_code == 404
+    assert client.post("/api/edit/assemble", json={"clips": [{"id": ids[0]}], "music": 999}).status_code == 404
+    item = made_by(client, client.post("/api/edit/assemble", json={"name": "The film", "music": song, "clips": [{"id": ids[0]}, {"id": ids[1]}]}))
+    assert (item["name"], item["workflow"], item["context"]["duration"]) == ("The film", "edit/assemble", 2.0)
+    assert asyncio.run(media.probe(folder / item["filename"]))["audio"]

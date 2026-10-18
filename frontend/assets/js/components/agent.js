@@ -759,7 +759,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   function drawStep(run, step) {
     const proposed = run.state === 'proposed';
     const chipState = step.updating ? ['running', 'Updating'] : step.error ? ['failed', 'Not changed'] : ['price', step.credits ? tokens(step.credits) : 'Free'];
-    const glyph = step.motion ? 'title' : step.sound ? 'audio' : KIND_ICONS[step.kind] || 'video';
+    const glyph = step.assemble ? 'film' : step.motion ? 'title' : step.sound ? 'audio' : KIND_ICONS[step.kind] || 'video';
     const editable = proposed && step.menu && !step.editing;
     const links = linksOf(step);
     return el('div', { class: 'step-card ' + chipState[0] + (step.skipped ? ' skipped' : '') },
@@ -797,7 +797,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       if (job.status === 'cancelled') return { state: 'failed', text: 'Cancelled. The credits came back.' };
     }
     if (take.job) return { state: 'running', share: 1, text: 'Finishing' };
-    if (step.waiting) return { state: 'queued', text: `Waits for step ${step.after.step + 1}` };
+    if (step.waiting) return { state: 'queued', text: step.after ? `Waits for step ${step.after.step + 1}` : 'Waits for the shots' };
     return { state: 'queued', text: 'Not started' };
   }
 
@@ -1523,6 +1523,31 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   // Run the approved steps one by one: generations are queued through the same door as the Create page,
   // edits are made through the timeline export. Stops at the first refusal.
   // The library item a step made, waiting for its job if it is still being rendered. A failed or cancelled job throws.
+  // The finished cut: waits for the shots (and the music) of the plan, then queues them in order, the take the user chose of each.
+  async function queueCut(run, step) {
+    const cut = step.assemble;
+    step.waiting = true;
+    saveRuns();
+    drawLog();
+    let body;
+    try {
+      const clips = [...(cut.clips || [])];
+      for (const index of cut.steps || []) {
+        const shot = run.steps[index];
+        if (!shot || shot.skipped) continue;
+        const first = await resultOf(shot);
+        clips.push({ id: usedTake(shot).made || first, start: 0, end: 0 });
+      }
+      const music = cut.music_step != null ? await resultOf(run.steps[cut.music_step]) : cut.music;
+      body = { name: cut.name, clips, music, title: cut.title, end: cut.end, look: cut.look, shape: cut.shape, project_id: projectId() || null };
+    } finally { step.waiting = false; }
+    step.job = (await api('/api/edit/assemble', { method: 'POST', json: body })).job;
+    work(run, 'queue', `Started “${step.name}”`);
+    saveRuns();
+    refreshJobs();
+    drawLog();
+  }
+
   async function resultOf(step) {
     if (step.made) return step.made;
     if (step.error || !step.job) throw new Error('The step this one starts on was not made.');
@@ -1551,7 +1576,8 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       step.error = null;
       try {
         // Work done on the studio's own machine is queued like a generation, in a lane that does not wait for the GPU.
-        const local = step.motion ? ['/api/motion/render', step.motion]                 // words and shapes drawn by HyperFrames, charged by length
+        if (step.assemble) { await queueCut(run, step); continue; }
+        const local = step.assemble ? null : step.motion ? ['/api/motion/render', step.motion]                 // words and shapes drawn by HyperFrames, charged by length
           : step.sound ? ['/api/edit/sound', step.sound]                                // a sound put on a video with ffmpeg, free
             : step.edit ? ['/api/timeline/export', { name: step.name, clips: step.edit.clips, parent: step.edit.clips[0].id }] : null;   // a cut or a join, free
         if (local) {

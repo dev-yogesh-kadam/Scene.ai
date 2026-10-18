@@ -24,6 +24,7 @@ ORIENTATIONS = ("landscape", "portrait", "square")
 EDIT_TOOLS = ("trim", "split", "join")   # done with ffmpeg on videos the user already has: no GPU, no credits
 MAX_PARTS = 6
 MOTION_TOOLS = ("motion", "overlay")     # drawn by HyperFrames from words: no GPU, priced by the second
+ASSEMBLE_TOOL = "assemble"                 # the finished cut: shots in order, music, a title and an end card; ffmpeg, no credits
 SOUND_TOOL = "sound"                     # a sound put on a video with ffmpeg: no GPU, no credits
 OVERLAY_KINDS = ("lower_third",)         # a scene kind only an overlay has
 CAPTION_CONTEXT = 16384   # tokens: the caption instructions of a workflow run to several thousand
@@ -97,6 +98,10 @@ Tools, and which to use:
   the camera end up, in a few words). They are turned into words in the prompt for you, so do not repeat them there. Open
   a scene wide, go closer for the action, keep the people moving the same way across shots. For anything that is not a
   scene (an edit, text, music) leave them "" .
+- "assemble" is the last step of a film: it puts the shots of this plan (the takes the user keeps) in order, with music
+  under them, a title card and an end card, into one video. "scenes" may hold one scene of kind "title" and one of kind
+  "end" (heading and text); "audio" is the id of music that exists, or "after" is the step number of a music step in this
+  plan; leave "prompt" empty. Use it when the user wants the finished film, not for a single shot. Free and quick.
 - Never write a tag such as @1 in a prompt: the video model does not know what it means. Describe what is seen.
 
 Rules for a plan:
@@ -365,7 +370,7 @@ def reply_format(workflow_ids):
     step = {"type": "object", "required": ["tool", "workflow", "name", "prompt", "resolution", "orientation", "duration", "clips",
                                            "start_from", "after", "uses", "source", "start", "end", "parts", "audio", "replace", "scenes", "look",
                                            "choices", "keep", "shot_size", "angle", "move", "end_state", "why"], "properties": {
-        "tool": {"type": "string", "enum": ["generate", *EDIT_TOOLS, SOUND_TOOL, *MOTION_TOOLS]},
+        "tool": {"type": "string", "enum": ["generate", *EDIT_TOOLS, SOUND_TOOL, ASSEMBLE_TOOL, *MOTION_TOOLS]},
         "workflow": {"type": "string", "enum": workflow_ids},
         "name": {"type": "string"},
         "prompt": {"type": "string"},
@@ -981,6 +986,33 @@ def sound_for(step, items):
     name = " ".join(str(step.get("name") or "").split())[:80] or "{} with sound".format(items[video]["name"])[:80]
     return {"name": name, "facts": "{} {} {}".format(items[sound]["name"], "in place of the sound of" if replace else "under", items[video]["name"]),
             "sound": {"video": video, "audio": sound, "replace": replace, "name": name}}
+
+
+def assemble_for(step, planned, videos, known, music_planned=False, shape=None):
+    """Turn a proposed "assemble" step into what the assemble endpoint takes, or None if there is nothing to put together.
+
+    planned: the numbers (positions in the plan) of the video shots the plan makes before this step. videos: the selected
+    videos. known: {id: {"name", "kind"}} for the music the step may name. music_planned: the step's "after" names an audio
+    step of the plan, which makes the music. shape: the orientation of the first shot. The shots of the plan come first;
+    with none, the selected videos are cut together in the order given. "scenes" may hold a "title" and an "end" card."""
+    if not planned and not videos:
+        return None
+    try:
+        scenes = sequence.clean_scenes([dict(s, seconds=s.get("seconds") or None) for s in step.get("scenes") or [] if isinstance(s, dict)])
+    except sequence.SequenceError:
+        scenes = []
+    card = lambda kind: next(({"kind": kind, "heading": s["heading"], "text": s["text"], "seconds": s["seconds"]} for s in scenes if s["kind"] == kind), None)
+    title, end = card("title"), card("end")
+    music = step.get("audio") if (known.get(step.get("audio")) or {}).get("kind") == "audio" else None
+    name = " ".join(str(step.get("name") or "").split())[:80] or "Final cut"
+    orientation = step.get("orientation") if step.get("orientation") in ORIENTATIONS else shape if shape in ORIENTATIONS else "landscape"
+    count = len(planned) + (0 if planned else len(videos))
+    parts = ["{} {}".format(count, "shot" if count == 1 else "shots"), "title card" if title else "", "music" if music or music_planned else "",
+             "end card" if end else ""]
+    return {"name": name, "facts": " · ".join(p for p in parts if p),
+            "assemble": {"name": name, "steps": list(planned), "clips": [{"id": v["id"], "start": 0, "end": 0} for v in videos] if not planned else [],
+                         "music": music, "title": title, "end": end, "shape": orientation,
+                         "look": step.get("look") if step.get("look") in sequence.LOOKS else "dark"}}
 
 
 def motion_for(step, videos):
