@@ -78,3 +78,50 @@ def test_reroll_makes_take_two_of_the_same_shot(client, monkeypatch):
     assert again["settings"]["shot"] == {"id": step["shot_id"], "take": 2} and again["settings"]["seed_mode"] == "random"
     assert again["credits"] == step["credits"] and "dog" in again["prompt"].lower()
     assert client.post("/api/agent/reroll", json={"item": 99999}).status_code == 404
+
+
+# ---------------------------------------------------------------- tool calling (hosted models)
+
+def hosted(monkeypatch, client, *calls):
+    """The agent's model is a hosted one that answers with these calls, in turn."""
+    seen = []
+
+    async def fake_chat(messages, answer_format, **kwargs):
+        seen.append(messages)
+        call = calls[min(len(seen), len(calls)) - 1]
+        return dict({"tool": "finish", "query": "", "item": 0, "asset": 0, "text": "", "thought": "", "reply": "", "steps": [], "direction": ""}, **call)
+    agent = client.app.state.agent
+    monkeypatch.setattr(agent, "chat", fake_chat)
+    monkeypatch.setattr(agent, "_service_of", lambda name: ({"name": "Test"}, name))
+    return seen
+
+
+def test_a_hosted_model_looks_checks_and_then_finishes(client, monkeypatch):
+    me = register(client)
+    client.app.state.db.run(
+        "INSERT INTO generations (user_id, workflow, kind, name, filename, summary, settings, context, created, about) "
+        "VALUES (?, 'x/y', 'image', 'Meera', 'x.png', '', '{}', '{}', 1, 'A girl with a red scarf.')", (me["id"],))
+    seen = hosted(monkeypatch, client,
+                  {"tool": "find_assets", "query": "meera"},
+                  {"tool": "check_shots", "steps": [STEP, dict(STEP, workflow="video/nope", name="Bad")]},
+                  {"tool": "finish", "reply": "One shot.", "steps": [dict(STEP, workflow="video/nope", name="Bad")], "direction": "a"},
+                  {"tool": "finish", "reply": "One shot.", "steps": [STEP], "direction": "Film: dog"})
+    plan = client.post("/api/agent/plan", json={"instruction": "a dog film"}).json()
+    assert [s["name"] for s in plan["steps"]] == ["Dog in the park"] and plan["direction"] == "Film: dog"
+    said = [e["text"] for e in plan["activity"] if e["type"] == "activity"]
+    assert any(t.startswith("Looked in the asset book for “meera”: 1 found") for t in said)
+    assert any(t.startswith("Checked 1 step, 1 left out") for t in said)
+    assert any("A step could not run" in t for t in said)
+    # the model was told what each tool found, and the hint when its finishing answer was wrong
+    told = [m["content"] for m in seen[-1] if m["role"] == "user"]
+    assert any("Meera" in t and "red scarf" in t for t in told)
+    assert any("Left out “Bad”" in t for t in told)
+    assert any("These steps cannot run" in t for t in told)
+    assert len(seen) == 4
+
+
+def test_a_local_model_still_answers_once(client, monkeypatch):
+    register(client)
+    asked = model(monkeypatch, client, {"thought": "", "reply": "Hi.", "steps": []})
+    plan = client.post("/api/agent/plan", json={"instruction": "hello"}).json()
+    assert plan["reply"] == "Hi." and len(asked) == 1

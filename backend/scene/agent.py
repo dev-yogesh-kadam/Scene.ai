@@ -299,6 +299,43 @@ class AgentError(Exception):
     pass
 
 
+TOOLS = ("find_assets", "look", "check_shots", "review", "save_note", "finish")
+TOOL_ROUNDS = 6   # a message is answered in at most this many calls to the model
+
+TOOL_RULES = """How you work now: you answer in steps, one call at a time, and each answer names a "tool". The server runs
+the tool and tells you the result, and then you answer again. Fill every field; the ones the tool does not read stay
+"", 0 or []. The tools:
+- find_assets: "query" is words; you get the asset book's entries that match. Use it before you say the book has nothing.
+- look: "item" or "asset" is an id; you get what is in that picture or clip.
+- check_shots: "steps" is your plan; you get each step checked and priced, and the ones that cannot run with the reason.
+  Do this before you finish when a plan is more than one or two steps, and fix what it says.
+- review: "item" is an id of something made; you get the checks of it.
+- save_note: "text" is the whole direction (see "Direction" in the message), kept for the next messages.
+- finish: your answer for the user: "thought", "reply", "steps" and "direction". If a step cannot run you get the reason
+  back instead, and you finish again.
+Nothing is made by these tools: making starts only when the user approves the steps you finish with. Finish as soon as
+you know enough; most messages need one or two tool calls, or none."""
+
+
+def tool_format(workflow_ids):
+    """The JSON shape of one call: the tool and its fields beside the fields of a finished answer."""
+    base = reply_format(workflow_ids)
+    extra = {"tool": {"type": "string", "enum": list(TOOLS)}, "query": {"type": "string"}, "item": {"type": "integer"},
+             "asset": {"type": "integer"}, "text": {"type": "string"}}
+    return {"type": "object", "required": [*extra, *base["required"]], "properties": {**extra, **base["properties"]}}
+
+
+def shaped(answer):
+    """A model's answer as the agent returns it: {"thought", "reply", "steps", "model", "direction"}."""
+    steps = answer.get("steps")
+    reply = str(answer.get("reply") or "").strip()[:1200]
+    if answer.get("_stood_in"):   # say so when another model answered than the one that was picked
+        reply = "{} ({})".format(reply, answer["_stood_in"]).strip()
+    thought = str(answer.get("thought") or "").strip()[:800]   # shown folded above the reply
+    return {"thought": thought, "reply": reply, "steps": steps if isinstance(steps, list) else [], "model": answer.get("_model"),
+            "direction": clean_direction(answer.get("direction"))}
+
+
 class AgentBusy(AgentError):
     """A hosted model is overloaded or out of quota for the moment: worth another try, or another model."""
 
@@ -604,14 +641,37 @@ class Agent:
         history: the earlier turns of the conversation, as {"role", "content"} messages."""
         answer = await self.chat([{"role": "system", "content": system}, *history, {"role": "user", "content": message}],
                                  reply_format(workflow_ids), **({"model": model} if model else {}))
-        steps = answer.get("steps")
-        reply = str(answer.get("reply") or "").strip()[:1200]
-        if answer.get("_stood_in"):   # say so when another model answered than the one that was picked
-            reply = "{} ({})".format(reply, answer["_stood_in"]).strip()
-        thought = str(answer.get("thought") or "").strip()[:800]   # shown folded above the reply
-        direction = clean_direction(answer.get("direction"))
-        return {"thought": thought, "reply": reply, "steps": steps if isinstance(steps, list) else [], "model": answer.get("_model"),
-                "direction": direction}
+        return shaped(answer)
+
+    async def ask_with_tools(self, system, message, workflow_ids, tools, finishing=None, model=None):
+        """The same question as ask(), answered in a loop of tool calls: the model looks things up, checks its shots and
+        only then finishes. tools: {name: async function(call) -> str}, called with the model's answer; what it returns
+        goes back to the model. finishing: async function(answer) -> a hint, when the finishing answer is wrong; the
+        model is then asked to put it right. Nothing is made in the loop: the steps it ends with still wait for Approve.
+        Returns what ask() returns, and "tools": the names of the tools it used."""
+        messages = [{"role": "system", "content": system + "\n\n" + TOOL_RULES}, {"role": "user", "content": message}]
+        shape, used = tool_format(workflow_ids), []
+        for round_ in range(1, TOOL_ROUNDS + 1):
+            answer = await self.chat(messages, shape, **({"model": model} if model else {}))
+            name = answer.get("tool") if answer.get("tool") in tools else "finish"
+            last = round_ == TOOL_ROUNDS
+            if name == "finish":
+                hint = None if last or not finishing else await finishing(answer)
+                if not hint:
+                    break
+                result = hint
+            else:
+                try:
+                    result = await tools[name](answer)
+                except (KeyError, ValueError, TypeError):
+                    result = "That call could not be run. Check its fields."
+            used.append(name)
+            call = {k: answer[k] for k in ("query", "item", "asset", "text") if answer.get(k) not in ("", 0, None)}
+            if name in ("check_shots", "finish"):
+                call["steps"] = answer.get("steps") if isinstance(answer.get("steps"), list) else []
+            messages += [{"role": "assistant", "content": json.dumps(dict(call, tool=name), ensure_ascii=False)[:6000]},
+                         {"role": "user", "content": "Result of {}:\n{}".format(name, str(result)[:4000])}]
+        return dict(shaped(answer), tools=used)
 
     async def compact(self, turns, direction="", model=None):
         """The conversation boiled down to a Direction: the durable notes (what the film is, the style, the people, the

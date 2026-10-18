@@ -714,14 +714,78 @@ async def _planning(request, user, body, instruction, project):
     kinds = {**book_items, **{s["id"]: {"name": s["name"], "kind": s["kind"]} for s in selection}}
     videos = [s for s in selection if s.get("seconds")]
 
+    with_tools = state.agent._service_of(chosen_model)[0] is not None and body.get("tools", True) is not False
+    tool_events = []   # what the tools did, shown as the agent's work once the answer is in
+    noted = lambda glyph, text: tool_events.append((glyph, text))
+    saved_direction = []
+
+    def entry_of(call):
+        return next((e for e in book if (call.get("item") and e.get("item") == call["item"])
+                     or (call.get("asset") and e.get("asset") == call["asset"])), None)
+
+    async def find_assets(call):
+        query = " ".join(str(call.get("query") or "").lower().split())
+        words = query.split()
+        hits = [e for e in memory.book_for_model(book) if all(w in json.dumps(e, ensure_ascii=False).lower() for w in words)][:8]
+        noted("book", "Looked in the asset book for “{}”: {}".format(query, "{} found".format(len(hits)) if hits else "nothing"))
+        return "\n".join(json.dumps(e, ensure_ascii=False) for e in hits) or "Nothing in the book matches. Make it from words."
+
+    async def look(call):
+        entry = entry_of(call)
+        if entry is None:
+            return "That id is not in the asset book."
+        if not entry["shows"]:
+            await memory.describe_missing(state, user["id"], [entry], limit=1)
+        noted("look", "Looked at “{}”".format(entry["name"]))
+        return entry["shows"] or "It could not be looked at (the model cannot see it, or the file is gone)."
+
+    async def check_shots(call):
+        built, left = await build(call.get("steps"))
+        noted("plan", "Checked {} {}{}".format(len(built), "step" if len(built) == 1 else "steps", ", {} left out".format(len(left)) if left else ""))
+        lines = ["Step {}: {} on {}, {} credits".format(n, s["name"], s["workflow_title"], s["credits"]) for n, s in enumerate(built, start=1)]
+        lines += ["Left out “{}”: {}".format(name, reason) for name, reason in left]
+        return "\n".join(lines + ["Total {} credits.".format(sum(s["credits"] for s in built))])
+
+    async def review_it(call):
+        row = state.db.one("SELECT * FROM generations WHERE id = ? AND user_id = ?", (call.get("item"), user["id"])) \
+            if isinstance(call.get("item"), int) else None
+        if row is None:
+            return "No such item."
+        try:
+            verdict = await review.review_item(state, user["id"], row, memory._prompt(json.loads(row["settings"] or "{}")), [], None)
+        except (review.ReviewError, agent.AgentError) as error:
+            return "It could not be reviewed: {}".format(error)
+        noted("look", "Checked “{}”".format(row["name"]))
+        return review.summary(verdict)
+
+    async def save_note(call):
+        text = agent.clean_direction(call.get("text"))
+        if text:
+            saved_direction[:] = [text]
+            noted("book", "Updated the direction")
+        return "Saved." if text else "Nothing to save."
+
+    async def finishing(answer):
+        """A hint when the steps it finishes with cannot all run, so the model puts them right; nothing when they can."""
+        built, left = await build(answer.get("steps"))
+        if not left:
+            return None
+        noted("retry", "A step could not run, so the model was asked to fix it: {}".format("; ".join(r for _, r in left)[:160]))
+        return "These steps cannot run: {}. Fix them or leave them out, and finish again.".format(
+            "; ".join("“{}”: {}".format(name, reason) for name, reason in left))
+
+    tools = {"find_assets": find_assets, "look": look, "check_shots": check_shots, "review": review_it, "save_note": save_note}
+
     async def plan(message):
         """One answer of the model, timed, and the steps of it that can run. Returns (answer, steps, dropped, seconds)."""
         asked = time.monotonic()
-        answer = await state.agent.ask(agent.SYSTEM.format(max_steps=agent.MAX_STEPS),
-                                       agent.question(message, offers, selection,
-                                                      state.catalog.current(state.settings.default_workflow), agent.past_turns(body.get("history")), pinned, recent,
-                                                      memory.book_for_model(book), guides, body.get("direction") or ""),
-                                       [o["id"] for o in offers], **_model(body))
+        system = agent.SYSTEM.format(max_steps=agent.MAX_STEPS)
+        asking = agent.question(message, offers, selection, state.catalog.current(state.settings.default_workflow),
+                                agent.past_turns(body.get("history")), pinned, recent, memory.book_for_model(book), guides, body.get("direction") or "")
+        if with_tools:   # a hosted model works in a loop of tool calls; a local one answers once
+            answer = await state.agent.ask_with_tools(system, asking, [o["id"] for o in offers], tools, finishing, **_model(body))
+        else:
+            answer = await state.agent.ask(system, asking, [o["id"] for o in offers], **_model(body))
         seconds = time.monotonic() - asked
         # Each answer is charged at the price of the model that gave it (another one may have stood in for a busy one).
         used = answer.get("model") or chosen_model
@@ -729,9 +793,16 @@ async def _planning(request, user, body, instruction, project):
         if cost and state.credits.charge(user["id"], cost, "agent", note=used):
             charged["credits"] += cost
             charged["model"] = used
+        steps, dropped = await build(answer["steps"])
+        if answer.get("tools") is not None:
+            answer["tools"] = list(answer["tools"])
+        return answer, steps, dropped, seconds
+
+    async def build(raw):
+        """The steps of an answer that can be carried out, priced, and the ones left out with the reason. Nothing is queued."""
         steps, dropped = [], []
         made_by = {}   # the number the model gave a step (1 for its first) -> where that step's result is in `steps`
-        for number, proposed in enumerate(answer["steps"][:agent.MAX_STEPS], start=1):
+        for number, proposed in enumerate(raw[:agent.MAX_STEPS] if isinstance(raw, list) else [], start=1):
             made_by[number] = len(steps)   # taken back below if the step is dropped
             before = len(steps)
             if isinstance(proposed, dict) and proposed.get("tool") == agent.SOUND_TOOL:
@@ -746,7 +817,7 @@ async def _planning(request, user, body, instruction, project):
                 del made_by[number]
                 if reason:
                     dropped.append(((proposed.get("name") if isinstance(proposed, dict) else "") or "a step", reason))
-        return answer, steps, dropped, seconds
+        return steps, dropped
 
     def thought(answer, seconds):
         return logged({"type": "thought", "text": str(answer.get("thought") or ""), "seconds": round(seconds, 1)})
@@ -754,6 +825,11 @@ async def _planning(request, user, body, instruction, project):
     message = agent.carry_over(instruction, body.get("history"))
     yield status("Thinking…")
     answer, steps, dropped, seconds = await plan(message)
+    for glyph, text in tool_events:
+        yield activity(glyph, text)
+    tool_events.clear()
+    if saved_direction and not answer.get("direction"):
+        answer["direction"] = saved_direction[0]
     yield thought(answer, seconds)
     # A reply that says it is making something while no step survived would leave the user waiting for nothing:
     # the model is asked once more, and if it still plans nothing, the reply says plainly that nothing was made.
@@ -761,6 +837,9 @@ async def _planning(request, user, body, instruction, project):
         yield activity("retry", "The first answer said it was making something but planned nothing, so I asked again")
         yield status("Thinking again…")
         answer, steps, dropped, seconds = await plan(message + "\n" + agent.NO_STEPS)
+        for glyph, text in tool_events:
+            yield activity(glyph, text)
+        tool_events.clear()
         yield thought(answer, seconds)
         if not steps and agent.claims_work(instruction, answer["reply"]):
             answer["reply"] = agent.EMPTY_CLAIM
