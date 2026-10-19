@@ -453,7 +453,12 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   const dock = el('div', { class: 'agent-dock hidden' });
   const node = el('div', { class: 'agent-panel' },
     el('div', { class: 'agent-log-wrap' }, log, toEnd), dock, composer);
-  node.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pending) pending.stop(); });
+  node.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const waiting = pending ? null : docked();   // Esc turns down the plan that waits for approval
+    if (pending) pending.stop();
+    else if (waiting && !working) { waiting.state = 'dismissed'; saveRuns(); drawLog(); }
+  });
 
   const board = (kind) => `/api/boards/${kind}?project=${projectId()}`;
   const keep = (kind, data) => api('/api/boards/' + kind, { method: 'PUT', json: { project: projectId() || null, data } });
@@ -1296,7 +1301,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     const go = el('button', { class: 'btn small primary' + (run.ui.note ? ' hidden' : ''), disabled: working || short || run.steps.every((s) => s.skipped), title: `You have ${balance} credits`,
       onclick: () => approve(run) }, 'Approve · ', tokens(run.total));
     const note = el('input', { type: 'text', class: 'approve-note', placeholder: short ? `Needs ${run.total} credits, you have ${balance}. Or say what to change…`
-      : 'Want something different? e.g. make the assets first', 'aria-label': 'What to change in this plan', 'data-run': run.at,
+      : 'Type something else… e.g. make the assets first', 'aria-label': 'What to change in this plan', 'data-run': run.at,
       oninput: (e) => { run.ui.note = e.target.value; change.classList.toggle('hidden', !e.target.value.trim()); go.classList.toggle('hidden', !!e.target.value.trim()); },
       onfocus: () => { noteFocus = run.at; }, onblur: () => { if (noteFocus === run.at) noteFocus = null; },
       onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); revise(run); } } });
@@ -1306,7 +1311,8 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       el('span', { class: 'row' },
         eligible(run).length > 3 && el('button', { class: 'btn small quiet', disabled: working || busy || boarding,
           title: 'Draw a cheap still for each shot first; animate the ones you keep', onclick: () => storyboard(run) }, 'Storyboard first'),
-        el('button', { class: 'btn small quiet', onclick: () => { run.state = 'dismissed'; saveRuns(); drawLog(); } }, 'Dismiss'),
+        el('button', { class: 'btn small quiet', title: 'Turn the plan down (Esc)', onclick: () => { run.state = 'dismissed'; saveRuns(); drawLog(); } },
+          'Stop', el('kbd', { class: 'esc-key' }, 'esc')),
         change, go));
   }
 
@@ -1320,10 +1326,13 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     if (run && dock.dataset.run === String(run.at) && typing) return;
     const steps = dock.querySelector('.agent-dock-steps');
     const scrolled = run && dock.dataset.run === String(run.at) && steps ? steps.scrollTop : 0;
+    const fresh = run && dock.dataset.run !== String(run.at);
     dock.dataset.run = run ? String(run.at) : '';
+    composer.classList.toggle('hidden', !!run);   // a plan waiting for approval is the only thing to answer: its card has the box
     dock.replaceChildren(...(run ? [el('div', { class: 'agent-dock-steps' }, el('div', { class: 'step-list' }, run.steps.map((step) => drawStep(run, step)))),
       approveBar(run)] : []));
     if (scrolled) dock.querySelector('.agent-dock-steps').scrollTop = scrolled;
+    if (fresh) dock.querySelector('.approve-note')?.focus({ preventScroll: true });
     dock.classList.toggle('hidden', !run);
   }
 

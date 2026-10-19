@@ -1498,3 +1498,5 @@ button.fold-head:hover .fold-title, button.fold-head:hover .fold-caret { color: 
 .send-tip { position: absolute; right: 0; bottom: calc(100% + 10px); display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; background: var(--raised); border: 1px solid var(--line-strong); color: var(--text); font-size: 13px; font-weight: 500; white-space: nowrap; box-shadow: var(--shadow-s); pointer-events: none; opacity: 0; transform: translateY(4px); transition: opacity .15s var(--ease), transform .15s var(--ease); z-index: 5; }
 .send-tip kbd { display: grid; place-items: center; min-width: 26px; height: 24px; padding: 0 6px; border-radius: 6px; background: var(--hover); color: var(--muted); font: inherit; font-size: 12px; }
 .agent-send:hover .send-tip, .agent-send:focus-visible .send-tip { opacity: 1; transform: none; }
+.esc-key { margin-left: 8px; padding: 2px 6px; border-radius: 6px; background: var(--hover); color: var(--muted); font: inherit; font-size: 11px; }
+.agent-dock { margin-bottom: 12px; }
