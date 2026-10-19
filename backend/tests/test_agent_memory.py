@@ -134,7 +134,8 @@ def test_skills_are_picked_by_what_the_message_asks_for(tmp_path):
     # Every skill that ships can be read and has words to be picked by.
     shipped = skills.load()
     assert {s["id"] for s in shipped} >= {"short-film", "product-ad", "character-sheet", "social-video"}
-    assert all(s["text"] and s["words"].pattern != "(?!)" for s in shipped)
+    # (a skill an admin adds may have no trigger words: it then runs only when named with /command)
+    assert all(s["text"] and s["words"].pattern != "(?!)" for s in shipped if s["id"] in ("short-film", "product-ad", "character-sheet", "social-video"))
     # A skill whose words can't be read is left out.
     (tmp_path / "broken.md").write_text("id: broken\nwords: (unclosed\n---\nText.", encoding="utf-8")
     (tmp_path / "fine.md").write_text("id: fine\ntitle: Fine\nwords: \\bfine\\b\n---\nDo it well.", encoding="utf-8")

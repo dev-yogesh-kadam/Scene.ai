@@ -357,6 +357,27 @@ which are made), the length and shape, and what the user turned down or insisted
 repeats and anything that was changed later. Plain lines, no more than 2,500 characters. Write only the notes."""
 
 
+PREFLIGHT_CHARS = 16_000   # how much of a skill the check reads: the inputs and the rules come first in a skill
+
+PREFLIGHT = """You check whether a studio's assistant can start the work a skill describes. The skill is a procedure someone wrote;
+it may say what must be in hand before it starts, and it may name models and tools. Decide from the skill, what the studio can
+do, what is attached, the conversation so far and the new message.
+- "missing": what the skill itself says it must have before it starts and the user has not given: files (audio, video, images),
+  a script or text, a link. Only what the skill really requires, in the skill's own words. A script, an article or any text is
+  given only when it is pasted in the conversation (a few lines at least); audio, video and images are given only when attached
+  or already in the project. Never treat a summary as the thing itself.
+- "unsupported": parts the skill depends on that the studio cannot do: a model or workflow it names that is not in "What the
+  studio can do", running programs (ffmpeg, scripts), measuring or separating audio, a state store, structured questions to the
+  user, other tools. Name each plainly. Leave out what a plain generation, edit or timeline step can stand in for only when the
+  skill does not insist on it.
+- If the conversation shows the user was already told about a gap and chose to go on (or gave the thing now), it is not blocking
+  any more: say in "adaptation" what will be done instead, in one or two sentences.
+- "ready" is true only when nothing is missing and every unsupported part has been agreed or is not essential.
+- "message": what to say to the user when not ready. Plain and short. First ask for exactly what is missing, as a list. Then
+  say what this studio cannot do from the skill and what it can do instead, and ask whether to go on that way. No plan, no
+  promises of work."""
+
+
 def clean_direction(text):
     """The direction as kept: one string, lines trimmed, at most DIRECTION_CHARS."""
     if not isinstance(text, str):
@@ -678,6 +699,24 @@ class Agent:
                          {"role": "user", "content": "Result of {}:\n{}".format(name, str(result)[:4000])}]
         return dict(shaped(answer), tools=used)
 
+    async def preflight(self, skill, instruction, attached, available, turns=(), model=None):
+        """Whether a skill can be started: {"ready", "missing", "unsupported", "adaptation", "message"}. skill: the skill as
+        skills.load() gives it. attached: lines naming what is attached and what the asset book holds. available: what the
+        studio can do (workflows and tools). turns: the conversation so far, from past_turns()."""
+        said = "\n".join("{}: {}".format("User" if t["role"] == "user" else "You", t["content"]) for t in turns)
+        message = ("The skill \"{}\":\n{}\n\nWhat the studio can do:\n{}\n\nAttached to the message and kept in the project:\n{}\n\n"
+                   "The conversation so far:\n{}\n\nThe user's new message:\n{}").format(
+            skill["title"], skill["text"][:PREFLIGHT_CHARS], available, attached or "(nothing)", said or "(none)", instruction)
+        shape = {"type": "object", "required": ["ready", "missing", "unsupported", "adaptation", "message"], "properties": {
+            "ready": {"type": "boolean"}, "missing": {"type": "array", "items": {"type": "string"}},
+            "unsupported": {"type": "array", "items": {"type": "string"}}, "adaptation": {"type": "string"}, "message": {"type": "string"}}}
+        answer = await self.chat([{"role": "system", "content": PREFLIGHT}, {"role": "user", "content": message}], shape,
+                                 **({"model": model} if model else {}))
+        lists = {k: [" ".join(str(x).split())[:200] for x in answer.get(k) or [] if str(x).strip()][:8] for k in ("missing", "unsupported")}
+        ready = answer.get("ready") is True and not lists["missing"]
+        return {"ready": ready, **lists, "adaptation": " ".join(str(answer.get("adaptation") or "").split())[:600],
+                "message": str(answer.get("message") or "").strip()[:1500]}
+
     async def compact(self, turns, direction="", model=None):
         """The conversation boiled down to a Direction: the durable notes (what the film is, the style, the people, the
         shot list, what was turned down) that replace the old turns. turns: from past_turns(). Returns the new text."""
@@ -940,7 +979,10 @@ def question(instruction, offers, selection, default="", history=(), project_cas
     parts = ["Project cast:\n" + (cast.described(project_cast or {}) or "(none)"),
              "Asset book, the project's memory:\n" + ("\n".join(json.dumps(entry, ensure_ascii=False) for entry in book)
                                                        or "(empty: nothing is saved for reuse yet)"),
-             *(["How to do this kind of work (follow it where it fits the message):\n" + guides] if guides else []),
+             *(["Skills for this message. A skill is a procedure the user or the studio wrote: follow it step by step, in its order, with its checks and "
+                "its rules. Do not skip what it asks for first. When it needs something the user has not given, ask for exactly that and plan nothing. "
+                "When it names a model or tool that is not in the workflows listed, say so in \"reply\" and do not swap it for another without asking:\n" + guides]
+               if guides else []),
              "Workflows:\n" + "\n".join(json.dumps(o) for o in offers),
              "Direction, the notes of this conversation that you keep (they stand in for turns no longer shown; when "
              "something durable changes, answer with the whole updated direction in \"direction\", else repeat it as it is):\n"

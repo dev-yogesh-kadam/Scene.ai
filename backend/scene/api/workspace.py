@@ -28,6 +28,8 @@ def _board_kind(kind):
         raise HTTPException(404, "No such board.")   # the lengths a shot can be given on an approval card, in seconds
 MAX_BOARD_BYTES = 2_000_000   # an agent tab keeps its whole conversation
 MAX_CLIPS = 50
+LOCAL_SKILL_CHARS = 24_000   # the most of a skill a local model is given (about 6,000 tokens)
+CHECKED_SKILL = 4_000        # a skill longer than this, or one the user named with /command, is checked before the agent plans
 MOTION_WORKFLOW = credits.MOTION   # what a rendered motion graphic is filed and priced under
 
 
@@ -747,7 +749,42 @@ async def _planning(request, user, body, instruction, project):
     picked = skills.pick(instruction, body.get("history"), force=forced)
     for skill in picked:
         yield activity("skill", "Read the skill “{}”".format(skill["title"]))
-    guides = skills.guide(picked)
+    # A local model is not given more of a skill than it can hold; a hosted one reads it whole.
+    limit = skills.MAX_CHARS if state.agent._service_of(chosen_model)[0] is not None else LOCAL_SKILL_CHARS
+    for skill in picked:
+        if len(skill["text"]) > limit:
+            yield activity("skill", "“{}” is long: this model reads its first {:,} characters".format(skill["title"], limit))
+    guides = skills.guide(picked, limit)
+    # A skill the user named, or a long one (they are written by people, and say what they need first), is checked before
+    # anything is planned: what it requires that is not here, and what it names that this studio cannot do, is said at once.
+    adaptation = ""
+    for skill in picked:
+        if not (skill["id"] in forced or len(skill["text"]) > CHECKED_SKILL):
+            continue
+        yield status("Checking what the skill needs…")
+        ability = "\n".join(["Workflows: " + "; ".join("{} ({})".format(o["id"], o.get("title") or o["id"]) for o in offers),
+                             "Editing the user's videos: trim, split, join, sound on a video, the finished cut (assemble). Motion graphics and titles drawn "
+                             "in the studio. Looking at pictures and clips, reviewing results, remembering assets. Nothing else: no programs or scripts, "
+                             "no audio analysis, no file store, no other models than those listed."])
+        attached = "\n".join(["{} {} ({})".format(s["tag"], s["name"], s["kind"]) for s in selection]
+                             + ["in the project: {} {}".format(n, k) for k, n in sorted(__import__("collections").Counter(
+                                 e["kind"] for e in book).items())]) if selection or book else ""
+        try:
+            verdict = await state.agent.preflight(skill, instruction, attached, ability, agent.past_turns(body.get("history")), **_model(body))
+        except agent.AgentError:
+            continue   # a check that cannot run is not a reason to refuse
+        if verdict["ready"]:
+            adaptation = verdict["adaptation"] or adaptation
+            continue
+        said = verdict["message"] or "Before I start “{}”, I need:\n{}".format(skill["title"], "\n".join("- " + m for m in verdict["missing"] or verdict["unsupported"]))
+        yield activity("skip", "Checked “{}”: {}".format(skill["title"], "needs " + "; ".join(verdict["missing"]) if verdict["missing"]
+                                                         else "cannot be run as written here"))
+        yield {"type": "plan", "reply": said, "thought": "", "activity": log, "seconds": round(time.monotonic() - started, 1), "chips": {},
+               "direction": body.get("direction") or "", "steps": [], "total": 0, "llm": charged,
+               "balance": state.credits.balance(user["id"])}
+        return
+    if adaptation:
+        guides = (guides + "\n\n" if guides else "") + "Agreed with the user about this skill: " + adaptation
     # every prompt follows the studio's one prompt structure
     guides = (guides + "\n\n" if guides else "") + agent.STRUCTURE_GUIDE.format(structure=agent.PROMPT_STRUCTURE)
     names = {s["id"]: s["name"] for s in selection}
