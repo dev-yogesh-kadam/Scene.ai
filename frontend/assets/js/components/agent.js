@@ -419,6 +419,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     sendButton.classList.toggle('stopping', stopping);
     input.dataset.placeholder = stopping ? 'Waiting for response…' : 'Ask the agent, or tell it what to make. Use + or type @ to attach a file.';
     if (!pending) input.contentEditable = stopping ? 'false' : 'true';
+    if (input.parentNode) input.parentNode.classList.toggle('waiting', stopping);   // the box cannot be used: clicks in it select nothing
   };
   drawSend();
   // What is selected on the canvas, offered as one suggestion: it is not part of the message until it is clicked.
@@ -453,6 +454,8 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   const dock = el('div', { class: 'agent-dock hidden' });
   const node = el('div', { class: 'agent-panel' },
     el('div', { class: 'agent-log-wrap' }, log, toEnd), dock, composer);
+  // A click (or a double or triple click) in the box while it waits would select words of the conversation above it.
+  composer.addEventListener('mousedown', (e) => { if (composer.classList.contains('waiting') && !e.target.closest('button')) e.preventDefault(); });
   node.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     const waiting = pending ? null : docked();   // Esc turns down the plan that waits for approval

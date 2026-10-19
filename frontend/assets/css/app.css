@@ -1500,3 +1500,4 @@ button.fold-head:hover .fold-title, button.fold-head:hover .fold-caret { color: 
 .agent-send:hover .send-tip, .agent-send:focus-visible .send-tip { opacity: 1; transform: none; }
 .esc-key { margin-left: 8px; padding: 2px 6px; border-radius: 6px; background: var(--hover); color: var(--muted); font: inherit; font-size: 11px; }
 .agent-dock { margin-bottom: 12px; }
+.agent-composer.waiting { cursor: default; -webkit-user-select: none; user-select: none; }
