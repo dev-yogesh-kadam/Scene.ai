@@ -407,12 +407,14 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   };
   document.addEventListener('selectionchange', rememberCaret);
   // Send, or Stop while the agent is thinking.
-  const sendButton = el('button', { type: 'button', class: 'agent-send', onclick: () => (pending ? pending.stop() : send()) });
+  const sendButton = el('button', { type: 'button', class: 'agent-send', onclick: () => (pending ? pending.stop() : generating() ? stopGeneration() : send()) });
   const drawSend = () => {
-    sendButton.replaceChildren(pending ? el('span', { class: 'stop-mark' }) : icon('arrowup'));
-    sendButton.title = sendButton.ariaLabel = pending ? 'Stop (Esc)' : 'Send (Enter)';
-    sendButton.classList.toggle('stopping', !!pending);
-    input.dataset.placeholder = pending ? 'Waiting for response…' : 'Ask the agent, or tell it what to make. Use + or type @ to attach a file.';
+    const stopping = !!pending || generating();   // the agent is thinking, or its approved plan is being made
+    sendButton.replaceChildren(stopping ? el('span', { class: 'stop-mark' }) : icon('arrowup'));
+    sendButton.title = sendButton.ariaLabel = pending ? 'Stop (Esc)' : stopping ? 'Stop generation' : 'Send (Enter)';
+    sendButton.classList.toggle('stopping', stopping);
+    input.dataset.placeholder = stopping ? 'Waiting for response…' : 'Ask the agent, or tell it what to make. Use + or type @ to attach a file.';
+    if (!pending) input.contentEditable = stopping ? 'false' : 'true';
   };
   drawSend();
   // What is selected on the canvas, offered as one suggestion: it is not part of the message until it is clicked.
@@ -489,7 +491,18 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       : 'Fold the conversation into short notes the agent keeps (Direction)';
     compactButton.ariaLabel = 'Compact the conversation';
   }
-  const startedJobs = () => runs.flatMap((r) => r.steps.flatMap((s) => [s.job, s.take2 && s.take2.job])).filter(Boolean);
+  function startedJobs() { return runs.flatMap((r) => r.steps.flatMap((s) => [s.job, s.take2 && s.take2.job])).filter(Boolean); }
+  // While an approved plan is being made the agent is busy: the box waits and the send button becomes Stop generation.
+  function activeJobs() { return startedJobs().filter((id) => { const job = store.jobs.find((j) => j.id === id); return job && (job.status === 'queued' || job.status === 'running'); }); }
+  function generating() { return working || activeJobs().length > 0; }
+  let halted = false;   // Stop generation was pressed: the plan being carried out goes no further
+  async function stopGeneration() {
+    halted = true;
+    drawSend();
+    await Promise.all(activeJobs().map((id) => api('/api/jobs/' + id, { method: 'DELETE' }).catch(() => {})));
+    refreshJobs().catch(() => {});
+    drawLog();
+  }
   // A line of the work done for a plan after it was approved: queued, waited, ready, checked.
   const work = (run, glyph, text) => (run.work = run.work || []).push({ icon: glyph, text, at: Date.now() });
   const redraw = () => drawLog();
@@ -1400,6 +1413,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   // so opening a fold or changing a setting does not move what is being looked at.
   function drawLog(follow = false) {
     drawCompact();
+    drawSend();
     const active = document.activeElement;
     if (!follow && active && log.contains(active) && active.matches('textarea, input')) { deferred = true; return; }
     deferred = false;
@@ -1454,7 +1468,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   async function send(typed) {
     const fromBox = !typed;
     const { text, shown: instruction, ids: attached, parts } = typed || message();
-    if (!text || busy) return;
+    if (!text || busy || generating()) return;
     // Nothing attached: the canvas selection goes along, and the server reads it only when the words point at it
     // ("make this darker", "join these").
     const ids = attached.length || !fromBox ? attached : (selection() || []).map((item) => item.id).slice(0, 8);
@@ -1560,6 +1574,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
         if (!job) throw new Error('The step this one starts on has no result in the library.');
       }
       await new Promise((resolve) => setTimeout(resolve, 3000));
+      if (halted) throw new Error('Stopped.');
       if (!node.isConnected) throw new Error('Stopped: the canvas was left before the earlier step finished. Press Resume to go on.');
     }
   }
@@ -1568,11 +1583,13 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   // also resumes a plan that was interrupted while a step was waiting for the one before it.
   async function approve(run) {
     working = true;
+    halted = false;
     run.state = 'approved';
     run.approvedAt = run.approvedAt || Date.now();
     drawLog();
     for (const step of run.steps) {
       if (step.job || step.made || step.skipped) continue;
+      if (halted) break;   // Stop generation: the steps not yet queued stay unqueued (Resume goes on from there)
       step.error = null;
       try {
         // Work done on the studio's own machine is queued like a generation, in a lane that does not wait for the GPU.
@@ -1628,6 +1645,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     working = false;
     saveRuns();
     refreshJobs().catch(() => {});
+    drawSend();
     drawLog();
   }
 
