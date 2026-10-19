@@ -51,8 +51,7 @@ export function render(view) {
           el('button', { class: 'btn small quiet', title: 'Look for new workflow files', onclick: () => loadCatalog().catch(showError) }, 'Refresh')),
         note, body),
       el('div', {},
-        el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Queue'),
-          el('a', { class: 'btn small quiet', href: '#/queue' }, 'View all')), queue),
+        el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Queue')), queue),
         el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Latest'),
           el('a', { class: 'btn small quiet', href: '#/library' }, 'Open library')), recent))));
 

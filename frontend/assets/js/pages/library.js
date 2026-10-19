@@ -22,7 +22,7 @@ export function render(view) {
     oninput: (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { filters.q = e.target.value; drawItems(); }, 250); } });
   view.replaceChildren(el('div', { class: 'page-head' }, el('h1', {}, 'Library'),
     el('a', { class: 'btn quiet', href: '#/assets', title: 'Saved characters, outfits, backgrounds and voices' }, 'Assets'),
-    el('a', { class: 'btn quiet', href: '#/queue' }, 'Queue'), search),
+    search),
   el('p', { class: 'muted', style: 'margin:0 0 14px' }, 'Everything you have made, in one place. Reuse what is here instead of rebuilding it.'),
   el('div', { class: 'row', style: 'margin-bottom:14px;gap:12px;flex-wrap:wrap' }, tabs, kinds), projectBar, grid);
 

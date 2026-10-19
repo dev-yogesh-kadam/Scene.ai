@@ -13,7 +13,6 @@ import * as projects from './pages/projects.js';
 import * as library from './pages/library.js';
 import * as skills from './pages/skills.js';
 import * as assets from './pages/assets.js';
-import * as queue from './pages/queue.js';
 import * as settings from './pages/settings.js';
 import * as admin from './pages/admin.js';
 
@@ -30,7 +29,6 @@ const PAGES = [
   { path: '#/canvas', page: canvas, under: '#/projects' },
   { path: '#/timeline', page: timeline, under: '#/projects' },
   { path: '#/assets', page: assets, under: '#/library' },
-  { path: '#/queue', page: queue, under: '#/library' },
   { path: '#/settings', label: 'Settings', icon: 'sliders', page: settings, menu: true },
   { path: '#/admin', label: 'Admin console', icon: 'shield', page: admin, menu: true, adminOnly: true },
 ];
@@ -74,7 +72,7 @@ async function showAuth() {
 function showApp() {
   const view = el('main', { class: 'view' });
   const nav = el('nav', { class: 'nav', 'aria-label': 'Pages' });
-  const working = el('a', { class: 'working hidden', href: '#/queue', title: 'Open the queue' });
+  const working = el('span', { class: 'working hidden' });   // says that something is being made; the queue itself is in the admin console
   const dot = el('span', { class: 'dot' });
   const server = el('span', {}, 'Checking render server…');
   // The balance sits at the top right of every page (on the canvas, in its own tool bar at the top right).
