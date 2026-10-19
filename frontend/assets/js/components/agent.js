@@ -410,8 +410,12 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   const sendButton = el('button', { type: 'button', class: 'agent-send', onclick: () => (pending ? pending.stop() : generating() ? stopGeneration() : send()) });
   const drawSend = () => {
     const stopping = !!pending || generating();   // the agent is thinking, or its approved plan is being made
-    sendButton.replaceChildren(stopping ? el('span', { class: 'stop-mark' }) : icon('arrowup'));
-    sendButton.title = sendButton.ariaLabel = pending ? 'Stop (Esc)' : stopping ? 'Stop generation' : 'Send (Enter)';
+    // What the button does, shown on hover as a small label with its key.
+    const [tip, key] = pending ? ['Stop', 'Esc'] : stopping ? ['Stop generation', ''] : ['Send message', '↵'];
+    sendButton.replaceChildren(stopping ? el('span', { class: 'stop-mark' }) : icon('arrowup'),
+      el('span', { class: 'send-tip', role: 'tooltip' }, tip, key && el('kbd', {}, key)));
+    sendButton.removeAttribute('title');
+    sendButton.ariaLabel = tip;
     sendButton.classList.toggle('stopping', stopping);
     input.dataset.placeholder = stopping ? 'Waiting for response…' : 'Ask the agent, or tell it what to make. Use + or type @ to attach a file.';
     if (!pending) input.contentEditable = stopping ? 'false' : 'true';
