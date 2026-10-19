@@ -5,6 +5,7 @@ import { el, segmented, ago, initials, still, spill } from '../dom.js';
 import { store, subscribe } from '../store.js';
 import { openViewer } from '../components/media.js';
 import { composer } from '../components/composer.js';
+import { go } from '../nav.js';
 
 const RECENT = 8;    // projects shown
 const MADE = 60;     // finished items shown
@@ -16,7 +17,7 @@ export function render(view) {
   const dock = composer({ onQueued: () => {
     // The job is filed under no project, so open the canvas on everything, not on the last project.
     queued.replaceChildren('Added to the queue. ',
-      el('a', { href: '#/canvas', onclick: () => localStorage.setItem('scene.project', '') }, 'Watch it on the Canvas'));
+      el('a', { href: '/canvas', onclick: () => localStorage.setItem('scene.project', '') }, 'Watch it on the Canvas'));
   } });
   const recent = el('section', { class: 'home-section hidden' });
   const filter = el('div');
@@ -30,12 +31,12 @@ export function render(view) {
     recent,
     el('section', { class: 'home-section' },
       el('div', { class: 'section-head' }, el('h2', {}, 'Created on Scene.ai'), filter,
-        el('a', { class: 'btn small quiet', href: '#/library' }, 'Open library')),
+        el('a', { class: 'btn small quiet', href: '/library' }, 'Open library')),
       grid));
 
   const openProject = (project) => {
     localStorage.setItem('scene.project', project.id);
-    location.hash = '#/canvas';
+    go('/canvas');
   };
 
   const cover = (id, itemKind, name) => still(`/api/library/${id}/file`, itemKind, name);
@@ -48,7 +49,7 @@ export function render(view) {
     if (!projects.length) return;
     recent.replaceChildren(
       el('div', { class: 'section-head' }, el('h2', {}, 'Recent projects'),
-        el('a', { class: 'btn small quiet', href: '#/projects' }, 'See all')),
+        el('a', { class: 'btn small quiet', href: '/projects' }, 'See all')),
       el('div', { class: 'project-grid' }, projects.map((p) => el('button', { class: 'project', onclick: () => openProject(p) },
         el('div', { class: 'project-cover' }, p.cover_id ? cover(p.cover_id, p.cover_kind, p.name) : initials(p.name)),
         el('b', {}, p.name),
@@ -68,7 +69,7 @@ export function render(view) {
       const c = item.context || {};
       return el('button', { class: 'made', title: item.name, style: c.width ? `aspect-ratio:${c.width}/${c.height}` : '',
         onclick: () => openViewer(item, { actions: /^(edit|upload)\//.test(item.workflow) ? []
-          : [{ label: 'Re-run', run: (dialog) => { dialog.close(); store.rerun = item; location.hash = '#/create'; } }] }) },
+          : [{ label: 'Re-run', run: (dialog) => { dialog.close(); store.rerun = item; go('/create'); } }] }) },
         cover(item.id, item.kind, item.name), el('span', {}, item.name));
     }) : [el('div', { class: 'empty' }, kind ? 'Nothing of this kind yet.' : 'Nothing made yet. Describe a shot in the bar above and it will appear here.')]));
   }

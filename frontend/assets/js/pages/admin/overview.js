@@ -9,8 +9,8 @@ import { number, span, ago, table } from './shared.js';
 const LEVEL = { critical: 'Critical', serious: 'Problem', warning: 'Check' };
 const DOT = { done: 'good', failed: 'critical', cancelled: 'warning', audit: 'neutral' };
 // The studio's pages, as a tab reports them, in the words of the menu.
-const PAGE = { '#/home': 'Home', '#/projects': 'All projects', '#/library': 'Library', '#/create': 'Create', '#/canvas': 'Canvas',
-  '#/timeline': 'Timeline', '#/assets': 'Assets', '#/settings': 'Settings', '#/admin': 'Admin console' };
+const PAGE = { '/home': 'Home', '/projects': 'All projects', '/library': 'Library', '/create': 'Create', '/canvas': 'Canvas',
+  '/timeline': 'Timeline', '/assets': 'Assets', '/settings': 'Settings', '/admin': 'Admin console' };
 const rupees = (value) => '₹' + Math.round(value || 0).toLocaleString();
 const clock = (timestamp) => new Date(timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 

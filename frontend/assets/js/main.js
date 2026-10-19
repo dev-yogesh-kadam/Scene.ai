@@ -1,6 +1,7 @@
 // Scene.ai front end entry: sign-in gate, app shell and page routing.
 
 import { api } from './api.js';
+import { go, here, linkClicks, oldAddress } from './nav.js';
 import { creditMark, el, icon, segmented, tabTitle } from './dom.js';
 import { store, subscribe, startLive, stopLive, refreshJobs } from './store.js';
 import { renderAuth } from './pages/auth.js';
@@ -21,18 +22,18 @@ const root = document.getElementById('app');
 // A page with `under` has no menu entry of its own: it is reached from the page it names, which stays lit while it is open.
 // A page with `menu` is listed lower in the menu, with the settings and signing out.
 const PAGES = [
-  { path: '#/home', label: 'Home', icon: 'home', page: home },
-  { path: '#/projects', label: 'All projects', icon: 'folder', page: projects, group: 'Workspace' },
-  { path: '#/library', label: 'Library', icon: 'grid', page: library, group: 'Workspace' },
-  { path: '#/skills', label: 'Skills', icon: 'skill', page: skills, group: 'Workspace' },
-  { path: '#/create', page: create, under: '#/home' },
-  { path: '#/canvas', page: canvas, under: '#/projects' },
-  { path: '#/timeline', page: timeline, under: '#/projects' },
-  { path: '#/assets', page: assets, under: '#/library' },
-  { path: '#/settings', label: 'Settings', icon: 'sliders', page: settings, menu: true },
-  { path: '#/admin', label: 'Admin console', icon: 'shield', page: admin, menu: true, adminOnly: true },
+  { path: '/home', label: 'Home', icon: 'home', page: home },
+  { path: '/projects', label: 'All projects', icon: 'folder', page: projects, group: 'Workspace' },
+  { path: '/library', label: 'Library', icon: 'grid', page: library, group: 'Workspace' },
+  { path: '/skills', label: 'Skills', icon: 'skill', page: skills, group: 'Workspace' },
+  { path: '/create', page: create, under: '/home' },
+  { path: '/canvas', page: canvas, under: '/projects' },
+  { path: '/timeline', page: timeline, under: '/projects' },
+  { path: '/assets', page: assets, under: '/library' },
+  { path: '/settings', label: 'Settings', icon: 'sliders', page: settings, menu: true },
+  { path: '/admin', label: 'Admin console', icon: 'shield', page: admin, menu: true, adminOnly: true },
 ];
-const LANDING = '#/projects';   // where signing in, or opening the site with no page in the address, leads
+const LANDING = '/projects';   // where signing in, or opening the site with no page in the address, leads
 const THEMES = [{ id: 'light', label: 'Light' }, { id: 'dark', label: 'Dark' }, { id: 'system', label: 'Auto', hint: 'Same as this computer' }];
 let leavePage = null;
 let leaveShell = null;
@@ -43,8 +44,8 @@ function applyTheme(theme) {
   localStorage.setItem('scene.theme', theme);
 }
 
-// What someone who is not signed in sees: the landing page at the site's address, Create account at #/signup, and
-// Sign in at #/signin or at any page of the studio (an old link, or a session that ran out).
+// What someone who is not signed in sees: the landing page at the site's address, Create account at /signup, and
+// Sign in at /signin or at any page of the studio (an old link, or a session that ran out).
 let leaveDoor = null;
 async function showAuth() {
   if (leavePage) leavePage();
@@ -57,15 +58,15 @@ async function showAuth() {
   try { info = await api('/api/auth/state'); } catch (e) { /* show the pages anyway */ }
   const door = () => {
     if (store.user) return;
-    const hash = location.hash;
-    if (!hash || hash === '#/' || hash === '#') return renderLanding(root, { signupOpen: info.signup_open });
-    // Signing in always lands on All projects. replaceState does not fire hashchange, so the page is routed once, by showApp.
+    const at = here();
+    if (at === '/') return renderLanding(root, { signupOpen: info.signup_open });
+    // Signing in always lands on All projects. replaceState does not fire a route event, so the page is routed once, by showApp.
     renderAuth(root, (user) => { store.user = user; leaveDoor(); history.replaceState(null, '', LANDING); showApp(); },
-      hash === '#/signup' && info.signup_open ? 'register' : 'login');
+      at === '/signup' && info.signup_open ? 'register' : 'login');
   };
   if (leaveDoor) leaveDoor();
-  window.addEventListener('hashchange', door);
-  leaveDoor = () => { window.removeEventListener('hashchange', door); leaveDoor = null; };
+  window.addEventListener('scene:route', door);
+  leaveDoor = () => { window.removeEventListener('scene:route', door); leaveDoor = null; };
   door();
 }
 
@@ -96,7 +97,7 @@ function showApp() {
     const first = menu.querySelector('a, button');
     if (first) first.focus();
   }
-  const signOut = async () => { await api('/api/auth/logout', { method: 'POST' }).catch(() => {}); history.replaceState(null, '', '#/'); showAuth(); };
+  const signOut = async () => { await api('/api/auth/logout', { method: 'POST' }).catch(() => {}); history.replaceState(null, '', '/'); showAuth(); };
 
   // Outside the canvas the sidebar is shown in full, down the left. In the canvas it folds into the menu above, so the
   // stage gets the whole width. Narrow screens always use the menu.
@@ -107,11 +108,11 @@ function showApp() {
 
   const drawNav = () => {
     const active = store.jobs.filter((j) => j.status === 'queued' || j.status === 'running').length;
-    const here = PAGES.find((p) => p.path === location.hash) || {};
+    const at = PAGES.find((p) => p.path === here()) || {};
     // The canvas folds the sidebar into the menu to free the stage; everywhere else shows it in full, unless the
     // screen is too narrow for a sidebar.
-    const compact = location.hash === '#/canvas' || narrow.matches;
-    const link = (p) => el('a', { href: p.path, role: 'menuitem', class: p.path === (here.under || here.path) ? 'on' : '', onclick: () => showMenu(false) },
+    const compact = here() === '/canvas' || narrow.matches;
+    const link = (p) => el('a', { href: p.path, role: 'menuitem', class: p.path === (at.under || at.path) ? 'on' : '', onclick: () => showMenu(false) },
       icon(p.icon), el('span', { class: 'grow' }, p.label));
     const shown = PAGES.filter((p) => !p.under && !p.menu);
     // While something is being made, the logo carries a mark and the menu a line that leads to the queue.
@@ -137,7 +138,7 @@ function showApp() {
       el('button', { role: 'menuitem', class: 'menu-item', onclick: signOut }, icon('logout'), 'Sign out'),
     ].filter(Boolean);   // a block left out (the server line, for a non-admin) is false, which would show as "false"
     shell.classList.toggle('compact', compact);
-    shell.classList.toggle('on-canvas', location.hash === '#/canvas');   // the canvas shows the balance in its own tool bar
+    shell.classList.toggle('on-canvas', here() === '/canvas');   // the canvas shows the balance in its own tool bar
     shell.classList.toggle('railed', !compact);
     if (compact) {
       sidebar.replaceChildren();
@@ -145,7 +146,7 @@ function showApp() {
     } else {
       showMenu(false);   // the dropdown never stays open once the full sidebar is showing
       sidebar.replaceChildren(
-        el('a', { class: 'sidebar-brand', href: '#/home', 'aria-label': 'Home' }, el('img', { src: '/assets/img/logo.svg?v=clapper', alt: '' }), el('b', {}, 'Scene.ai')),
+        el('a', { class: 'sidebar-brand', href: '/home', 'aria-label': 'Home' }, el('img', { src: '/assets/img/logo.svg?v=clapper', alt: '' }), el('b', {}, 'Scene.ai')),
         ...content());
     }
   };
@@ -155,8 +156,8 @@ function showApp() {
   };
   const drawCredits = () => credits.replaceChildren(creditMark(''), el('b', {}, Number(store.user.credits ?? 0).toLocaleString()), Number(store.user.credits) === 1 ? 'credit' : 'credits');
   const route = () => {
-    const target = PAGES.find((p) => p.path === location.hash);
-    if (!target) { location.hash = LANDING; return; }
+    const target = PAGES.find((p) => p.path === here());
+    if (!target) { go(LANDING, { replace: true }); return; }
     if (leavePage) leavePage();
     tabTitle(target.label);   // the canvas and the timeline put the name of their project here once it is loaded
     leavePage = target.page.render(view) || null;
@@ -181,11 +182,11 @@ function showApp() {
     if (change === 'status') { drawStatus(); offerReload(); }
     if (change === 'credits') drawCredits();
   });
-  window.addEventListener('hashchange', route);
+  window.addEventListener('scene:route', route);
   const onResize = () => drawNav();   // crossing the narrow breakpoint swaps the sidebar and the menu
   narrow.addEventListener('change', onResize);
   const leaveNews = announcement();
-  leaveShell = () => { unsubscribe(); leaveNews(); showMenu(false); narrow.removeEventListener('change', onResize); window.removeEventListener('hashchange', route); };
+  leaveShell = () => { unsubscribe(); leaveNews(); showMenu(false); narrow.removeEventListener('change', onResize); window.removeEventListener('scene:route', route); };
 
   startLive();
   refreshJobs().catch(() => {});
@@ -216,5 +217,7 @@ function announcement() {
 }
 
 window.addEventListener('scene:signed-out', () => { if (store.user) showAuth(); });
+oldAddress();   // /#/library from an old link becomes /library
+linkClicks();
 
 api('/api/auth/me').then((user) => { store.user = user; showApp(); }).catch(showAuth);

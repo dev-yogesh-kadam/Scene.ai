@@ -80,7 +80,7 @@ export function composer({ startFrom = () => null, projectId = () => null, onQue
       cells.push(cell('Length', lengths.map((d) => ({ id: d, label: d + ' s' })), form.values[dur.id], (d) => { form.values[dur.id] = Number(d); }));
     }
     for (const o of wf.options) cells.push(cell(o.label, o.choices, form.options[o.id], (id) => { form.options[o.id] = id; }));
-    cells.push(el('a', { class: 'cell link', href: '#/create', title: 'Open the full form on the Create page' }, el('span', {}, 'More'), 'All settings'));
+    cells.push(el('a', { class: 'cell link', href: '/create', title: 'Open the full form on the Create page' }, el('span', {}, 'More'), 'All settings'));
     readout.replaceChildren(...cells);
     refreshEstimate();
   }

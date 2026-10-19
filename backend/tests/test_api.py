@@ -1205,3 +1205,13 @@ def test_each_agent_tab_keeps_its_own_conversation(client):
     assert client.get("/api/boards/agent-abc2?project=%d" % project).json()["data"]["runs"]
     assert client.delete("/api/boards/canvas?project=%d" % project).status_code == 404
     assert client.get("/api/boards/agent-NOT_OK").status_code == 404 and client.get("/api/boards/agent-" + "x" * 40).status_code == 404
+
+
+def test_the_studio_pages_have_addresses_of_their_own(client):
+    root = client.get("/")
+    assert root.status_code == 200 and "<div id=\"app\">" in root.text
+    for path in ("/signin", "/signup", "/home", "/projects", "/library", "/skills", "/create", "/canvas", "/timeline", "/assets", "/settings", "/admin"):
+        page = client.get(path)
+        assert page.status_code == 200 and page.text == root.text, path
+    assert client.get("/nothing-here").status_code == 404
+    assert client.get("/assets/css/app.css").status_code == 200

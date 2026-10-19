@@ -43,7 +43,7 @@ export function render(view) {
   store.from = null;
   view.replaceChildren(
     el('div', { class: 'page-head' },
-      from === '#/canvas' && el('a', { class: 'btn', href: '#/canvas', title: 'Back to the canvas of this project' }, '← Canvas'),
+      from === '/canvas' && el('a', { class: 'btn', href: '/canvas', title: 'Back to the canvas of this project' }, '← Canvas'),
       el('h1', {}, 'Create'), tabs),
     el('div', { class: 'create' },
       el('div', { class: 'card create-form' },
@@ -53,7 +53,7 @@ export function render(view) {
       el('div', {},
         el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Queue')), queue),
         el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Latest'),
-          el('a', { class: 'btn small quiet', href: '#/library' }, 'Open library')), recent))));
+          el('a', { class: 'btn small quiet', href: '/library' }, 'Open library')), recent))));
 
   const byRole = (role) => form.wf.controls.find((c) => c.role === role);
   const showError = (e) => { error.textContent = e.message || String(e); };

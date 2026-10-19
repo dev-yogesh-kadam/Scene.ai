@@ -40,20 +40,20 @@ function screen() {
 export function renderLanding(root, { signupOpen }) {
   // A new button for each place it appears: one element can only stand in one place on the page.
   const join = () => (signupOpen
-    ? el('a', { class: 'btn generate lp-cta', href: '#/signup' }, 'Create an account')
-    : el('a', { class: 'btn generate lp-cta', href: '#/signin' }, 'Sign in'));
+    ? el('a', { class: 'btn generate lp-cta', href: '/signup' }, 'Create an account')
+    : el('a', { class: 'btn generate lp-cta', href: '/signin' }, 'Sign in'));
   root.replaceChildren(el('div', { class: 'lp' },
     el('header', { class: 'lp-top' },
-      el('a', { class: 'brand', href: '#/' }, el('img', { src: '/assets/img/logo.svg?v=clapper', alt: '' }), 'Scene.ai'),
+      el('a', { class: 'brand', href: '/' }, el('img', { src: '/assets/img/logo.svg?v=clapper', alt: '' }), 'Scene.ai'),
       el('nav', { class: 'lp-nav' },
-        el('a', { class: 'btn lp-outline', href: '#/signin' }, 'Sign in'),
-        signupOpen && el('a', { class: 'btn generate', href: '#/signup' }, 'Create an account'))),
+        el('a', { class: 'btn lp-outline', href: '/signin' }, 'Sign in'),
+        signupOpen && el('a', { class: 'btn generate', href: '/signup' }, 'Create an account'))),
 
     el('section', { class: 'lp-hero' },
       el('div', { class: 'lp-words' },
         el('h1', {}, 'Direct your scene.'),
         el('p', {}, 'A studio for making video, pictures and music with AI. Describe the shot, make takes, and cut them together, without touching a node graph.'),
-        el('div', { class: 'lp-actions' }, join(), signupOpen && el('a', { class: 'btn lp-outline lp-cta', href: '#/signin' }, 'Sign in'))),
+        el('div', { class: 'lp-actions' }, join(), signupOpen && el('a', { class: 'btn lp-outline lp-cta', href: '/signin' }, 'Sign in'))),
       screen()),
 
     el('section', { class: 'lp-section' },
@@ -80,6 +80,6 @@ export function renderLanding(root, { signupOpen }) {
       join()),
 
     el('footer', { class: 'lp-foot' },
-      el('span', {}, 'Scene.ai'), el('a', { href: '#/signin' }, 'Sign in'))));
+      el('span', {}, 'Scene.ai'), el('a', { href: '/signin' }, 'Sign in'))));
   window.scrollTo(0, 0);
 }

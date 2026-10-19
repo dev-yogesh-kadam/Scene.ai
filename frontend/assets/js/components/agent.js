@@ -8,6 +8,7 @@ import { store, subscribe, refreshJobs } from '../store.js';
 import { openViewer } from './media.js';
 import { pickLibraryItem } from './assets.js';
 import { chip, clock, fold, markdown, span, workRows } from './conversation.js';
+import { go } from '../nav.js';
 
 const KEPT = 60;   // how many turns an agent tab keeps
 const RECALLED = 40;   // how many earlier turns are sent along (the server keeps the newest that fit its budget)
@@ -223,8 +224,8 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
           el('code', { class: 'skillmenu-id' }, '/' + s.id)));
       }
     }
-    body.push(el('a', { class: 'skillmenu-item skillmenu-foot', href: '#/skills',
-      onmousedown: (e) => { e.preventDefault(); location.hash = '#/skills'; hideSkillMenu(); } },
+    body.push(el('a', { class: 'skillmenu-item skillmenu-foot', href: '/skills',
+      onmousedown: (e) => { e.preventDefault(); go('/skills'); hideSkillMenu(); } },
       el('span', { class: 'skillmenu-mark' }, icon('grid')), el('span', { class: 'skillmenu-text' }, el('b', {}, 'See all skills'))));
     return body;
   }

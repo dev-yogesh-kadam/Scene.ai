@@ -214,8 +214,10 @@ def create_app(settings=None):
         return int(max((f.stat().st_mtime for f in (frontend / "assets").rglob("*") if f.suffix in (".js", ".css")), default=0))
     app.state.page_version = page_version
 
-    @app.get("/", include_in_schema=False)
-    @app.get("/index.html", include_in_schema=False)
+    # The studio's pages have addresses of their own (/library, /canvas), all answered by the one page, which routes them.
+    PAGE_PATHS = ("/", "/index.html", "/signin", "/signup", "/home", "/projects", "/library", "/skills", "/create", "/canvas",
+                  "/timeline", "/assets", "/settings", "/admin")
+
     async def page():
         """The page, with its stylesheet and script fetched from under /v/<time of the last change>/.
 
@@ -228,6 +230,9 @@ def create_app(settings=None):
         for name in ("/assets/css/app.css", "/assets/js/theme.js", "/assets/js/main.js"):
             html = html.replace(name, "/v/{}{}".format(changed, name))
         return HTMLResponse(html)
+
+    for page_path in PAGE_PATHS:
+        app.get(page_path, include_in_schema=False)(page)
 
     @app.get("/v/{version}/assets/{path:path}", include_in_schema=False)
     async def versioned(version: str, path: str):

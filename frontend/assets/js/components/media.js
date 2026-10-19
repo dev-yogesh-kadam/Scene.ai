@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import { still, el, icon, duration, when } from '../dom.js';
 import { store } from '../store.js';
 import { saveAssetDialog } from './assets.js';
+import { go } from '../nav.js';
 
 const title = (text) => String(text).replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 const fileSize = (bytes) => (bytes >= 1e9 ? (bytes / 1e9).toFixed(1) + ' GB' : bytes >= 1e6 ? (bytes / 1e6).toFixed(1) + ' MB' : Math.round((bytes || 0) / 1e3) + ' KB');
@@ -100,7 +101,7 @@ async function useAsFirstFrame(item, button) {
   try {
     const ref = await api(`/api/library/${item.id}/reference`, { method: 'POST' });
     store.prefill = { slot: 'first_frame', ref, parent: item.id };
-    location.hash = '#/create';
+    go('/create');
     return true;
   } catch (e) { alert(e.message); if (button) button.disabled = false; return false; }
 }
@@ -110,7 +111,7 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
   const fileUrl = `/api/library/${item.id}/file`;
   const thumb = still(fileUrl, item.kind, item.name);
   const sound = item.kind === 'audio';   // a sound can't be the first frame of a video
-  const rerun = () => { store.rerun = item; location.hash = '#/create'; };
+  const rerun = () => { store.rerun = item; go('/create'); };
   const next = item.kind === 'video' ? 'Continue' : 'Use as first frame';
   const remove = async () => {
     if (!confirm(`Delete "${item.name}" from your library? This can't be undone.`)) return;

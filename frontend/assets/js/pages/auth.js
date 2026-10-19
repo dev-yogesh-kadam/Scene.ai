@@ -87,7 +87,7 @@ export async function renderAuth(root, onSignedIn, start = 'login') {
     root.replaceChildren(el('div', { class: 'auth' },
       el('div', { class: 'auth-hero' },
         el('div', { class: 'auth-frame', 'aria-hidden': 'true' }),
-        el('a', { class: 'brand', href: '#/', title: 'About Scene.ai' }, el('img', { src: '/assets/img/logo.svg?v=clapper', alt: '' }), 'Scene.ai'),
+        el('a', { class: 'brand', href: '/', title: 'About Scene.ai' }, el('img', { src: '/assets/img/logo.svg?v=clapper', alt: '' }), 'Scene.ai'),
         el('div', {},
           el('h2', {}, 'Direct your scene.'),
           el('p', {}, 'A studio for making videos and images with AI, without the node graphs.')),

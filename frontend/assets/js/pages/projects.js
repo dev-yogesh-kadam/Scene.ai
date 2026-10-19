@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import { still, el, icon, ago, initials, spill } from '../dom.js';
 import { subscribe } from '../store.js';
 import { projectDialog } from '../components/projects.js';
+import { go } from '../nav.js';
 
 export function render(view) {
   let projects = [];
@@ -19,7 +20,7 @@ export function render(view) {
 
   function open(id) {
     localStorage.setItem('scene.project', id || '');
-    location.hash = '#/canvas';
+    go('/canvas');
   }
   const run = (action) => action().then(load).catch((e) => alert(e.message));
   async function create() {

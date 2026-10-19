@@ -11,6 +11,7 @@ import { quickActions } from '../components/quick.js';
 import { agentTabs } from '../components/agent-tabs.js';
 import { memoryPanel } from '../components/memory.js';
 import { castEditor } from '../components/cast.js';
+import { go } from '../nav.js';
 
 const FRAME = 240;      // width of every frame, in canvas units
 const SLATE = 24;       // room under a frame for its line of facts
@@ -226,7 +227,7 @@ export function render(view) {
         el('h2', {}, asset.name),
         asset.about && el('p', { class: 'muted small' }, asset.about),
         asset.use_note && el('p', { class: 'small' }, el('b', {}, 'When to use: '), asset.use_note),
-        el('div', { class: 'dialog-buttons' }, el('a', { class: 'btn small quiet', href: '#/assets' }, 'Edit in Assets'),
+        el('div', { class: 'dialog-buttons' }, el('a', { class: 'btn small quiet', href: '/assets' }, 'Edit in Assets'),
           el('button', { class: 'btn small primary', onclick: () => dialog.close() }, 'Close'))));
     dialog.addEventListener('close', () => dialog.remove());
     document.body.append(dialog);
@@ -289,7 +290,7 @@ export function render(view) {
   const kinds = el('div');
   drawer.append(
     el('div', { class: 'library-head' }, el('b', {}, 'Library'), el('span', { style: 'flex:1' }),
-      el('a', { class: 'btn small quiet', href: '#/library' }, 'Open page'),
+      el('a', { class: 'btn small quiet', href: '/library' }, 'Open page'),
       el('button', { class: 'icon-btn', 'aria-label': 'Close the library', title: 'Close', onclick: () => toggleLibrary(false) }, '×')),
     kinds,
     el('input', { type: 'search', class: 'search', placeholder: 'Search by name', 'aria-label': 'Search the library',
@@ -328,7 +329,7 @@ export function render(view) {
     libraryButton, filePicker);
 
   view.replaceChildren(stage,
-    el('div', { class: 'float canvas-bar' }, picker, count, el('a', { class: 'btn small quiet', href: '#/timeline', title: 'Put this project\'s videos in order' }, 'Timeline')),
+    el('div', { class: 'float canvas-bar' }, picker, count, el('a', { class: 'btn small quiet', href: '/timeline', title: 'Put this project\'s videos in order' }, 'Timeline')),
     tools, drawer, toolNote,
     context,
     el('div', { class: 'float canvas-view' },
@@ -729,7 +730,7 @@ export function render(view) {
 
   const download = (item) => el('a', { href: `/api/library/${item.id}/file?download=true`, download: item.filename }).click();
   const open = (item) => openViewer(item, { actions: /^(edit|upload)\//.test(item.workflow) ? []
-    : [{ label: 'Re-run', run: (dialog) => { dialog.close(); store.rerun = item; store.from = '#/canvas'; location.hash = '#/create'; } }] });
+    : [{ label: 'Re-run', run: (dialog) => { dialog.close(); store.rerun = item; store.from = '/canvas'; go('/create'); } }] });
 
   async function addToTimeline(videos, button) {
     button.disabled = true;
@@ -760,7 +761,7 @@ export function render(view) {
       !one && el('span', { class: 'slate-text' }, `${chosen.length} selected`),
       one && el('button', { class: 'btn small quiet', onclick: () => open(one) }, 'Open'),
       one && !/^(edit|upload)\//.test(one.workflow) && el('button', { class: 'btn small quiet', title: 'Open Create with the same settings',
-        onclick: () => { store.rerun = one; store.from = '#/canvas'; location.hash = '#/create'; } }, 'Re-run'),
+        onclick: () => { store.rerun = one; store.from = '/canvas'; go('/create'); } }, 'Re-run'),
       videos.length > 0 && el('button', { class: 'btn small quiet', onclick: (e) => addToTimeline(videos, e.currentTarget) },
         one ? 'Add to timeline' : `Add ${videos.length} to timeline`),
       el('button', { class: 'btn small quiet', title: 'Download (D)', onclick: () => chosen.forEach(download) }, one ? 'Download' : `Download ${chosen.length}`),

@@ -41,7 +41,7 @@ export function render(view) {
   const body = el('div');
 
   view.replaceChildren(
-    el('div', { class: 'page-head' }, el('a', { class: 'btn', href: '#/canvas', title: 'Back to the canvas of this project' }, '← Canvas'), el('h1', {}, 'Timeline'), picker, name, exportButton),
+    el('div', { class: 'page-head' }, el('a', { class: 'btn', href: '/canvas', title: 'Back to the canvas of this project' }, '← Canvas'), el('h1', {}, 'Timeline'), picker, name, exportButton),
     notice, body);
 
   const span = (c) => c.end - c.start;
@@ -190,7 +190,7 @@ export function render(view) {
       const made = await api('/api/timeline/export', { method: 'POST', json: { name: name.value, project_id: project || null,
         clips: clips.map(({ id, start, end }) => ({ id, start, end })) } });
       notice.className = 'notice ok';
-      notice.replaceChildren(`Exporting "${made.name}". It will be in the library in a moment. `, el('a', { href: '#/library' }, 'Open the library'));
+      notice.replaceChildren(`Exporting "${made.name}". It will be in the library in a moment. `, el('a', { href: '/library' }, 'Open the library'));
       refreshJobs();
     } catch (e) {
       notice.className = 'notice error';
