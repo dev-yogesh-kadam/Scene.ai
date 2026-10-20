@@ -715,12 +715,15 @@ async def _planning(request, user, body, instruction, project):
     selection, shapes = [], {}   # shapes: item id -> [width, height], for shots that start on an item
     chosen = (body.get("selection") or [])[:MAX_SELECTION] if agent.points_at_selection(instruction) else []
     # A run that follows a long skill keeps every file attached to it: "go", and every message after the one the files
-    # came with, still has them (they come first, as they were attached), whether or not the model saved them itself.
+    # came with, still has them, whether or not the model saved them itself. The files of this message come first, so
+    # the @1, @2 the user wrote are theirs; the earlier ones follow, in the order they were attached.
     run_id = body.get("run") if isinstance(body.get("run"), str) and runs.RUN.match(body["run"]) else ""
+    tagged = len(chosen)   # the files the message's own @1, @2 … stand for
     if run_id and runs.kept_skill(state.db, user["id"], run_id):
         earlier = runs.kept_attached(state.db, user["id"], run_id)
         given = [i for i in body.get("selection") or [] if isinstance(i, int)]
-        chosen = (earlier + [i for i in given if i not in earlier])[:MAX_SELECTION]
+        chosen = (given + [i for i in earlier if i not in given])[:MAX_SELECTION]
+        tagged = len(given)
     for item_id in chosen:
         row = state.db.one("SELECT id, kind, name, filename, settings, context, about FROM generations WHERE id = ? AND user_id = ?", (item_id, user["id"]))
         if row:
@@ -796,6 +799,12 @@ async def _planning(request, user, body, instruction, project):
                 and listed["title"].lower() not in said and listed["id"].lower() not in said:
             continue
         schemas[listed["id"]] = workflows.describe(await state.catalog.load(listed["id"]))
+    # The pictures the user names in the message ("Maya - @3", "location - Bonfire Clearing - @10") are kept in shared
+    # memory under those names: every agent tab and every project knows them from then on, by name and by id.
+    named = memory.keep_named(state.db, state.assets_dir / str(user["id"]), state.outputs.folder(user["id"]), user["id"],
+                              memory.named_in(instruction, selection[:tagged]))
+    if named:
+        yield activity("book", "Kept in shared memory: " + ", ".join("{} ({})".format(n["name"], n["type"]) for n in named))
     pinned = cast.load(state.db, user["id"], project)
     # The asset book: what the agent knows of the project by name. Pictures it has not looked at yet are described now.
     book = memory.book(state.db, user["id"], project, pinned)
@@ -858,9 +867,16 @@ async def _planning(request, user, body, instruction, project):
         yield status("Checking what the skill needs…")
         ability = "\n".join(["Workflows: " + "; ".join("{} ({})".format(o["id"], o.get("title") or o["id"]) for o in offers),
                              STUDIO_ABILITY])
+        # What is attached, then what shared memory holds by name (characters, locations, props kept from any tab),
+        # then how many other files the project has.
+        kept = [e for e in book if "asset" in e]
+        others = {}
+        for e in book:
+            if "asset" not in e:
+                others[e["kind"]] = others.get(e["kind"], 0) + 1
         attached = "\n".join([attachment_line(s) for s in selection]
-                             + ["in the project: {} {}".format(n, k) for k, n in sorted(__import__("collections").Counter(
-                                 e["kind"] for e in book).items())]) if selection or book else ""
+                             + ["in shared memory: {} ({} {})".format(e["name"], e.get("type") or "other", e["kind"]) for e in kept]
+                             + ["in the project: {} {}".format(n, k) for k, n in sorted(others.items())]) if selection or book else ""
         try:
             verdict = await state.agent.preflight(skill, instruction, attached, ability, agent.past_turns(body.get("history")), **_model(body))
         except agent.AgentError:

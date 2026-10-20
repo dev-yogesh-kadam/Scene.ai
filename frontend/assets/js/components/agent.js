@@ -1166,12 +1166,13 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   }
 
   // Review every shot of an approved plan that has just finished, once. Edits, sounds and motion graphics are not
-  // reviewed: they are made from what the user already has.
+  // reviewed: they are made from what the user already has; nor are songs, voices and transcripts, which have no
+  // picture to look at.
   function reviewFinished() {
     for (const run of runs) {
       if (run.state !== 'approved') continue;
       for (const step of run.steps) {
-        if (!step.settings) continue;
+        if (!step.settings || (step.kind !== 'image' && step.kind !== 'video')) continue;
         for (const [take, first] of [[step, true], [step.take2, false]]) {
           if (!take || !take.job || take.review || take.reviewing || take.reviewError) continue;
           const job = store.jobs.find((j) => j.id === take.job);

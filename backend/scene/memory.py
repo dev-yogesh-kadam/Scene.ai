@@ -118,11 +118,86 @@ def keep_made(db, folder, user_id, item_id, source, kind, keep):
                   "VALUES (?, ?, ?, ?, ?, ?, ?, 'saved', ?)", (user_id, keep["name"], keep["tag"], kind, stored, size, time.time(), item_id))
 
 
+# ---------------------------------------------------------------- what the user names in a message
+
+# The words that start a part of a message about one type of file ("characters-", "props:"), or one line of it
+# ("location - Bonfire Clearing - @10").
+NAMED_TYPES = (("location", r"locations?|backgrounds?|places?|sets?|settings?"), ("prop", r"props?|objects?"),
+               ("outfit", r"outfits?|costumes?|wardrobe"), ("character", r"characters?|cast|people|persons?"))
+HEADER = re.compile(r"^\s*({})\s*[-:–—=]\s*".format("|".join(w for _, w in NAMED_TYPES)), re.IGNORECASE)
+TAG = re.compile(r"@(\d+)\b")
+SEPARATORS = " \t-:–—=,.;"
+# A picture named like an object, or described without a person in it, is not a character, whatever part of the
+# message it was named in (unless its own line says so).
+OBJECT = re.compile(r"\b(camera|phone|mic|microphone|bag|car|bike|motorbike|sword|gun|cup|mug|book|laptop|guitar|ball|hat|"
+                    r"glasses|bottle|watch|ring|necklace|drone|tripod|lamp|chair|table|box|key|umbrella|knife|torch|letter)s?\b", re.IGNORECASE)
+PERSON = re.compile(r"\b(woman|man|girl|boy|person|people|lady|guy|child|kid|teen|she|he|her|his|face|hair|wearing|character)\b", re.IGNORECASE)
+
+
+def _named_type(word):
+    return next(t for t, words in NAMED_TYPES if re.fullmatch(words, word, re.IGNORECASE))
+
+
+def named_in(instruction, selection):
+    """The attached pictures the user names in a message, as [{"item", "name", "type", "said"}]: "Maya - @3",
+    "@3 = Maya", "location - Bonfire Clearing - @10", or a name under a "characters-" / "props:" line. selection: the
+    message's attachments, each with its "tag" (@1, @2, …), "id", "kind" and maybe "shows". "said": whether its own
+    line said the type; a part of the message ("characters-") only suggests it, as an object can be listed there too."""
+    tags = {s["tag"]: s for s in selection if s.get("kind") == "image"}
+    found, section, seen = [], None, set()
+    for segment in re.split(r"[\n,]", str(instruction or "")):
+        header = HEADER.match(segment)
+        kind = _named_type(header.group(1)) if header else None
+        rest = segment[header.end():] if header else segment
+        marks = TAG.findall(rest)
+        if header and not marks and not rest.strip(SEPARATORS):
+            section = kind   # "characters-": the lines after it are characters
+            continue
+        if len(marks) != 1:
+            continue
+        before, _, after = rest.partition("@" + marks[0])
+        name = " ".join(before.strip(SEPARATORS).split()) or " ".join(after.strip(SEPARATORS).split())
+        item = tags.get("@" + marks[0])
+        if not item or item["id"] in seen or not re.search(r"[^\W\d_]", name) or len(name.split()) > 6:
+            continue
+        seen.add(item["id"])
+        found.append({"item": item["id"], "name": name[:60], "type": kind or section or "character", "said": bool(kind)})
+    return found
+
+
+def keep_named(db, folder, outputs, user_id, named):
+    """Keep the pictures the user named (named_in) in shared memory under those names, so every agent tab and every
+    project knows them, and the Shared memory tab shows them. A picture named like an object, or with no person in
+    what was seen of it, is a prop unless its own line said otherwise. Returns [{"asset", "name", "type"}] of the ones
+    kept now (not those kept already under the same name and type)."""
+    kept = []
+    for entry in named:
+        row = db.one("SELECT id, filename, about FROM generations WHERE id = ? AND user_id = ? AND kind = 'image'", (entry["item"], user_id))
+        source = outputs / row["filename"] if row else None
+        if not source or not source.is_file():
+            continue
+        kind = entry["type"]
+        if not entry["said"] and kind == "character" and (OBJECT.search(entry["name"]) or (row["about"] and not PERSON.search(row["about"]))):
+            kind = "prop"
+        tag = KEEP_AS[kind]
+        if db.one("SELECT 1 FROM assets WHERE user_id = ? AND made_from = ? AND tag = ? AND lower(name) = lower(?)",
+                  (user_id, row["id"], tag, entry["name"])):
+            continue   # kept already, as it is
+        asset = keep_made(db, folder, user_id, row["id"], source, "image", {"as": kind, "name": entry["name"]})
+        if asset:
+            if row["about"]:   # what was seen of the picture goes with it, so it is not looked at again
+                db.run("UPDATE assets SET about = ? WHERE id = ?", (row["about"], asset))
+            kept.append({"asset": asset, "name": entry["name"], "type": kind})
+    return kept
+
+
 # ---------------------------------------------------------------- the book and the panel
 
 def _asset_entry(row):
     entry = {"asset": row["id"], "name": row["name"], "type": TYPES.get(row["tag"], "other"), "kind": row["kind"],
              "shows": row["about"] or "", "_file": ("asset", row["filename"]), "_table": "assets"}
+    if row.get("made_from"):   # its library item too: a long run names files by their library id
+        entry["item"] = row["made_from"]
     if row["origin"] == "upload":
         entry["uploaded"] = True
     if row["use_note"]:
@@ -171,10 +246,11 @@ def book(db, user_id, project, pinned=None):
     pinned = pinned or {}
     in_cast = {pin["id"] for pin in pinned.values()}
     entries = [_asset_entry(row) for row in db.all(
-        "SELECT id, name, tag, kind, filename, about, use_note, origin FROM assets WHERE user_id = ? AND origin = 'saved' "
+        "SELECT id, name, tag, kind, filename, about, use_note, origin, made_from FROM assets WHERE user_id = ? AND origin = 'saved' "
         "ORDER BY tag, lower(name) LIMIT ?", (user_id, BOOK_ASSETS))]
     entries += [_asset_entry(row) for row in _uploads(db, user_id, project, BOOK_UPLOADS)]
-    rows = _project_items(db, user_id, project, BOOK_ITEMS)
+    named = {e["item"] for e in entries if e.get("item")}   # a picture kept under a name is in the book once, by that name
+    rows = [row for row in _project_items(db, user_id, project, BOOK_ITEMS) if row["id"] not in named]
     listed = {row["id"] for row in rows}
     for item_id in in_cast - listed:   # a cast picture from another project is in the book too
         row = db.one("SELECT id, name, kind, filename, about, settings, workflow, created, review, rating FROM generations "
