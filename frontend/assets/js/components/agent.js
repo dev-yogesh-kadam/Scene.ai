@@ -1335,36 +1335,10 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
           } }, option))));
   }
 
-  // Every job of a long run is counted against its budget: a retake, a still of the storyboard or a clip animated from it
-  // as much as a planned step. A conversation is a long run once the server has shown a budget for it.
+  // Every job of a long run is tagged as the run's (what it spent is kept with it, never shown or limited unless a budget
+  // is set): a retake, a still of the storyboard or a clip animated from it as much as a planned step. A conversation
+  // is a long run once the server has sent its run's spending for it.
   const runOf = () => (runs.some((r) => r.budget) ? { run_of: session || 'main' } : {});
-
-  // A long run's budget: what it has spent, and the most it may. The user sets it here (the agent cannot); a step that
-  // would pass it is refused by the server before anything is charged.
-  function budgetLine(run) {
-    const b = run.budget;
-    const ui = run.ui;
-    const done = () => { if (document.activeElement && log.contains(document.activeElement)) document.activeElement.blur(); };   // a focused field holds the log still
-    const save = async (credits) => {
-      done();
-      try {
-        run.budget = await api(`/api/runs/${session || 'main'}/budget`, { method: 'PUT', json: { credits } });
-        ui.editBudget = false;
-        saveRuns();
-      } catch (e) { alert(e.message); }
-      drawLog();
-    };
-    if (ui.editBudget) {
-      const field = el('input', { type: 'number', min: '0', step: '100', class: 'budget-field', value: b.credits ?? '', 'aria-label': 'Run budget in credits' });
-      return el('form', { class: 'turn-budget', onsubmit: (e) => { e.preventDefault(); save(field.value === '' ? null : Math.max(0, Math.round(Number(field.value)))); } },
-        el('span', {}, 'Run budget'), field, el('span', {}, 'cr'),
-        el('button', { type: 'submit', class: 'btn small primary' }, 'Save'),
-        el('button', { type: 'button', class: 'btn small quiet', onclick: () => { done(); ui.editBudget = false; drawLog(); } }, 'Cancel'));
-    }
-    return el('div', { class: 'turn-budget' },
-      el('span', {}, b.credits == null ? `Run budget: no limit · spent ${b.spent} cr` : `Run budget: ${b.spent} of ${b.credits} cr spent`),
-      el('button', { type: 'button', class: 'btn small quiet', onclick: () => { ui.editBudget = true; drawLog(); } }, b.credits == null ? 'Set a budget' : 'Change'));
-  }
 
   // The newest plan that waits for approval: its bar goes in the dock.
   const docked = () => [...runs].reverse().find((r) => r.state === 'proposed') || null;
@@ -1524,7 +1498,6 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
         className: 'thought', body: thought.text ? el('p', { class: 'fold-text' }, thought.text) : null }),
       run.reply && reply(run),
       run.question && asked(run),
-      run.budget && runs[runs.length - 1] === run && budgetLine(run),
       run.steps.length > 0 && plan(run),
       after.length > 0 && fold({ glyph: 'wrench', title: `Worked ${span((after[after.length - 1].at - (run.approvedAt || after[0].at)) / 1000)}`,
         sub: after[after.length - 1].text, state: (ui.after = ui.after || {}), onToggle: redraw, className: 'work',

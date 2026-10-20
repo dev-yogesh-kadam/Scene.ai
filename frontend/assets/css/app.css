@@ -578,8 +578,6 @@ svg.run rect { fill: none; rx: 12px; stroke: var(--accent); stroke-width: 2; str
 .sound svg.icon { width: 28px; height: 28px; }
 .sound span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .turn-question { margin: 10px 0 4px; display: grid; gap: 8px; }
-.turn-budget { margin: 6px 0 2px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
-.turn-budget .budget-field { width: 96px; }
 .turn-question-text { margin: 0; font-weight: 600; }
 .turn-question-options { display: flex; flex-wrap: wrap; gap: 8px; }
 .md-table { max-width: 100%; overflow-x: auto; margin: 8px 0; }

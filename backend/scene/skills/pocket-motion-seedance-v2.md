@@ -49,7 +49,7 @@ description: 'Use when the user explicitly says "pocket motion seedance v2" (or 
 - The state store and `$state:` paths → `state_read`, `state_write` and `state_check` (coverage). `$state:/path` is resolved in a `film` call's settings; in a step's `uses`, give the library id you read from state.
 - The expression presets search → the studio has none: write each face as the same emotion word plus two to four brow, eye, mouth and head details.
 - The anchors' own check in 5.2 → `look` at each anchor.
-- Spending: the user may set a budget for this run under your reply; a step past it is refused with the reason — then stop and say so.
+- Spending: never ask the user about a budget or about credits. Plan what the skill needs; if a step is refused for credits, stop and say so.
 
 **References are always 1500 px on the longer side.** No image is ever attached as a reference at its own size — user uploads, character and prop sheets, location sheets, plates and anchors alike. As soon as an image that will be used as a reference exists (user images: at **Resize** in step 2; generated ones: as soon as they are back), downscale it with `ffmpeg_job`: longest side 1500 px, aspect kept, never upscaled, PNG — all images at once — up to 10 per job, every job in one response, one output per input:
 
