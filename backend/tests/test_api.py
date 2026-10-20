@@ -1186,7 +1186,7 @@ def test_a_file_uploaded_on_the_canvas_joins_the_library_and_its_project(client)
     assert [i["id"] for i in listed] == [item["id"]] and client.get("/api/library/%d/file" % item["id"]).content == png
     # what is not the image, video or sound it says it is, and a project of someone else's, are refused
     assert client.post("/api/library/upload", files={"file": ("page.png", b"<html>", "image/png")}).status_code == 400
-    assert client.post("/api/library/upload", files={"file": ("notes.txt", b"hello", "text/plain")}).status_code == 400
+    assert client.post("/api/library/upload", files={"file": ("notes.exe", b"hello", "application/octet-stream")}).status_code == 400
     assert client.post("/api/library/upload", data={"project_id": "999"}, files={"file": ("a.png", png, "image/png")}).status_code == 404
     loose = client.post("/api/library/upload", files={"file": ("a.png", png, "image/png")}).json()
     assert loose["project_id"] is None and client.get("/api/auth/me").json()["credits"] == 500   # nothing is charged

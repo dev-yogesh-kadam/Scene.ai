@@ -29,12 +29,15 @@ def _board_kind(kind):
         raise HTTPException(404, "No such board.")   # the lengths a shot can be given on an approval card, in seconds
 MAX_BOARD_BYTES = 2_000_000   # an agent tab keeps its whole conversation
 MAX_CLIPS = 50
-LOCAL_SKILL_CHARS = 24_000   # the most of a skill a local model is given (about 6,000 tokens)
 CHECKED_SKILL = 4_000        # a skill longer than this, or one the user named with /command, is checked before the agent plans
 MOTION_WORKFLOW = credits.MOTION   # what a rendered motion graphic is filed and priced under
 STATE_PAGE = 25          # leaves of a run's state the agent is given at a time
 LIVE_EVERY = 1.0         # seconds between looks at what the agent's tools did while it works
+SLASH = re.compile(r"(?:^|(?<=\s))/([a-z0-9][a-z0-9-]*)(?=\s|$)")   # a /skill-id standing on its own, anywhere in a message
 RUN_ITEMS = 5000         # library items a long run's steps may name by id
+MAX_SELECTION = 24       # attached items read with one message (a long skill takes a cast, props and places at once)
+TEXT_OPENING = 400       # characters of an attached text shown with it, so it can be told for what it is
+TEXT_PAGE = 6000         # characters of a document the agent reads at a time
 FILM_WAIT = 900          # seconds the agent waits for one film operation (a long film joined, a retime) before giving up
 # What the studio can do beside its workflows, for the check of a skill before it starts.
 STUDIO_ABILITY = (
@@ -45,7 +48,8 @@ STUDIO_ABILITY = (
     "is heard in a voice track. A run state store (state_read, state_write, state_check) kept per conversation, written a leaf or a "
     "whole folder at a time. Reading a transcript (a transcription workflow's JSON, or an .srt the user uploads) into the state with "
     "its times exact, and working out every shot's frames from it (transcript, timing). Bringing pictures, clips and sounds in from "
-    "links on other sites (import_url). Questions to the user with two to four buttons; tables of pictures in a reply. A run goes on "
+    "links on other sites (import_url). Reading a script or document the user attached (read_text; Word files arrive as "
+    "their text). Questions to the user with two to four buttons; tables of pictures in a reply. A run goes on "
     "by itself when its steps are made, and may have a budget the user sets. A permission under the Agent box lets plans run "
     "without waiting for Approve. Looking at pictures and "
     "clips, reviewing results, remembering assets. Not here: running other programs or scripts, other models than the workflows listed.")
@@ -690,7 +694,7 @@ async def _planning(request, user, body, instruction, project):
         return {"type": "status", "text": text}
 
     selection, shapes = [], {}   # shapes: item id -> [width, height], for shots that start on an item
-    chosen = (body.get("selection") or [])[:8] if agent.points_at_selection(instruction) else []
+    chosen = (body.get("selection") or [])[:MAX_SELECTION] if agent.points_at_selection(instruction) else []
     for item_id in chosen:
         row = state.db.one("SELECT id, kind, name, filename, settings, context, about FROM generations WHERE id = ? AND user_id = ?", (item_id, user["id"]))
         if row:
@@ -703,8 +707,12 @@ async def _planning(request, user, body, instruction, project):
             if made.get("width") and made.get("height"):
                 shapes[row["id"]] = [made["width"], made["height"]]
             path = state.outputs.folder(user["id"]) / row["filename"]
-            if row["kind"] == "video" and path.is_file():   # the length is what the editing tools cut by
+            if row["kind"] in ("video", "audio") and path.is_file():   # the length is what the editing tools cut by
                 selection[-1]["seconds"] = round((await media.probe(path))["seconds"], 2)
+            elif row["kind"] == "text" and path.is_file():   # a script or a document: how long it is, and how it begins
+                words = path.read_text(encoding="utf-8-sig", errors="replace")
+                selection[-1]["characters"] = len(words)
+                selection[-1]["begins"] = " ".join(words[:TEXT_OPENING].split())
     if selection:
         yield activity("attach", "Read what you attached: " + ", ".join(s["name"] for s in selection))
 
@@ -715,14 +723,20 @@ async def _planning(request, user, body, instruction, project):
     known = {s["id"]: {"name": s["name"], "kind": s["kind"]} for s in selection}
     known.update({r["id"]: {"name": r["name"], "kind": r["kind"]} for r in recent if r["id"] not in known})
 
-    # The user can name a skill with /<id> at the start of the message, or the panel can pass skill ids; those are
-    # always used. The rest are picked by what the message says, as before.
+    # The user can name a skill with /<id> anywhere in the message (at its start, after the files they attached, at its
+    # end), or the panel can pass skill ids; those are always used. The rest are picked by what the message says.
     forced = list(body.get("skills") or [])
-    match = re.match(r"\s*/([a-z0-9][a-z0-9-]*)\s*", instruction)
-    if match and skills.find(match.group(1)):
-        forced.append(match.group(1))
-        instruction = instruction[match.end():].strip()   # the /command is an instruction to the agent, not shot text
+    instruction = re.sub(r"(@\d+)(?=/)", lambda m: m.group(1) + " ", instruction)   # a command typed straight after an attached file (@1/skill)
+    for match in reversed(list(SLASH.finditer(instruction))):
+        if skills.find(match.group(1)):
+            forced.insert(0, match.group(1))
+            # the /command is an instruction to the agent, not shot text
+            instruction = (instruction[:match.start()] + " " + instruction[match.end():]).strip()
+    instruction = re.sub(r"[ \t]{2,}", " ", instruction)
     picked = skills.pick(instruction, body.get("history"), force=forced)
+    # A long skill the user named is the whole procedure: no other skill picked by the message's words goes beside it.
+    if any(s["id"] in forced and len(s["text"]) > CHECKED_SKILL for s in picked):
+        picked = [s for s in picked if s["id"] in forced]
     for skill in picked:
         yield activity("skill", "Read the skill “{}”".format(skill["title"]))
     # A long skill asks the user which models to use, so it is shown every one; and a model named anywhere in the
@@ -775,12 +789,28 @@ async def _planning(request, user, body, instruction, project):
         if problem:
             raise HTTPException(400, problem)
     charged = {"credits": 0, "model": chosen_model}
-    # A local model is not given more of a skill than it can hold; a hosted one reads it whole.
-    limit = skills.MAX_CHARS if state.agent._service_of(chosen_model)[0] is not None else LOCAL_SKILL_CHARS
+    # A skill is given whole when the model holds it; a longer one as its opening and a list of its parts, which the
+    # model reads with read_skill as it comes to them. A skill is never cut, whatever its length or the model.
+    room = state.agent.skill_room(chosen_model)
+    limit = skills.MAX_CHARS if room is None else room
     for skill in picked:
         if len(skill["text"]) > limit:
-            yield activity("skill", "“{}” is long: this model reads its first {:,} characters".format(skill["title"], limit))
+            yield activity("skill", "“{}” is long ({:,} characters): the model reads its opening, and each of its {} parts as it "
+                                    "comes to them".format(skill["title"], len(skill["text"]), len(skills.parts(skill["text"])) - 1))
     guides = skills.guide(picked, limit)
+    # A long skill is read in parts with a tool and run with the studio's tools: a model that is not given tools (a local
+    # one with local_tools off) cannot follow it, and the user is told so at once rather than getting a run that goes wrong.
+    unread = next((s for s in picked if s["id"] in forced and len(s["text"]) > CHECKED_SKILL), None) \
+        if not state.agent.uses_tools(chosen_model) else None
+    if unread:
+        said = ("“{}” runs in steps with the studio's tools, and local models are set to work without them. Turn local_tools on "
+                "in config.json (or pick a hosted model in the menu under the box) and send the message again: your files stay "
+                "attached.").format(unread["title"])
+        yield activity("skip", "“{}” needs the studio's tools".format(unread["title"]))
+        yield {"type": "plan", "reply": said, "thought": "", "activity": log, "seconds": round(time.monotonic() - started, 1), "chips": {},
+               "direction": body.get("direction") or "", "steps": [], "total": 0, "llm": charged,
+               "balance": state.credits.balance(user["id"])}
+        return
     # A skill the user named, or a long one (they are written by people, and say what they need first), is checked before
     # anything is planned: what it requires that is not here, and what it names that this studio cannot do, is said at once.
     adaptation = ""
@@ -790,17 +820,29 @@ async def _planning(request, user, body, instruction, project):
         yield status("Checking what the skill needs…")
         ability = "\n".join(["Workflows: " + "; ".join("{} ({})".format(o["id"], o.get("title") or o["id"]) for o in offers),
                              STUDIO_ABILITY])
-        attached = "\n".join(["{} {} ({})".format(s["tag"], s["name"], s["kind"]) for s in selection]
+        attached = "\n".join([attachment_line(s) for s in selection]
                              + ["in the project: {} {}".format(n, k) for k, n in sorted(__import__("collections").Counter(
                                  e["kind"] for e in book).items())]) if selection or book else ""
         try:
             verdict = await state.agent.preflight(skill, instruction, attached, ability, agent.past_turns(body.get("history")), **_model(body))
         except agent.AgentError:
             continue   # a check that cannot run is not a reason to refuse
+        # What the check calls missing while the user attached a file of that kind (a sound for "the audio", a text for
+        # "the script") is set aside: a model may doubt a file it cannot open, and a run blocked for nothing is worse than
+        # one whose skill asks again at its first step.
+        covered = [m for m in verdict["missing"] if attached_kind(m, selection)]
+        if covered:
+            verdict = dict(verdict, missing=[m for m in verdict["missing"] if m not in covered])
+            yield activity("check", "Set aside what the check called missing but you attached: {}".format("; ".join(covered)))
+            if not verdict["missing"] and not verdict["unsupported"]:
+                verdict = dict(verdict, ready=True)
         if verdict["ready"]:
             adaptation = verdict["adaptation"] or adaptation
             continue
-        said = verdict["message"] or "Before I start “{}”, I need:\n{}".format(skill["title"], "\n".join("- " + m for m in verdict["missing"] or verdict["unsupported"]))
+        written = verdict["message"] if not covered else ""   # its message was about the files: it no longer stands
+        said = written or "Before I start “{}”, {}:\n{}".format(
+            skill["title"], "I need" if verdict["missing"] else "this studio cannot do what it asks here",
+            "\n".join("- " + m for m in verdict["missing"] or verdict["unsupported"]))
         yield activity("skip", "Checked “{}”: {}".format(skill["title"], "needs " + "; ".join(verdict["missing"]) if verdict["missing"]
                                                          else "cannot be run as written here"))
         yield {"type": "plan", "reply": said, "thought": "", "activity": log, "seconds": round(time.monotonic() - started, 1), "chips": {},
@@ -822,7 +864,7 @@ async def _planning(request, user, body, instruction, project):
             + " ORDER BY id DESC LIMIT ?", (user["id"], run, *([project] if project else []), RUN_ITEMS))}, **kinds}
     videos = [s for s in selection if s.get("seconds")]
 
-    with_tools = state.agent._service_of(chosen_model)[0] is not None and body.get("tools", True) is not False
+    with_tools = state.agent.uses_tools(chosen_model) and body.get("tools", True) is not False
     # A long run (a long skill) keeps its state under the conversation's id and works in many more tool calls.
     rounds = agent.RUN_ROUNDS if run and any(len(s["text"]) > CHECKED_SKILL for s in picked) else agent.TOOL_ROUNDS
     tool_events = []   # what the tools did, shown as the agent's work once the answer is in
@@ -921,6 +963,39 @@ async def _planning(request, user, body, instruction, project):
             return "Not written: {}".format(error)
         noted("book", "Wrote {} of the run".format(written["path"]))
         return "Written: {}".format(written["path"])
+
+    async def read_skill(call):
+        named = str(call.get("op") or "").strip()
+        skill = next((s for s in picked if s["id"] == named), None) or (picked[0] if len(picked) == 1 else None)
+        if skill is None:
+            return "Name the skill in op: {}.".format(", ".join(s["id"] for s in picked) or "no skill is in use")
+        text, problem = skills.read_part(skill, call.get("query"), call.get("offset") or 0)
+        if problem:
+            return problem
+        noted("skill", "Read “{}” of “{}”".format(" ".join(str(call.get("query") or "").split())[:40], skill["title"]))
+        return text
+
+    async def read_text(call):
+        row = state.db.one("SELECT name, filename FROM generations WHERE id = ? AND user_id = ? AND kind = 'text'", (call.get("item"), user["id"])) \
+            if isinstance(call.get("item"), int) else None
+        path = state.outputs.folder(user["id"]) / row["filename"] if row else None
+        if not path or not path.is_file():
+            return "That item is not a text in the library."
+        words = path.read_text(encoding="utf-8-sig", errors="replace")
+        if call.get("path"):
+            if not run:
+                return no_run()
+            try:
+                runs.write(state.db, user["id"], run, call["path"], words, "read_text")
+            except runs.RunError as error:
+                return "Not kept: {}".format(error)
+            noted("book", "Kept “{}” in {} ({:,} characters)".format(row["name"], call["path"], len(words)))
+        offset = max(0, int(call.get("offset") or 0))
+        page = words[offset:offset + TEXT_PAGE]
+        noted("book", "Read “{}”".format(row["name"]))
+        more = "" if offset + len(page) >= len(words) else "\n[{:,} of {:,} characters shown: call again with offset {}.]".format(
+            offset + len(page), len(words), offset + len(page))
+        return page + more
 
     async def read_transcript(call):
         if not run:
@@ -1037,7 +1112,7 @@ async def _planning(request, user, body, instruction, project):
 
     tools = {"find_assets": find_assets, "look": look, "check_shots": check_shots, "review": review_it, "save_note": save_note,
              "state_read": state_read, "state_write": state_write, "state_check": state_check, "film": film_op, "import_url": import_url,
-             "transcript": read_transcript, "timing": timing}
+             "transcript": read_transcript, "timing": timing, "read_text": read_text, "read_skill": read_skill}
 
     async def plan(message):
         """One answer of the model, timed, and the steps of it that can run. Returns (answer, steps, dropped, seconds)."""
@@ -1051,7 +1126,7 @@ async def _planning(request, user, body, instruction, project):
         asking = agent.question(message, offers, selection, state.catalog.current(state.settings.default_workflow),
                                 agent.past_turns(body.get("history")), pinned, recent, memory.book_for_model(book), "" if first else guides,
                                 body.get("direction") or "")
-        if with_tools:   # a hosted model works in a loop of tool calls; a local one answers once
+        if with_tools:   # the model works in a loop of tool calls (a local one too, unless local_tools is off)
             answer = await state.agent.ask_with_tools(system, asking, [o["id"] for o in offers], tools, finishing, rounds=rounds, **_model(body))
         else:
             answer = await state.agent.ask(system, asking, [o["id"] for o in offers], **_model(body))
@@ -1295,3 +1370,28 @@ async def _finished(state, job_id, timeout=FILM_WAIT):
             return job
         await asyncio.sleep(0.4)
 
+
+def attachment_line(item):
+    """One attached item as the check of a skill is told it: its tag, its name and what it is, by its content."""
+    what = {"audio": "a sound", "video": "a video", "image": "a picture", "text": "a text"}.get(item["kind"], item["kind"])
+    if item.get("seconds"):
+        what += ", {:.1f} s long".format(item["seconds"])
+    if item["kind"] == "text" and "characters" in item:
+        what += " of {:,} characters, which begins: “{}”".format(item["characters"], item.get("begins", ""))
+    return "{} {} ({})".format(item["tag"], item["name"], what)
+
+
+# The kinds of file a missing thing may be, by its words: what the check of a skill calls missing is given when the user
+# attached a file of that kind.
+KIND_WORDS = {
+    "audio": re.compile(r"\b(audio|sound|voice|mix|track|music|song|narration|recording|mp3|wav|stem)\b", re.I),
+    "text": re.compile(r"\b(script|text|document|screenplay|story|transcript|srt|lyrics|article|words|doc|docx)\b", re.I),
+    "image": re.compile(r"\b(image|images|picture|pictures|photo|photos|still|stills|sheet|sheets|character|characters|location|locations|prop|props)\b", re.I),
+    "video": re.compile(r"\b(video|clip|clips|footage)\b", re.I),
+}
+
+
+def attached_kind(missing, selection):
+    """The kind of attached file that answers a thing the check called missing, or None."""
+    have = {s["kind"] for s in selection}
+    return next((kind for kind, words in KIND_WORDS.items() if kind in have and words.search(str(missing))), None)

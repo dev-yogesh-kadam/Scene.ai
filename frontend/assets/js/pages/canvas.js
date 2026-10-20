@@ -245,7 +245,7 @@ export function render(view) {
     toolNote.classList.toggle('hidden', !text);
     if (!stay) noteTimer = setTimeout(() => toolNote.classList.add('hidden'), error ? 6000 : 2500);
   };
-  const filePicker = el('input', { type: 'file', accept: 'image/*,video/*,audio/*', multiple: true, hidden: true,
+  const filePicker = el('input', { type: 'file', accept: 'image/*,video/*,audio/*,.docx,.txt,.md,.srt,.json', multiple: true, hidden: true,
     onchange: (e) => { uploadFiles([...e.target.files]); e.target.value = ''; } });
   // Each file joins the library and this project, and lands on the canvas as a shot of its own.
   async function uploadFiles(files) {

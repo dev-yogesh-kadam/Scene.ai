@@ -76,14 +76,15 @@ async def upload_item(request: Request, user: dict = Depends(current_user)):
     upload = form.get("file")
     if not hasattr(upload, "filename"):
         raise HTTPException(400, "Choose a file.")
-    if text_kind(upload.filename):
-        data, kind = await read_text_upload(upload), "text"
+    filename = upload.filename
+    if text_kind(upload.filename):   # a script or a transcript: kept as its words (a Word file as plain text)
+        (data, filename), kind = await read_text_upload(upload), "text"
     else:
         data = await read_upload(upload)   # refuses what is too large or is not the image, video or sound it says it is
         kind = media_kind(upload.filename)
     project = str(form.get("project_id") or "")
     project_id = _own_project(request, user, int(project))["id"] if project.isdigit() and int(project) else None
-    return await _file_in(request, user, data, upload.filename, kind, project_id, "Uploaded")
+    return await _file_in(request, user, data, filename, kind, project_id, "Uploaded")
 
 
 IMPORTED = "upload/link"   # an item brought in from a link on another site
@@ -113,6 +114,12 @@ async def _file_in(request, user, data, filename, kind, project_id, summary, wor
     name = name or (filename.rsplit(".", 1)[0].strip() or kind)[:80]
     target = folder / "{}_{}_{}".format("upload", time.strftime("%Y%m%d_%H%M%S"), safe_name(filename))
     target.write_bytes(data)
+    # A "video" that is only a sound (cover art, or one frame held still: audio exported "as a video") is kept as the
+    # sound it is, its codec copied, and filed as audio.
+    if kind == "video" and await media.sound_only(target):
+        sound = await media.keep_sound(target, target.stem)
+        target.unlink(missing_ok=True)
+        target, kind, data = sound, "audio", sound.read_bytes()
     context = {}
     if kind in ("video", "image"):
         found = await media.probe(target)

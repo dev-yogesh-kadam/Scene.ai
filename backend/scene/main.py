@@ -96,7 +96,10 @@ def create_app(settings=None):
     comfy = Comfy(lambda: db.setting("comfy_url", settings.comfy_url))
     catalog = Catalog(settings.path("workflows_dir"), comfy, storage / "cache" / "node_definitions.json")
     credits = Credits(db, settings)
-    agent = Agent(settings.ollama_url, settings.agent_model, local=settings.ollama_models, services=[
+    agent = Agent(settings.ollama_url, settings.agent_model, local=settings.ollama_models, options={
+        "context": settings.ollama_context, "timeout": settings.ollama_timeout, "keep_alive": settings.ollama_keep_alive,
+        "vision": settings.ollama_vision_model, "fast": settings.ollama_fast_model, "think": settings.ollama_think,
+        "tools": settings.local_tools}, services=[
         service(settings.api_name.strip().lower().replace(" ", "-") or "api", settings.api_name, settings.api_url, settings.api_key, settings.api_models),
         service("gemini", "Gemini", settings.gemini_url, settings.gemini_key, settings.gemini_models,
                 only=r"^gemini-[\d.]+-(pro|flash)(-lite)?(-preview)?$"),

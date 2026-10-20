@@ -38,7 +38,8 @@ def client(tmp_path):
     """The app with empty storage and a render server address nothing listens on."""
     if POSTGRES:
         empty_postgres()
-    settings = Settings(database_url=POSTGRES, comfy_url="http://127.0.0.1:9", ollama_url="http://127.0.0.1:9", storage_dir=str(tmp_path), signup_credits=500, first_account_local=False,
+    # local_tools off: these tests fake a local model that answers once; the tool loop of local models has tests of its own.
+    settings = Settings(database_url=POSTGRES, comfy_url="http://127.0.0.1:9", ollama_url="http://127.0.0.1:9", local_tools=False, storage_dir=str(tmp_path), signup_credits=500, first_account_local=False,
                         workflows_dir=str(ROOT / "workflows"), frontend_dir=str(ROOT / "frontend"))
     with TestClient(create_app(settings)) as test_client:
         # The video workflow is a normal ComfyUI save: it is read with the node definitions a real server gave.

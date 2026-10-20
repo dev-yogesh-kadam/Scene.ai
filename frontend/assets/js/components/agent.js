@@ -170,8 +170,9 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   }
   drawPermission();
 
-  // Skills: the square box opens a picker with a search field; typing /name in the message filters the same list
-  // inline. Choosing one puts /<id> at the start of the message, where the agent reads it. Fetched once.
+  // Skills: the square box opens a picker with a search field; typing /name anywhere in the message (at its start, after
+  // a space, or after an attached file) filters the same list inline. Choosing one from the box puts /<id> at the start
+  // of the message; choosing one while typing puts it where the slash was. The agent reads it wherever it is. Fetched once.
   let skillList = null;
   let skillMenu = null;    // the floating panel element, or null while closed
   let skillMode = null;    // 'box' (opened from the button, has its own search) or 'slash' (filtered by the message)
@@ -189,18 +190,25 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     if (!skillList) { try { skillList = (await api('/api/skills')).skills || []; } catch { skillList = []; } }
     return skillList;
   }
-  // What the user is typing after a leading "/", or null when the message is not (any longer) a skill command.
+  // The "/name" just before the cursor, while it is being typed: a slash at the start of the text, after a space or after
+  // an attached file, then letters, digits and dashes up to the cursor. {node, start, end, query}, or null.
+  let slashAt = null;
   function slashQuery() {
-    const m = /^\s*\/(\S*)$/.exec(input.textContent || '');   // a slash, some non-space, nothing after: still choosing
-    return m ? m[1].toLowerCase() : null;
+    const sel = window.getSelection();
+    if (!sel.rangeCount || !sel.isCollapsed) return null;
+    const { startContainer: node, startOffset: offset } = sel.getRangeAt(0);
+    if (node.nodeType !== Node.TEXT_NODE || !input.contains(node)) return null;
+    const m = /(?:^|\s)\/([a-z0-9-]{0,60})$/i.exec(node.textContent.slice(0, offset));
+    return m ? { node, start: offset - m[1].length - 1, end: offset, query: m[1].toLowerCase() } : null;
   }
   // The skills to show for a query, in groups. No query: recently used, then the rest.
   function skillGroups(query) {
     const all = skillList || [];
     const q = (query || '').trim().toLowerCase();
     if (q) {
-      const hit = (s) => s.id.includes(q) || s.title.toLowerCase().includes(q) || (s.desc || '').toLowerCase().includes(q);
-      return [{ label: 'Results', skills: all.filter(hit) }];
+      // The closest first: a name that starts with what was typed, then one that has it, then a title, then a description.
+      const rank = (s) => (s.id.startsWith(q) ? 0 : s.id.includes(q) ? 1 : s.title.toLowerCase().includes(q) ? 2 : (s.desc || '').toLowerCase().includes(q) ? 3 : 9);
+      return [{ label: 'Results', skills: all.filter((s) => rank(s) < 9).sort((a, b) => rank(a) - rank(b)) }];
     }
     const recent = recentIds().map((id) => all.find((s) => s.id === id)).filter(Boolean);
     const groups = recent.length ? [{ label: 'Recently used', skills: recent }] : [];
@@ -287,17 +295,38 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   // Called as the message changes: open or refresh the inline menu while it reads like "/name", close it otherwise.
   async function onInputChanged() {
     const q = slashQuery();
+    slashAt = q;
     if (q === null) { if (skillMode === 'slash') hideSkillMenu(); return; }
     await ensureSkills();
-    skillSearch = q;   // the text after the slash is the filter; the menu's search field mirrors it
+    skillSearch = q.query;   // the text after the slash is the filter; the menu's search field mirrors it
     if (skillMode === 'slash' && skillMenu) skillMenu._redraw();
     else { skillAt = 0; openSkillMenu('slash'); }
   }
   function activateSkill(id) {
-    useSkill(id);
+    if (skillMode === 'slash' && slashAt && slashAt.node.isConnected) putSkillHere(id, slashAt);
+    else useSkill(id);
+    slashAt = null;
     pushRecent(id);
     hideSkillMenu();
     input.focus();
+  }
+  // Put "/<id> " where the "/name" being typed is, and leave the cursor after it.
+  function putSkillHere(id, at) {
+    const text = at.node.textContent;
+    // straight after an attached file there is no space yet: one goes in, so the command stands on its own
+    let before = at.node.previousSibling;
+    while (before && before.nodeType === Node.TEXT_NODE && !before.textContent) before = before.previousSibling;   // empty text the browser left
+    const glued = at.start === 0 && before && before.nodeType !== Node.TEXT_NODE;
+    const tag = (glued ? ' ' : '') + '/' + id + ' ';
+    at.node.textContent = text.slice(0, at.start) + tag + text.slice(at.end).replace(/^\s+/, '');
+    input.focus();
+    const range = document.createRange();
+    range.setStart(at.node, at.start + tag.length);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    rememberCaret();
   }
   // Put "/<id> " at the very start of the message (where the agent reads it) and leave the cursor after it.
   function useSkill(id) {
@@ -432,7 +461,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     drawSuggest();
   } });
   // "+": attach a file from the computer (it joins the project's library and canvas), from the canvas, or from the library.
-  const upload = el('input', { type: 'file', accept: 'image/*,video/*,audio/*,.srt,.json', multiple: true, hidden: true,
+  const upload = el('input', { type: 'file', accept: 'image/*,video/*,audio/*,.docx,.txt,.md,.srt,.json', multiple: true, hidden: true,
     onchange: async (e) => {
       const files = [...e.target.files];
       e.target.value = '';

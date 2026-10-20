@@ -7,6 +7,7 @@ or from the system if that package is missing.
 import asyncio
 import re
 import shutil
+from pathlib import Path
 
 FPS = 24
 
@@ -122,6 +123,46 @@ async def join(clips, target):
         args += ["-map", "[a]", "-c:a", "aac", "-b:a", "192k"]
     args += ["-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p", "-movflags", "+faststart", target]
     await _ffmpeg(*args)
+    return target
+
+
+STILL_BITRATE = 60   # kb/s: a picture this thin may be one frame held still; anything richer is a real video
+
+# A sound kept as it is, in the file type its codec belongs in; any other sound is made AAC in an .m4a.
+SOUND_FILES = {"aac": ".m4a", "mp3": ".mp3", "flac": ".flac", "opus": ".ogg", "vorbis": ".ogg", "pcm_s16le": ".wav", "pcm_s24le": ".wav"}
+
+
+async def sound_only(path):
+    """Whether a video file is really a sound: it has sound, and its picture is cover art, or one frame that never
+    changes from start to end (what some apps make when they export audio "as a video")."""
+    text = await _ffmpeg("-i", path, check=False)
+    if not re.search(r"Stream #\S+.*Audio:", text):
+        return False
+    video = re.search(r"Stream #\S+.*Video:.*", text)
+    if not video:
+        return True
+    if "(attached pic)" in video.group(0):
+        return True
+    rate = re.search(r"(\d+) kb/s", video.group(0))
+    if not rate or int(rate.group(1)) > STILL_BITRATE:
+        return False
+    # Thin enough to be a still: check that the picture really never moves.
+    seconds = (await probe(path))["seconds"]
+    said = await _ffmpeg("-i", path, "-map", "0:v:0", "-vf", "freezedetect=n=0.003:d=0.5", "-f", "null", "-", check=False)
+    starts = [float(s) for s in re.findall(r"freeze_start: ([\d.]+)", said)]
+    ends = [float(s) for s in re.findall(r"freeze_end: ([\d.]+)", said)]
+    return bool(starts) and starts[0] <= 0.1 and (not ends or ends[-1] >= seconds - 0.2)
+
+
+async def keep_sound(path, stem):
+    """The sound of a file, without its picture, as a file of its own next to it: its codec copied when it fits a sound
+    file, made AAC otherwise. stem: the new file's name without its type. Returns the new path."""
+    text = await _ffmpeg("-i", path, check=False)
+    codec = re.search(r"Stream #\S+.*Audio: (\w+)", text)
+    suffix = SOUND_FILES.get(codec.group(1) if codec else "", ".m4a")
+    target = Path(path).with_name(stem + suffix)
+    copy = codec and codec.group(1) in SOUND_FILES
+    await _ffmpeg("-loglevel", "error", "-i", path, "-map", "0:a:0", "-vn", *(["-c:a", "copy"] if copy else ["-c:a", "aac", "-b:a", "192k"]), target)
     return target
 
 

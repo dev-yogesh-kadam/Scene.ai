@@ -185,8 +185,11 @@ def test_a_skill_with_a_header_from_another_tool_is_read(tmp_path):
     assert pm["title"] == "Pocket Motion" and pm["desc"] == "Audio and script to a film" and pm["text"].startswith("# Pocket")
     assert pm["words"].search("please run Pocket   Motion V2 now") and not pm["words"].search("a film")
     assert found["plain"]["text"].startswith("# A plain note")
-    long = dict(pm, text="x" * 100)
-    assert "cut" in skills.guide([long], limit=10) and "x" * 11 not in skills.guide([long], limit=10)
+    # a skill longer than the model's room is never cut: it comes as its opening and a list of its parts
+    long = dict(pm, text="Rules first.\n\n## 1 - Inputs\n" + "x" * 100 + "\n\n## 2 - Render\nCut it.")
+    given = skills.guide([long], limit=60)
+    assert "Rules first." in given and "1. 1 - Inputs (" in given and "2. 2 - Render" in given and "x" * 100 not in given
+    assert skills.read_part(long, "2")[0].startswith("## 2 - Render") and skills.read_part(long, "inputs")[0].count("x") == 100
 
 
 def test_a_named_skill_is_checked_before_the_agent_plans(client, monkeypatch, tmp_path):
@@ -214,3 +217,27 @@ def test_a_named_skill_is_checked_before_the_agent_plans(client, monkeypatch, tm
     monkeypatch.setattr(client.app.state.agent, "chat", ready)
     plan = client.post("/api/agent/plan", json={"instruction": "/pocket-motion-seedance-v2 go on with what you have"}).json()
     assert [s["name"] for s in plan["steps"]] == ["Dog in the park"] and "Agreed with the user about this skill: Make it with" in asked[0]
+
+
+def test_a_skill_is_named_anywhere_in_the_message(client, monkeypatch, tmp_path):
+    from scene import skills
+    register(client)
+    (tmp_path / "pocket-motion-seedance-v2.md").write_text(
+        "---\nname: pocket-motion-seedance-v2\nlabel: Pocket Motion\n---\n\nAudio and script are mandatory.\n", encoding="utf-8")
+    shipped = skills.load
+    monkeypatch.setattr(skills, "load", lambda folder=None: shipped(tmp_path))
+    sent = []
+
+    async def check(messages, answer_format, **kwargs):
+        sent.append(messages[-1]["content"])
+        return {"ready": False, "missing": ["the script"], "unsupported": [], "adaptation": "", "message": "I need the script."}
+    monkeypatch.setattr(client.app.state.agent, "chat", check)
+    # after the files the user attached (they arrive as @1 @2), and at the end of a sentence
+    for said in ("@1 @2 /pocket-motion-seedance-v2", "here is my episode /pocket-motion-seedance-v2", "@1/pocket-motion-seedance-v2"):
+        plan = client.post("/api/agent/plan", json={"instruction": said}).json()
+        assert plan["reply"] == "I need the script." and any("“Pocket Motion”" in e.get("text", "") for e in plan["activity"])
+    assert "/pocket-motion" not in sent[-1].split("The user's new message:")[-1]   # the command is not shot text
+    # a slash that is not a skill on its own is left alone
+    asked = model(monkeypatch, client, {"thought": "", "reply": "ok", "steps": []})
+    client.post("/api/agent/plan", json={"instruction": "a rain and/or snow shot /not-a-skill"})
+    assert "and/or snow shot /not-a-skill" in asked[-1]

@@ -14,6 +14,15 @@ class Settings:
     ollama_url: str = "http://127.0.0.1:11434"  # the language model server the agent uses
     agent_model: str = ""         # the model the agent uses unless the user picks another; empty = the first one there is
     ollama_models: str = ""       # the local models to offer, comma separated, for example "qwen3.6:35b"; empty = all of them
+    # How the local models are run. One context size for every call (a change makes Ollama load the model again); a skill
+    # longer than a model can hold is read in parts with read_skill, never cut.
+    ollama_context: int = 32768   # tokens a local model reads at once, the same for every call; 262144 for 256k
+    ollama_timeout: int = 600     # seconds one call to a local model may take (reading a long skill takes a while)
+    ollama_keep_alive: str = "2h" # how long Ollama keeps a model loaded between calls: a run waits on renders
+    ollama_vision_model: str = "" # the local model that looks at pictures; empty = the first local model that can see
+    ollama_fast_model: str = ""   # a quicker local model for the small jobs (prompts, captions, notes, checks); empty = the chosen one
+    ollama_think: bool = False    # let a local model think before it plans (slower, often better on long skills)
+    local_tools: bool = True      # local models work in the loop of tool calls, as hosted ones do
     # Hosted models beside the local ones. Each service is offered once its key is set. Keep keys in config.json
     # (which git ignores) or in SCENE_API_KEY / SCENE_GEMINI_KEY, never in a file that is committed.
     api_name: str = "Kimi"        # what the first service is called in the model picker

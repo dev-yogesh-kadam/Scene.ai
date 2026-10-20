@@ -21,30 +21,75 @@ KINDS = {
 }
 
 
-TEXT_SUFFIXES = {".srt", ".json"}   # a transcript the user brings, filed as "text" (a plain .txt has no times to use)
+# What the user brings that is words, filed as "text": a script (.docx, .txt, .md) or a transcript (.srt, .json).
+# A Word document is kept as the plain text of it.
+TEXT_SUFFIXES = {".srt", ".json", ".txt", ".md", ".docx"}
 MAX_TEXT_BYTES = 5 * 1024 * 1024
+MAX_DOCX_BYTES = 25 * 1024 * 1024          # a Word file with pictures in it is larger than its words
+MAX_DOCX_XML = 30 * 1024 * 1024            # the document part, unpacked: a file that unpacks larger is refused
+WORD = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
 def text_kind(filename):
     return "text" if Path(filename or "").suffix.lower() in TEXT_SUFFIXES else None
 
 
+def docx_text(data):
+    """The words of a Word document (.docx), paragraph by paragraph, tabs and line breaks kept. Raises ValueError when
+    it is not one."""
+    import io
+    import zipfile
+    from xml.etree import ElementTree
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as package:
+            part = package.getinfo("word/document.xml")
+            if part.file_size > MAX_DOCX_XML:
+                raise ValueError("its text is too large")
+            root = ElementTree.fromstring(package.read(part))
+    except (zipfile.BadZipFile, KeyError, ElementTree.ParseError):
+        raise ValueError("it is not a Word document")
+    lines = []
+    for paragraph in root.iter(WORD + "p"):
+        words = []
+        for node in paragraph.iter():
+            if node.tag == WORD + "t":
+                words.append(node.text or "")
+            elif node.tag == WORD + "tab":
+                words.append("\t")
+            elif node.tag in (WORD + "br", WORD + "cr"):
+                words.append("\n")
+        lines.append("".join(words))
+    return "\n".join(lines).strip() + "\n"
+
+
 async def read_text_upload(upload):
-    """The bytes of an uploaded transcript (.srt, .json): at most 5 MB, and text — UTF-8, with no NUL bytes —
-    whatever its name says."""
+    """The words of an uploaded script or transcript, as (UTF-8 bytes, the file name to keep them under). A Word file
+    becomes its plain text (.txt); anything else must be text — UTF-8, with no NUL bytes — whatever its name says.
+    At most 5 MB of text."""
     label = upload.filename or "The file"
-    if (upload.size or 0) > MAX_TEXT_BYTES:
-        raise HTTPException(413, "{} is larger than 5 MB.".format(label))
+    docx = Path(upload.filename or "").suffix.lower() == ".docx"
+    most = MAX_DOCX_BYTES if docx else MAX_TEXT_BYTES
+    if (upload.size or 0) > most:
+        raise HTTPException(413, "{} is larger than {} MB.".format(label, most // (1024 * 1024)))
     data = await upload.read()
-    if len(data) > MAX_TEXT_BYTES:
-        raise HTTPException(413, "{} is larger than 5 MB.".format(label))
+    if len(data) > most:
+        raise HTTPException(413, "{} is larger than {} MB.".format(label, most // (1024 * 1024)))
+    name = upload.filename or "text.txt"
+    if docx:
+        try:
+            data = docx_text(data).encode("utf-8")
+        except ValueError as error:
+            raise HTTPException(400, "{} could not be read: {}.".format(label, error))
+        name = Path(name).stem + ".txt"
+        if len(data) > MAX_TEXT_BYTES:
+            raise HTTPException(413, "The text of {} is larger than 5 MB.".format(label))
     try:
         if b"\x00" in data:
             raise UnicodeError
         data.decode("utf-8-sig")
     except UnicodeError:
         raise HTTPException(400, "{} is not a text file.".format(label))
-    return data
+    return data, name
 
 
 def media_kind(filename):

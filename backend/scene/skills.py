@@ -171,13 +171,70 @@ def pick(instruction, history=(), folder=FOLDER, force=()):
     return (chosen + matched)[:max(MAX_GIVEN, len(chosen))]
 
 
+PART = re.compile(r"(?m)^#{2,3} \S")   # a part of a skill begins at a heading of the second or third level
+PAGE = 12_000                          # characters of a part read at a time
+OPENING_SHARE = 0.75                   # of the room a model has for a skill, what its opening may take
+
+
+def parts(text):
+    """A skill as its parts: [(heading, text)], the opening first (heading "", everything before the first ## heading)."""
+    starts = [m.start() for m in PART.finditer(text)]
+    if not starts or starts[0] > 0:
+        starts = [0] + starts
+    found = []
+    for a, b in zip(starts, starts[1:] + [len(text)]):
+        chunk = text[a:b].strip("\n")
+        heading = chunk.splitlines()[0].lstrip("#").strip() if PART.match(chunk) else ""
+        found.append((heading, chunk))
+    return found
+
+
 def guide(picked, limit=MAX_CHARS):
-    """The picked skills as one text for the model, or "" when none fits. A skill longer than `limit` characters is cut
-    there, with a line saying so."""
+    """The picked skills as one text for the model, or "" when none fits. A skill longer than `limit` characters is never
+    cut: the model is given its opening and a list of its parts, and reads each part with the read_skill tool when it comes
+    to it (read_part). limit None: every skill whole."""
     out = []
     for s in picked:
         text = s["text"]
-        if len(text) > limit:
-            text = text[:limit].rstrip() + "\n[The rest of this skill is cut: it is longer than this model is given.]"
+        if limit is not None and len(text) > limit:
+            text = outline(s, limit)
         out.append("{} (skill {} v{}):\n{}".format(s["title"], s["id"], s["version"], text))
     return "\n\n".join(out)
+
+
+def outline(skill, limit):
+    """A long skill as a model with `limit` characters of room is given it: its opening (whole, or as much as fits, the
+    rest to be read as part 0), then every part by number, heading and size."""
+    found = parts(skill["text"])
+    opening = found[0][1] if not found[0][0] else ""
+    room = int(limit * OPENING_SHARE)
+    shown = opening if len(opening) <= room else opening[:room].rsplit("\n", 1)[0]
+    listed = ["  {}. {} ({:,} characters)".format(n, heading or "The opening, continued", len(chunk))
+              for n, (heading, chunk) in enumerate(found) if heading or len(opening) > room]
+    return "{}\n\n[This skill is {:,} characters, more than you are given at once, so above is its opening and below its parts. " \
+           "Read each part with read_skill (op: \"{}\", query: its number or heading) when you come to that step, before you act on " \
+           "it; a long part comes a page at a time. Never guess a part you have not read.]\nParts:\n{}".format(
+               shown, len(skill["text"]), skill["id"], "\n".join(listed))
+
+
+def read_part(skill, query, offset=0):
+    """One part of a skill, by its number (0 is the opening) or words of its heading, a page at a time from `offset`.
+    Returns (text, None) or (None, why not)."""
+    found = parts(skill["text"])
+    query = " ".join(str(query or "").split()).lower()
+    pick = None
+    if query.isdigit() and int(query) < len(found):
+        pick = int(query)
+    elif query:
+        pick = next((n for n, (heading, _) in enumerate(found) if heading and query in heading.lower()), None)
+        if pick is None:   # "5" for "## 5 — Generate", or the heading's first words
+            pick = next((n for n, (heading, _) in enumerate(found) if heading and heading.lower().split(" ")[0].strip(".") == query), None)
+    if pick is None:
+        return None, "No part of “{}” is called “{}”. Its parts: {}.".format(
+            skill["title"], query, "; ".join("{} {}".format(n, h or "the opening") for n, (h, _) in enumerate(found)))
+    heading, chunk = found[pick]
+    offset = max(0, int(offset or 0))
+    page = chunk[offset:offset + PAGE]
+    more = "" if offset + len(page) >= len(chunk) else "\n[{:,} of {:,} characters of this part: read_skill again with offset {}.]".format(
+        offset + len(page), len(chunk), offset + len(page))
+    return page + more, None
