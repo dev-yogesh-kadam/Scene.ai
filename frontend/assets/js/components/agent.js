@@ -1078,7 +1078,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       !verdict.passed && !take && !step.kept && step.retake && el('div', { class: 'row' },
         el('button', { class: 'btn small primary', disabled: working || step.retake.credits > balance,
           title: step.retake.why || 'Make it again with the fixed prompt', onclick: () => retake(run, step) }, `Retake · ${step.retake.credits} cr`),
-        el('button', { class: 'btn small quiet', onclick: () => { step.kept = true; saveRuns(); drawLog(); } }, 'Keep it')),
+        el('button', { class: 'btn small quiet', onclick: () => { step.kept = true; saveRuns(); drawLog(); carryOn(); } }, 'Keep it')),
       !verdict.passed && !take && !step.kept && !step.retake && el('span', { class: 'slate-text' }, 'No retake to offer for this one.'),
       step.kept && el('span', { class: 'slate-text' }, 'Kept with a known flaw.'),
       take && el('span', { class: 'slate-text' }, 'Take 2: ' + takeState));
@@ -1092,6 +1092,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   function carryOn() {
     const run = runs[runs.length - 1];
     if (!run || !run.continues || run.continued || run.state !== 'approved' || busy || generating() || halted) return;
+    if (!run.steps.every(settled)) return;   // a shot still being checked, or a failed one waiting for Retake or Keep it
     const lines = [];
     for (const step of run.steps) {
       if (step.skipped) { lines.push(`- “${step.name}”: skipped`); continue; }
@@ -1112,6 +1113,21 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     const shown = `Continue the run (${run.steps.length} ${run.steps.length === 1 ? 'step' : 'steps'} done)`;
     send({ text: `Continue the run. The steps you planned have come to an end:\n${lines.join('\n')}\n`
       + 'Write what they made to the run\'s state, then go on from its status.', shown, ids: [], parts: [{ text: shown }], auto: true });
+  }
+
+  // Whether a step is done with for the run: a picture or a clip once its check is over and, when the check failed,
+  // once the user chose (Keep it, or a retake that is then made and checked too). A check that could not run, a
+  // failed one with no retake to offer, and anything that is not a picture or a clip never hold the run.
+  function settled(step) {
+    if (step.skipped || !step.settings || (step.kind !== 'image' && step.kind !== 'video')) return true;
+    const take = step.take2 || step;
+    if (take.reviewing) return false;
+    if (take.reviewError) return true;
+    if (!take.review) {   // a shot that finished lately is about to be checked; an old one is not
+      const job = take.job && store.jobs.find((j) => j.id === take.job);
+      return !(job && job.status === 'done' && Date.now() - (take.queuedAt || 0) < REVIEW_WITHIN);
+    }
+    return take.review.passed || take !== step || step.kept || !step.retake;
   }
 
   // The library item a job made, or null while it is not in the library yet.
@@ -1163,6 +1179,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     take.reviewing = false;
     saveRuns();
     drawLog();
+    carryOn();   // the run may have been waiting for this check
   }
 
   // Review every shot of an approved plan that has just finished, once. Edits, sounds and motion graphics are not
