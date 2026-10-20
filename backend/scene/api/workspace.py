@@ -922,8 +922,6 @@ async def _planning(request, user, body, instruction, project):
     charged = {"credits": 0, "model": chosen_model}
     # A skill is given whole when the model holds it; a longer one as its opening and a list of its parts, which the
     # model reads with read_skill as it comes to them. A skill is never cut, whatever its length or the model.
-    if state.agent.is_local(chosen_model):
-        await state.agent.abilities(chosen_model)   # how much it reads at once, which sets how much of a skill it is given whole
     room = state.agent.skill_room(chosen_model)
     limit = skills.MAX_CHARS if room is None else room
     for skill in picked:

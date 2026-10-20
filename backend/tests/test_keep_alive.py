@@ -49,11 +49,10 @@ def test_a_quiet_plan_pings_and_still_answers(client, monkeypatch):
     assert len(asked) == 1
 
 
-def test_a_model_is_not_asked_to_read_more_than_it_was_made_for():
+def test_every_model_reads_the_same_context():
     a = agent.Agent("http://127.0.0.1:9", "small", options={"context": 262144})
-    assert a.reads("small") == 262144
-    a.longest["small"] = 131072
-    assert a.reads("small") == 131072 and a.skill_room("small") == int(131072 * agent.CHARS_PER_TOKEN * agent.SKILL_SHARE)
+    assert a.reads("small") == a.reads("big") == 262144
+    assert a.skill_room("small") == int(262144 * agent.CHARS_PER_TOKEN * agent.SKILL_SHARE)
 
 
 def test_a_model_that_stops_with_nothing_is_asked_to_carry_on(client, monkeypatch):

@@ -649,8 +649,7 @@ def test_a_hosted_model_is_listed_beside_the_local_ones_and_asked_over_its_api(m
     monkeypatch.setattr("scene.agent.asyncio.sleep", no_wait)
     answer = asyncio.run(brain.ask("You plan.", "hi", [], model="kimi/kimi-k3"))
     assert answer["reply"] == "From here. (Kimi was busy, so small:9b answered.)"
-    # (Ollama is asked what the local model can read before it answers)
-    assert [c.rsplit("/", 2)[-2:] for c in calls] == [["chat", "completions"]] * 2 + [["api", "show"], ["api", "chat"]]
+    assert [c.rsplit("/", 2)[-2:] for c in calls] == [["chat", "completions"]] * 2 + [["api", "chat"]]
 
     async def refused(url, json=None, headers=None):
         return Reply(401, {"error": {"message": "Invalid Authentication"}})

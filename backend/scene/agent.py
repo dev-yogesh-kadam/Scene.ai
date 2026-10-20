@@ -591,7 +591,6 @@ class Agent:
         self.think = bool(options.get("think"))
         self.tools = options.get("tools", True) is not False
         self.seen = {}   # local model -> what it can do ("vision", "tools", "thinking"), as Ollama says
-        self.longest = {}   # local model -> the most tokens it was made to read at once, as Ollama says
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(max(60, int(options.get("timeout") or 600)), connect=5))
         self.gpu = gpu.Gate(lambda: False)   # the GPU it may share with the renders (main.py sets the real one)
 
@@ -603,9 +602,8 @@ class Agent:
         return not self.is_local(model) or self.tools
 
     def reads(self, model):
-        """The tokens a local model reads at once: ollama_context, or less when the model was made for less (known once
-        abilities() has asked Ollama about it)."""
-        return min(self.context, self.longest.get(model) or self.context)
+        """The tokens a local model reads at once: ollama_context, the same for every model (the user's choice)."""
+        return self.context
 
     def skill_room(self, model):
         """How many characters of a skill a model is given whole; a longer skill is read in parts (read_skill)."""
@@ -625,10 +623,6 @@ class Agent:
                 if not found and "clip" in ((shown.get("details") or {}).get("families") or []):
                     found = {"completion", "vision"}   # an older Ollama: a model with an image encoder can see
                 self.seen[name] = found
-                # the most it was made to read at once: a longer context is not asked of it
-                longest = [v for k, v in (shown.get("model_info") or {}).items() if k.endswith(".context_length") and isinstance(v, int)]
-                if longest:
-                    self.longest[name] = max(longest)
             except (httpx.HTTPError, ValueError, AttributeError):
                 return set()
         return self.seen[name]
@@ -742,8 +736,7 @@ class Agent:
     async def _ask_local(self, model, messages, answer_format, context, think=False):
         # One context size for every call. Without one Ollama cuts a long prompt from its start (the instructions), and a
         # call with another size than the last makes it load the model again and lose what it had already read.
-        await self.abilities(model)   # learns the most this model reads: ollama_context is not asked beyond it
-        size = min(max(self.context, context or 0), self.longest.get(model) or self.context)
+        size = max(self.context, context or 0)
         # Ollama does not refuse a prompt longer than its context: it drops the start, which is the instructions. So a
         # prompt that cannot fit is refused here, saying what to do, instead of being answered without them.
         guess = sum(len(str(m.get("content") or "")) for m in messages) / CHARS_PER_TOKEN
