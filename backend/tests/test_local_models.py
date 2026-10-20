@@ -50,11 +50,15 @@ def run(coro):
 
 def test_one_context_kept_loaded_and_thinking_only_when_asked(monkeypatch):
     brain = Agent("http://ollama", "qwen3.6:35b", options={"context": 262144, "keep_alive": "3h", "think": True})
-    sent = ollama(monkeypatch, brain, [{"ok": 1}, {"ok": 2}])
+    sent = ollama(monkeypatch, brain, [{"ok": 1}, {"ok": 2}], shows={"qwen3.6:35b": ["completion", "thinking"]})
     run(brain.chat([{"role": "user", "content": "hi"}], "json", think=True))
     run(brain.chat([{"role": "user", "content": "hi"}], "json", context=16384))
     assert [s["options"]["num_ctx"] for s in sent] == [262144, 262144]   # one size: no reload between calls
     assert [s["keep_alive"] for s in sent] == ["3h", "3h"] and [s["think"] for s in sent] == [True, False]
+    plain = Agent("http://ollama", "qwen3.6:35b", options={"think": True})
+    sent = ollama(monkeypatch, plain, [{"ok": 1}])   # a model that cannot think is never asked to (Ollama refuses it)
+    run(plain.chat([{"role": "user", "content": "hi"}], "json", think=True))
+    assert sent[0]["think"] is False
     quiet = Agent("http://ollama", "qwen3.6:35b")
     sent = ollama(monkeypatch, quiet, [{"ok": 1}])
     run(quiet.chat([{"role": "user", "content": "hi"}], "json", think=True))
@@ -77,9 +81,13 @@ def test_pictures_go_to_a_local_model_that_can_see(monkeypatch):
     sent = ollama(monkeypatch, brain, [{"shows": "a dog"}], shows={"qwen3.5:9b": ["completion", "vision"]})
     assert run(brain.describe("BASE64", "Rex")) == "a dog" and sent[0]["model"] == "qwen3.5:9b"
     named = Agent("http://ollama", "qwen3.6:35b", options={"vision": "qwen3.5:27b"})
-    sent = ollama(monkeypatch, named, [{"shows": "a cat"}])
+    sent = ollama(monkeypatch, named, [{"shows": "a cat"}], shows={"qwen3.5:27b": ["completion", "vision"]})
     run(named.describe("BASE64", "Tom"))
     assert sent[0]["model"] == "qwen3.5:27b"
+    gone = Agent("http://ollama", "qwen3.6:35b", options={"vision": "removed:7b"})   # set, but no longer in Ollama
+    sent = ollama(monkeypatch, gone, [{"shows": "a cat"}], shows={"qwen3.5:9b": ["completion", "vision"]})
+    run(gone.describe("BASE64", "Tom"))
+    assert sent[0]["model"] == "qwen3.5:9b"
     blind = Agent("http://ollama", "qwen3.6:35b")
     ollama(monkeypatch, blind, [{"shows": "x"}], tags=("qwen3.6:35b",))
     with pytest.raises(AgentError, match="No local model can look at pictures"):
@@ -134,3 +142,16 @@ def test_a_local_model_runs_a_long_skill_with_its_tools(client, monkeypatch, tmp
     assert any("Save the script first." in t for t in told)                         # the part it read
     assert runs.read(client.app.state.db, 1, "pm-1", "/motion/status")["value"] == "step 1"
     assert any("is long (" in e.get("text", "") and "parts" in e.get("text", "") for e in plan["activity"])
+
+
+def test_the_model_is_whatever_ollama_has_now(monkeypatch):
+    configured = Agent("http://ollama", "removed:7b")   # the configured one was removed from Ollama
+    sent = ollama(monkeypatch, configured, [{"ok": 1}, {"ok": 2}], tags=("new:70b", "qwen3.5:9b"))
+    run(configured.chat([{"role": "user", "content": "hi"}], "json"))
+    run(configured.chat([{"role": "user", "content": "hi"}], "json", model="qwen3.5:9b"))
+    assert [s["model"] for s in sent] == ["new:70b", "qwen3.5:9b"]   # the first there is, then the one the user picked
+    unset = Agent("http://ollama", "")
+    sent = ollama(monkeypatch, unset, [{"ok": 1}], tags=("just-pulled:12b",))
+    assert run(unset.models()) == ["just-pulled:12b"]   # a model pulled a moment ago is offered, with nothing to set
+    run(unset.chat([{"role": "user", "content": "hi"}], "json"))
+    assert sent[0]["model"] == "just-pulled:12b"

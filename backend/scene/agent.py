@@ -638,7 +638,7 @@ class Agent:
         else the first local model that can see. Raises AgentError when no local model can."""
         if not self.is_local(model) or "vision" in await self.abilities(model):
             return model
-        if self.vision:
+        if self.vision and "vision" in await self.abilities(self.vision):   # the one set, while Ollama still has it
             return self.vision
         try:
             every = [m["name"] for m in (await self.http.get(self.url + "/api/tags")).json().get("models") or [] if m.get("name")]
@@ -689,13 +689,17 @@ class Agent:
         return (local or []) + hosted
 
     async def pick_model(self, wanted=None):
-        """The model to use: the one asked for if there is such a model, else the configured one, else the first one there."""
-        if not wanted and self.model:
-            return self.model
-        names = await self.models()
+        """The model to use: the one asked for if Ollama (or a hosted service) has it, else the configured one if it is
+        there, else the first one there is. Models come and go as they are pulled and removed: none is assumed."""
+        try:
+            names = await self.models()
+        except AgentError:
+            if wanted or self.model:
+                return wanted or self.model   # the server is not answering: the call itself says so
+            raise
         if not names:
-            raise AgentError("There is no model for the agent. Pull one in Ollama (ollama pull qwen3.5:9b) or set an API key.")
-        return wanted if wanted in names else self.model or names[0]
+            raise AgentError("There is no model for the agent. Pull one in Ollama (ollama pull <model>) or set an API key.")
+        return next((name for name in (wanted, self.model) if name and name in names), names[0])
 
     async def chat(self, messages, answer_format, context=None, model=None, images=(), think=False):
         """Send messages to the model and return its answer, which has to be JSON of the given shape.
@@ -746,7 +750,9 @@ class Agent:
         if guess > size * 0.97:
             raise AgentError("This message is too long for {}: about {:,} tokens, and it reads {:,}. Compact the conversation, "
                              "or give it a larger context (ollama_context in config.json).".format(model, int(guess), size))
-        payload = {"model": model, "stream": False, "think": bool(think), "format": answer_format, "keep_alive": self.keep_alive,
+        # Thinking is asked only of a model that can think: Ollama refuses it from one that cannot.
+        think = bool(think) and "thinking" in await self.abilities(model)
+        payload = {"model": model, "stream": False, "think": think, "format": answer_format, "keep_alive": self.keep_alive,
                    "options": {"temperature": 0.4, "num_ctx": size}, "messages": messages}
         async with self.gpu.use("llm"):
             body = await self._post_local(model, payload)
