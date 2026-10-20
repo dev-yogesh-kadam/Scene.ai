@@ -1152,6 +1152,18 @@ def uses_for(schema, step, selection, assets=None):
             continue   # a video that starts and ends on the same picture does not move
         taken.add(slot["id"])
         used.append({"id": use["item"], "name": item["name"], "slot": slot["id"], "label": slot["label"].split(" (")[0], "kind": slot["kind"]})
+    # A workflow that works on a sound or a video (separate a voice, transcribe, lip sync) must be given it, and a model
+    # often leaves the slot out: the item the step names in "audio" or "source" fills it, or else the only one of that
+    # kind there is. Pictures are never guessed: there are usually several.
+    for slot in slots.values():
+        if slot["optional"] or slot["id"] in taken or slot["kind"] not in ("audio", "video") or slot["id"] == named.get("first_frame"):
+            continue
+        fits = [iid for iid, item in selection.items() if item["kind"] == slot["kind"] and all(u["id"] != iid for u in used)]
+        wanted = step.get("audio" if slot["kind"] == "audio" else "source")
+        pick = wanted if wanted in fits else fits[0] if len(fits) == 1 else None
+        if pick is not None:
+            taken.add(slot["id"])
+            used.append({"id": pick, "name": selection[pick]["name"], "slot": slot["id"], "label": slot["label"].split(" (")[0], "kind": slot["kind"]})
     return used
 
 

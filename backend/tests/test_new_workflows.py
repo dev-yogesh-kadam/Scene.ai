@@ -158,3 +158,13 @@ def test_a_long_skill_run_is_reminded_once_to_save_its_work(client, monkeypatch)
     assert any(agent.SAVE_FIRST in m["content"] for m in seen[-1] if m["role"] == "user")
     runs.write(db, me["id"], "pm-2", "/motion/models", {"image": "image/image_ref_edit"}, "agent")
     assert runs.saved_any(db, me["id"], "pm-2")
+
+
+def test_the_one_sound_attached_fills_a_slot_the_step_left_out(client):
+    schema = schema_of(client, "audio/audio_transcribe")
+    one = {7: {"name": "Episode", "kind": "audio"}, 8: {"name": "Maya", "kind": "image"}}
+    assert [(u["id"], u["slot"]) for u in agent.uses_for(schema, {"uses": []}, one)] == [(7, "1:audio")]
+    two = {**one, 9: {"name": "Voice stem", "kind": "audio"}}
+    assert agent.uses_for(schema, {"uses": []}, two) == []   # two sounds: it is not guessed
+    assert [u["id"] for u in agent.uses_for(schema, {"uses": [], "audio": 9}, two)] == [9]
+    assert [u["id"] for u in agent.uses_for(schema, {"uses": [{"item": 7, "asset": 0, "slot": "1:audio"}], "audio": 9}, two)] == [7]
