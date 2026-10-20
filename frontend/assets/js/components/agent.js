@@ -38,6 +38,11 @@ const WHIMSY = [
   'Framing the scene…', 'Finding the light…', 'Scribbling storyboards…', 'Picturing it…', 'Warming up the lens…',
   'Mixing a little magic…', 'Letting it marinate…', 'Rolling the reels…', 'Casting the shot…', 'Painting with pixels…',
   'Humming a tune…', 'Tuning the vibe…', 'Thinking happy thoughts…', 'Connecting the dots…', 'Setting the stage…',
+  'Reading the script twice…', 'Counting the frames…', 'Asking the cast nicely…', 'Polishing the clapperboard…',
+  'Checking the continuity…', 'Feeding the gaffer…', 'Rehearsing the lines…', 'Bribing the lighting crew…',
+  'Untangling the cables…', 'Finding the best angle…', 'Waiting for golden hour…', 'Cueing the boom mic…',
+  'Measuring the dolly track…', 'Steadying the shot…', 'Calling places…', 'Pouring the director a coffee…',
+  'Sharpening the focus…', 'Lining up the next take…', 'Reading the room…', 'Syncing the slate…',
 ];
 const SHAPES = [{ id: 'landscape', label: '16:9' }, { id: 'square', label: '1:1' }, { id: 'portrait', label: '9:16' }];
 const SHAPE_NAMES = { landscape: '16:9', portrait: '9:16', square: '1:1' };
@@ -1506,7 +1511,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   let whimsyAt = Math.floor(Math.random() * WHIMSY.length);
   let whimsyTimer = null;
   function thinkingWord(p) {
-    if (p.status && !/^thinking/i.test(p.status)) return p.status;   // a real phase the server named wins
+    if (p.status && !/^(thinking|working)/i.test(p.status)) return p.status;   // a real phase the server named wins
     return WHIMSY[whimsyAt % WHIMSY.length];
   }
   function startWhimsy() {
@@ -1515,28 +1520,58 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   }
   function stopWhimsy() { if (whimsyTimer) { clearInterval(whimsyTimer); whimsyTimer = null; } }
 
-  // The turn being answered: the message, the agent's work as it happens, and what it is doing now.
+  // The turn being answered: the message, the agent's work as it happens, and what it is doing now. It is built once
+  // and then changed in place: rebuilding it every second restarted the dots, the shimmer and the rows' fade-in, which
+  // made the whole turn blink. Only a row that is new fades in; the clock and the word change their text.
   let live = null;
+  let parts = null;
   function liveTurn() {
+    const clockText = el('span', { class: 'fold-sub' });
+    const body = el('div', { class: 'fold-body' });
+    const work = el('div', { class: 'fold work open hidden' },
+      el('div', { class: 'fold-head' }, icon('wrench'), el('span', { class: 'fold-title' }, 'Working'), clockText), body);
+    const thoughts = el('div', { class: 'live-thoughts' });
+    const word = el('span', { class: 'thinking-word' });
+    const say = el('span', { class: 'thinking-say' }, word);
+    parts = { clockText, body, work, thoughts, word, say, rows: 0, thought: 0, shown: null };
+    const turnEl = el('div', { class: 'turn live' }, said(pending), work, thoughts,
+      el('div', { class: 'agent-thinking', role: 'status', 'aria-live': 'polite' },
+        el('span', { class: 'thinking-dots', 'aria-hidden': 'true' }, el('i'), el('i'), el('i')), say));
+    fillLive(false);
+    return turnEl;
+  }
+  // fresh: what is added now is new (it fades in); false when the turn was just built again with what it had.
+  function fillLive(fresh = true) {
     const p = pending;
     const steps = p.events.filter((e) => e.type === 'activity');
     const thoughts = p.events.filter((e) => e.type === 'thought');
-    return el('div', { class: 'turn live' }, said(p),
-      steps.length > 0 && el('div', { class: 'fold work open' },
-        el('div', { class: 'fold-head' }, icon('wrench'), el('span', { class: 'fold-title' }, 'Working'),
-          el('span', { class: 'fold-sub' }, span((Date.now() - p.started) / 1000))),
-        el('div', { class: 'fold-body' }, workRows(steps, {}, redraw))),
-      ...thoughts.map((t) => fold({ glyph: 'bulb', title: `Thought for ${span(t.seconds)}`, className: 'thought' })),
-      el('div', { class: 'agent-thinking', role: 'status', 'aria-live': 'polite' },
-        el('span', { class: 'thinking-dots', 'aria-hidden': 'true' }, el('i'), el('i'), el('i')),
-        el('span', { class: 'thinking-word' }, thinkingWord(p).replace(/…$/, ''))));
+    if (steps.length > parts.rows) {
+      const rows = workRows(steps.slice(parts.rows), {}, redraw);
+      if (fresh) rows.forEach((row) => row.classList.add('row-in'));
+      parts.body.append(...rows);
+      parts.rows = steps.length;
+      parts.work.classList.remove('hidden');
+    }
+    if (thoughts.length > parts.thought) {
+      parts.thoughts.append(...thoughts.slice(parts.thought).map((t) => fold({ glyph: 'bulb', title: `Thought for ${span(t.seconds)}`, className: 'thought' })));
+      parts.thought = thoughts.length;
+    }
+    parts.clockText.textContent = span((Date.now() - p.started) / 1000);
+    const word = thinkingWord(p).replace(/…$/, '');
+    if (word !== parts.shown) {
+      parts.word.textContent = word;
+      if (fresh && parts.shown !== null) {   // the new word rises in; the shimmer on it keeps running
+        parts.say.classList.remove('word-in');
+        void parts.say.offsetWidth;
+        parts.say.classList.add('word-in');
+      }
+      parts.shown = word;
+    }
   }
   function drawLive() {
-    if (!pending || !live || !live.isConnected) return;
+    if (!pending || !live || !live.isConnected || !parts) return;
     const stick = atEnd();
-    const next = liveTurn();
-    live.replaceWith(next);
-    live = next;
+    fillLive();
     if (stick) log.scrollTop = log.scrollHeight;
   }
   const ticker = setInterval(() => { if (pending) drawLive(); }, 1000);
