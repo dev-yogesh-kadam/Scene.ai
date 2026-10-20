@@ -927,7 +927,8 @@ class Agent:
                     answer = asked
                 # A plan it cannot put right after FIX_ROUNDS hints stands as it is: what cannot run is left out.
                 # An answer with nothing in it (a model that stops while it means to go on) is sent back first.
-                empty = not str(answer.get("reply") or "").strip() and not answer.get("steps") and not answer.get("question")
+                # (a local model always sends a question, {"text": "", "options": []} when it has none to ask)
+                empty = not str(answer.get("reply") or "").strip() and not answer.get("steps") and not clean_question(answer.get("question"))
                 if last or fixes >= FIX_ROUNDS:
                     hint = None
                 elif empty:

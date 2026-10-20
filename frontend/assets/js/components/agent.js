@@ -23,7 +23,8 @@ try {
     localStorage.setItem('scene.agent.model.v', '2');
   }
 } catch { /* storage may be blocked: the server's default is used anyway */ }
-const LONG_REPLY = 700;   // a reply longer than this is folded to a few lines, with Show more
+const LONG_REPLY = 700;
+const SAVED_ONLY = 3;     // turns of a long run in a row that only save their work and go on by themselves   // a reply longer than this is folded to a few lines, with Show more
 const MARK = { queued: 'Waiting', running: 'Running', done: 'Done', failed: 'Failed', cancelled: 'Cancelled', waiting: 'Waits for the step before' };
 // Whether a plan runs as soon as it arrives or waits for Approve. The choice is this browser's, kept in localStorage.
 const PERMISSIONS = [
@@ -1091,7 +1092,20 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   // it waits while anything is still being made or the agent is busy, and never runs a plan that was stopped.
   function carryOn() {
     const run = runs[runs.length - 1];
-    if (!run || !run.continues || run.continued || run.state !== 'approved' || busy || generating() || halted) return;
+    if (!run || !run.continues || run.continued || busy || generating() || halted) return;
+    // A turn that saved its work and planned nothing to make (a stage of planning) goes on at once, at most
+    // SAVED_ONLY times in a row: then the user is waited for, so a model that only keeps saving does not loop.
+    if (!run.steps.length) {
+      const tail = runs.slice().reverse();
+      const inRow = tail.findIndex((r) => !(r.continues && !r.steps.length));
+      if ((inRow === -1 ? tail.length : inRow) > SAVED_ONLY) return;
+      run.continued = true;
+      saveRuns();
+      send({ text: 'Continue the run: you saved your work and planned nothing to make. Go on from the run\'s status.',
+        shown: 'Continue the run', ids: [], parts: [{ text: 'Continue the run' }], auto: true });
+      return;
+    }
+    if (run.state !== 'approved') return;
     if (!run.steps.every(settled)) return;   // a shot still being checked, or a failed one waiting for Retake or Keep it
     const lines = [];
     for (const step of run.steps) {
@@ -1289,7 +1303,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   // The user's message: their words, and what they attached as small pictures that take you to the item.
   // A run carried on by the studio once its steps were made: a note that it did, not a bubble as if the user wrote it.
   // (Turns kept before the mark existed are known by their words.)
-  const AUTO_SAID = /^Continue the run \((\d+) steps? done\)$/;
+  const AUTO_SAID = /^Continue the run(?: \((\d+) steps? done\))?$/;
   const said = (run) => {
     const words = String(run.instruction || '');
     if (run.auto || AUTO_SAID.test(words)) {
@@ -1700,6 +1714,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       const mode = permission().id;
       if (mode === 'all' || (mode === 'videos' && !made.steps.some((s) => s.kind === 'video'))) approve(made);
     }
+    if (made && !made.steps.length && made.continues) setTimeout(carryOn, 1500);   // it saved its work: the run goes on
   }
 
   // Run the approved steps one by one: generations are queued through the same door as the Create page,
@@ -1855,6 +1870,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     } catch (e) { status.textContent = e.message; }
     drawLog(true);
     collectResults();
+    carryOn();   // a run whose newest turn only saved its work goes on, also after a reload
   }
 
   const unsubscribe = subscribe((change) => {

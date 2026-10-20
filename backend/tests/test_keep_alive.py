@@ -89,3 +89,30 @@ def test_a_long_run_that_only_says_what_it_will_do_is_asked_to_do_it(client, mon
                   {"tool": "finish", "reply": "Saved. Next I will plan the anchor.", "steps": []})
     plan = client.post("/api/agent/plan", json={"instruction": "go", "run": "pm-3"}).json()
     assert plan["reply"] == "Saved. Next I will plan the anchor." and len(seen) == 2
+
+
+NO_QUESTION = {"text": "", "options": []}   # what a local model sends when it has nothing to ask
+
+
+def test_an_empty_question_is_no_question(client, monkeypatch):
+    from scene import runs
+    from test_agent_shots import hosted
+    me = register(client)
+    db = client.app.state.db
+    runs.keep_skill(db, me["id"], "pm-4", "pocket-motion-seedance-v2")
+    runs.write(db, me["id"], "pm-4", "/motion/status", "plan the units", "agent")
+    ready = {"ready": True, "missing": [], "unsupported": [], "adaptation": "", "message": ""}
+    monkeypatch.setattr(client.app.state.agent, "preflight", lambda *a, **k: asyncio.sleep(0, ready))
+    said = "Anchor approved. Now I'll plan the shots. This is a planning step; no generation yet."
+    seen = hosted(monkeypatch, client, {"tool": "finish", "reply": said, "steps": [], "question": NO_QUESTION},
+                  {"tool": "state_write", "path": "/motion/units/1", "value": '{"text": "Violet arrives"}', "question": NO_QUESTION},
+                  {"tool": "finish", "reply": "Planned the units.", "steps": [], "question": NO_QUESTION})
+    plan = client.post("/api/agent/plan", json={"instruction": "Looks good, next step", "run": "pm-4"}).json()
+    assert plan["reply"] == "Planned the units." and len(seen) == 3
+    # it saved its work and made nothing: the run goes on by itself
+    assert plan["continues"] is True and plan["question"] is None
+    # an empty answer with an empty question is sent back too
+    seen = hosted(monkeypatch, client, {"tool": "finish", "thought": "I will plan chunk 1.", "question": NO_QUESTION},
+                  {"tool": "finish", "reply": "Asked.", "steps": [], "question": {"text": "Which take?", "options": ["A", "B"]}})
+    plan = client.post("/api/agent/plan", json={"instruction": "go", "run": "pm-4"}).json()
+    assert len(seen) == 2 and plan["question"]["text"] == "Which take?" and plan["continues"] is False

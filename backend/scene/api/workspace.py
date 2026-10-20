@@ -1071,7 +1071,7 @@ async def _planning(request, user, body, instruction, project):
             noted("retry", "Nothing of the run was saved yet, so the model was asked to save its work first")
             return agent.SAVE_FIRST
         reply = str(answer.get("reply") or "")
-        if not left and run and long_skill and not stalled and not answer.get("steps") and not answer.get("question") \
+        if not left and run and long_skill and not stalled and not answer.get("steps") and not agent.clean_question(answer.get("question")) \
                 and agent.ABOUT_TO.search(reply) and not runs.saved_since(state.db, user["id"], run, since):
             # A long run's turn that only says what it will do (no steps, no question, nothing saved) does nothing.
             stalled.append(True)
@@ -1409,8 +1409,10 @@ async def _planning(request, user, body, instruction, project):
            "thought": str(answer.get("thought") or ""), "activity": log, "seconds": round(time.monotonic() - started, 1),
            "chips": chips, "direction": answer.get("direction") or "", "steps": steps, "total": sum(s["credits"] for s in steps), "llm": charged,
            "balance": state.credits.balance(user["id"]), "question": answer.get("question"), "run": run,
-           # a long skill's run goes on by itself: once these steps are made, the Agent tab tells the agent what they made
-           "continues": bool(run and long_skill and steps and not answer.get("question")),
+           # a long skill's run goes on by itself: once these steps are made, the Agent tab tells the agent what they made;
+           # a turn that made nothing but saved its work (a stage of planning) goes on at once
+           "continues": bool(run and long_skill and not answer.get("question")
+                             and (steps or runs.saved_since(state.db, user["id"], run, since))),
            "budget": runs.budget(state.db, user["id"], run) if run and long_skill else None, "tokens": tokens}
 
 
