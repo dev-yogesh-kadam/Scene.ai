@@ -54,3 +54,15 @@ def test_a_model_is_not_asked_to_read_more_than_it_was_made_for():
     assert a.reads("small") == 262144
     a.longest["small"] = 131072
     assert a.reads("small") == 131072 and a.skill_room("small") == int(131072 * agent.CHARS_PER_TOKEN * agent.SKILL_SHARE)
+
+
+def test_a_model_that_stops_with_nothing_is_asked_to_carry_on(client, monkeypatch):
+    from test_agent_shots import hosted
+    register(client)
+    seen = hosted(monkeypatch, client, {"tool": "finish", "thought": "I will read the transcript, then name the speakers."},
+                  {"tool": "finish", "reply": "Named them.", "steps": []})
+    plan = client.post("/api/agent/plan", json={"instruction": "go"}).json()
+    assert plan["reply"] == "Named them." and len(seen) == 2
+    told = [m["content"] for m in seen[-1] if m["role"] == "user"]
+    assert any("You were thinking" in t and "name the speakers" in t for t in told)
+    assert any(e["text"].startswith("The model stopped with nothing to show") for e in plan["activity"])

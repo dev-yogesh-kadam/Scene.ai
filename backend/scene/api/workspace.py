@@ -36,6 +36,7 @@ LIVE_EVERY = 1.0         # seconds between looks at what the agent's tools did w
 # A proxy in front of the studio (the Cloudflare tunnel) closes a request that sends nothing for 100 seconds, and a
 # local model can be quiet longer than that (loading, reading a long skill, waiting for the GPU). So a slow answer
 # sends a sign of life every KEEP_ALIVE seconds; one that comes within PATIENT seconds is sent as it is.
+RUN_STOPPED = "I stopped before I planned the next step (what I was thinking is above). Say “go” and I will carry on from there."
 KEEP_ALIVE = 15
 PATIENT = 20
 SLASH = re.compile(r"(?:^|(?<=\s))/([a-z0-9][a-z0-9-]*)(?=\s|$)")   # a /skill-id standing on its own, anywhere in a message
@@ -1289,6 +1290,8 @@ async def _planning(request, user, body, instruction, project):
         steps, dropped = await build(answer["steps"])
         if answer.get("tools") is not None:
             answer["tools"] = list(answer["tools"])
+        if answer.get("empty_sent_back"):
+            noted("retry", "The model stopped with nothing to show, so it was asked to carry on")
         agent.add_tokens(tokens, answer.get("tokens"))
         return answer, steps, dropped, seconds
 
@@ -1393,7 +1396,9 @@ async def _planning(request, user, body, instruction, project):
     chips, reply = agent.chips_in(answer["reply"], {**book_items, **known}, book_assets)
     if charged["credits"]:
         state.notify(user["id"])   # the open pages show the new balance
-    yield {"type": "plan", "reply": reply or ("Here is the plan." if steps else "Tell me what you would like to see and I will plan it."),
+    # A reply left empty: in a long run the model stopped mid-step, and "go" carries on; otherwise it has nothing to make.
+    nothing = RUN_STOPPED if run and long_skill else "Tell me what you would like to see and I will plan it."
+    yield {"type": "plan", "reply": reply or ("Here is the plan." if steps else nothing),
            "thought": str(answer.get("thought") or ""), "activity": log, "seconds": round(time.monotonic() - started, 1),
            "chips": chips, "direction": answer.get("direction") or "", "steps": steps, "total": sum(s["credits"] for s in steps), "llm": charged,
            "balance": state.credits.balance(user["id"]), "question": answer.get("question"), "run": run,

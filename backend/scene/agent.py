@@ -903,7 +903,7 @@ class Agent:
         messages = [{"role": "system", "content": system + "\n\n" + TOOL_RULES + ("\n\n" + COMPACT_RULES if compact else "")},
                     {"role": "user", "content": message}]
         shape, used, tokens = compact_tool_format(tools) if compact else tool_format(workflow_ids), [], {}
-        answer, fixes = {}, 0
+        answer, fixes, noticed = {}, 0, []
         for round_ in range(1, rounds + 1):
             if compact:
                 self._fit(messages, model)
@@ -926,8 +926,16 @@ class Agent:
                     add_tokens(tokens, answer.get("_usage"))
                 else:
                     answer = asked
-                # A plan it cannot put right after FIX_ROUNDS hints stands as it is: what cannot run is left out
-                hint = None if last or not finishing or fixes >= FIX_ROUNDS else await finishing(answer)
+                # A plan it cannot put right after FIX_ROUNDS hints stands as it is: what cannot run is left out.
+                # An answer with nothing in it (a model that stops while it means to go on) is sent back first.
+                empty = not str(answer.get("reply") or "").strip() and not answer.get("steps") and not answer.get("question")
+                if last or fixes >= FIX_ROUNDS:
+                    hint = None
+                elif empty:
+                    hint = EMPTY_FINISH.format(" ".join(str(answer.get("thought") or "").split())[:400] or "nothing")
+                    noticed.append("empty")
+                else:
+                    hint = await finishing(answer) if finishing else None
                 if not hint:
                     break
                 fixes += 1
@@ -951,7 +959,7 @@ class Agent:
             self._fit(messages, model)
             answer = await self.chat(messages + [{"role": "user", "content": FINISH_NOW}], reply_format(workflow_ids), model=model)
             add_tokens(tokens, answer.get("_usage"))
-        return dict(shaped(answer), tools=used, tokens=tokens)
+        return dict(shaped(answer), tools=used, tokens=tokens, empty_sent_back=len(noticed))
 
     def _fit(self, messages, model=None):
         """Keep a long run within a local model's context: the oldest tool results are shortened first (the newest
@@ -1320,6 +1328,8 @@ def wants_sound(instruction, history=()):
     return "ffmpeg" in instruction.lower() and bool(SOUND_WORDS.search(str(last.get("instruction") or "")))
 
 
+EMPTY_FINISH = ("You finished with no reply, no steps and no question, so the user would get nothing. You were thinking: "
+                "\"{}\". Do that now: call the tool you need next, or finish with the steps to make, a reply, or a question.")
 SAVE_FIRST = ("Nothing of this run is saved yet, and the next message only knows what the run state holds. Before you "
               "finish, save what the skill says to keep at this point (the models and cutting the user chose, the inventory of "
               "what is attached, what you worked out) with state_write, then finish again.")

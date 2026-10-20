@@ -79,6 +79,10 @@ check('it names what the step made, by library id', /“Dog reference”: item \
 check('it carries the run', sent[0] && sent[0].run === 't1');
 await wait(4000);
 check('and only once', sent.length === 1, `${sent.length} sent`);
+const shown = await page.evaluate(() => ({
+  note: [...document.querySelectorAll('.agent-auto')].map((n) => n.textContent.trim()),
+  bubble: [...document.querySelectorAll('.agent-said')].some((n) => /Continue the run/.test(n.textContent)) }));
+check('it shows as a note of the studio, not as a message the user wrote', shown.note.length >= 1 && !shown.bubble, shown.note.join(' | '));
 check('no page errors', errors.length === 0, errors.join(' | ').slice(0, 300));
 await browser.close();
 console.log(report.join('\n'));

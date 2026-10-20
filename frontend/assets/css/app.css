@@ -1195,6 +1195,8 @@ button.fold-head:hover .fold-title, button.fold-head:hover .fold-caret { color: 
 .fold.info .fold-title { color: var(--text); font-weight: 600; }
 .fold.info .fold-sub, .fold.cancelled .fold-sub { color: var(--muted); font-weight: 400; }
 .fold.nested .fold-head { font-size: 12.5px; }
+.agent-auto { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); font-size: 12px; margin: 4px 0; }
+.agent-auto .icon { width: 13px; height: 13px; }
 .work-row { display: flex; align-items: flex-start; gap: 8px; color: var(--muted); font-size: 13px; line-height: 20px; }
 .work-row .icon { width: 15px; height: 15px; flex: none; margin-top: 2px; }
 .turn.live .work-row.row-in { animation: row-in .3s var(--ease); }

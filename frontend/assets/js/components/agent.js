@@ -1111,7 +1111,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     saveRuns();
     const shown = `Continue the run (${run.steps.length} ${run.steps.length === 1 ? 'step' : 'steps'} done)`;
     send({ text: `Continue the run. The steps you planned have come to an end:\n${lines.join('\n')}\n`
-      + 'Write what they made to the run\'s state, then go on from its status.', shown, ids: [], parts: [{ text: shown }] });
+      + 'Write what they made to the run\'s state, then go on from its status.', shown, ids: [], parts: [{ text: shown }], auto: true });
   }
 
   // The library item a job made, or null while it is not in the library yet.
@@ -1270,7 +1270,16 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   };
 
   // The user's message: their words, and what they attached as small pictures that take you to the item.
+  // A run carried on by the studio once its steps were made: a note that it did, not a bubble as if the user wrote it.
+  // (Turns kept before the mark existed are known by their words.)
+  const AUTO_SAID = /^Continue the run \((\d+) steps? done\)$/;
   const said = (run) => {
+    const words = String(run.instruction || '');
+    if (run.auto || AUTO_SAID.test(words)) {
+      const done = (words.match(AUTO_SAID) || [])[1];
+      return el('div', { class: 'agent-auto' }, icon('forward'),
+        el('span', {}, done ? `Carried on by itself · ${done} ${done === '1' ? 'step' : 'steps'} made` : 'Carried on by itself'));
+    }
     const parts = run.parts && run.parts.length ? run.parts : [{ text: run.instruction }];
     const length = parts.reduce((n, part) => n + (part.text || '').length, 0);
     const long = length > 320 || parts.reduce((n, part) => n + ((part.text || '').match(/\n/g) || []).length, 0) > 5;
@@ -1653,7 +1662,8 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     // The message goes into the log at once, with the agent's work under it as it happens; the box empties and waits.
     const boxed = [...input.childNodes].map((n) => n.cloneNode(true));
     const controller = new AbortController();
-    pending = { instruction, parts, stop: () => controller.abort(), events: [], status: 'Thinking', started: Date.now() };
+    const auto = !!(typed && typed.auto);   // the studio carries a run on by itself: not a message the user wrote
+    pending = { instruction, parts, auto, stop: () => controller.abort(), events: [], status: 'Thinking', started: Date.now() };
     startWhimsy();
     if (fromBox) input.replaceChildren();
     input.contentEditable = 'false';
@@ -1674,7 +1684,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
         drawLive();
       });
       if (!answer) throw new Error('The agent stopped before it finished. Try again.');
-      made = { instruction, parts, reply: answer.reply, thought: answer.thought, activity: answer.activity || [], seconds: answer.seconds,
+      made = { instruction, parts, auto, reply: answer.reply, thought: answer.thought, activity: answer.activity || [], seconds: answer.seconds,
         chips: answer.chips || {}, steps: answer.steps, total: answer.total, state: answer.steps.length ? 'proposed' : 'answered', at: Date.now(), ui: {},
         llm: answer.llm || null, question: answer.question || null, continues: !!answer.continues, budget: answer.budget || null };
       if (answer.direction) direction = answer.direction;   // the agent kept its notes up to date
