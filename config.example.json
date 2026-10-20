@@ -9,6 +9,7 @@
   "ollama_fast_model": "",
   "ollama_think": false,
   "local_tools": true,
+  "gpu_shared": "auto",
   "api_url": "",
   "api_key": "",
   "api_models": "",

@@ -23,6 +23,9 @@ class Settings:
     ollama_fast_model: str = ""   # a quicker local model for the small jobs (prompts, captions, notes, checks); empty = the chosen one
     ollama_think: bool = False    # let a local model think before it plans (slower, often better on long skills)
     local_tools: bool = True      # local models work in the loop of tool calls, as hosted ones do
+    # Whether the agent's model and the renders take turns on one GPU: "auto" when Ollama and ComfyUI are on the same
+    # machine, "on" or "off". Taking turns, a render waits while the agent thinks and the agent waits while a render runs.
+    gpu_shared: str = "auto"
     # Hosted models beside the local ones. Each service is offered once its key is set. Keep keys in config.json
     # (which git ignores) or in SCENE_API_KEY / SCENE_GEMINI_KEY, never in a file that is committed.
     api_name: str = "Kimi"        # what the first service is called in the model picker

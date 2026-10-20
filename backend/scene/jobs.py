@@ -18,7 +18,7 @@ from pathlib import Path
 import httpx
 import websockets
 
-from . import edits, media, memory, motion, sequence
+from . import edits, gpu, media, memory, motion, sequence
 from .comfy import workflows
 from .comfy.client import ComfyError
 from .db import as_everyone
@@ -46,6 +46,7 @@ class JobManager:
         self.tmp_dir = Path(tmp_dir)    # working files of chained videos
         self.notify = notify      # notify(user_id, library_changed=False)
         self.live = {}            # job id -> progress of the running job (not stored)
+        self.gpu = gpu.Gate(lambda: False)   # the GPU it may share with the agent's model (main.py sets the real one)
         self.wake = asyncio.Event()
         # A job that was running when the app stopped can't be picked up again. Waiting jobs stay queued.
         for job in db.all("SELECT id, user_id, cost FROM jobs WHERE status = 'running'"):
@@ -199,6 +200,19 @@ class JobManager:
         if edits.is_edit(job["workflow"]):
             return await self._run_edit(job)
         live = self.live[job["id"]]
+        # On a GPU shared with the agent's model, a render waits while the agent thinks, and the model is put out of
+        # the GPU before the render starts.
+        def waiting():
+            live["node"] = "Waiting for the GPU: the agent is thinking"
+            self.notify(job["user_id"])
+        try:
+            async with self.gpu.use("render", waiting, stop=lambda: live.get("cancel")):
+                live["node"] = ""
+                await self._render_job(job, live)
+        except gpu.Stopped:
+            raise Cancelled()
+
+    async def _render_job(self, job, live):
         wf = await self.catalog.load(job["workflow"])
         schema = workflows.describe(wf)
         clips = workflows.clip_count(schema, job["settings"])

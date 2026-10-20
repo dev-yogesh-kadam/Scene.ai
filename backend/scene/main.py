@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import backup, media, motion, sequence
+from . import backup, gpu, media, motion, sequence
 from .agent import Agent, AgentError, service
 from .api import admin, assets, auth, film, library, runs, studio, workspace
 from .catalog import Catalog
@@ -104,6 +104,11 @@ def create_app(settings=None):
         service("gemini", "Gemini", settings.gemini_url, settings.gemini_key, settings.gemini_models,
                 only=r"^gemini-[\d.]+-(pro|flash)(-lite)?(-preview)?$"),
     ])
+    # The agent's model and the renders take turns on the GPU when they are on one machine (gpu_shared "auto").
+    mode = str(settings.gpu_shared or "auto").strip().lower()
+    turns = gpu.Gate(lambda: mode == "on" or (mode == "auto" and gpu.same_machine(agent.url, comfy.url)), free={
+        "llm": lambda: gpu.free_comfy(comfy.http, comfy.url), "render": lambda: gpu.unload_ollama(agent.http, agent.url)})
+    agent.gpu = turns
     hub = Hub()
 
     def live_message(user_id, library_changed=False):
@@ -118,6 +123,7 @@ def create_app(settings=None):
     async def lifespan(app):
         app.state.jobs = JobManager(db, comfy, catalog, credits, app.state.outputs, notify, storage / "tmp", settings.node_path,
                                     storage / "assets")
+        app.state.jobs.gpu = turns
         workers = [asyncio.create_task(app.state.jobs.run_forever()), asyncio.create_task(app.state.jobs.run_forever(local=True))]
         if settings.backup_keep > 0:
             copies = (db, app.state.backup_dir, settings.config_file, settings.backup_keep)
@@ -135,6 +141,7 @@ def create_app(settings=None):
     app.state.settings = settings
     app.state.db = db
     app.state.comfy = comfy
+    app.state.gpu = turns
     app.state.catalog = catalog
     app.state.hub = hub
     app.state.credits = credits

@@ -662,7 +662,7 @@ async def agent_plan(body: dict, request: Request, user: dict = Depends(agent_us
     if not instruction:
         raise HTTPException(400, "Write a message for the agent.")
     project = _project_id(request, user, body.get("project_id"))
-    events = _planning(request, user, body, instruction, project)
+    events = _holding_gpu(request, body, _planning(request, user, body, instruction, project))
     if "application/x-ndjson" in request.headers.get("accept", ""):
         async def lines():
             try:
@@ -677,6 +677,22 @@ async def agent_plan(body: dict, request: Request, user: dict = Depends(agent_us
         if event["type"] == "plan":
             plan = event
     return {k: v for k, v in plan.items() if k != "type"}
+
+
+async def _holding_gpu(request, body, events):
+    """The events of a plan, with the GPU held for the whole message when a local model answers on a GPU the renders
+    share: its calls come one after another, and a render between two of them would make it load its model again."""
+    state = request.app.state
+    gate = getattr(state, "gpu", None)
+    if gate is None or not state.agent.is_local(body.get("model") or state.agent.model):
+        async for event in events:
+            yield event
+        return
+    if gate.busy()["side"] == "render":
+        yield {"type": "status", "text": "Waiting for the render on the GPU to finish…"}
+    async with gate.use("llm"):
+        async for event in events:
+            yield event
 
 
 async def _planning(request, user, body, instruction, project):

@@ -11,7 +11,7 @@ import re
 
 import httpx
 
-from . import camera, cast, sequence
+from . import camera, cast, gpu, sequence
 
 MAX_STEPS = 12   # a longer film runs in stages (cast, stills, clips), each priced and approved on its own
 SHOT_SECONDS = (4, 15)  # the length the agent may give one video shot; the workflow takes any number of seconds
@@ -592,6 +592,7 @@ class Agent:
         self.tools = options.get("tools", True) is not False
         self.seen = {}   # local model -> what it can do ("vision", "tools", "thinking"), as Ollama says
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(max(60, int(options.get("timeout") or 600)), connect=5))
+        self.gpu = gpu.Gate(lambda: False)   # the GPU it may share with the renders (main.py sets the real one)
 
     def is_local(self, model):
         return self._service_of(model or self.model)[0] is None
@@ -736,6 +737,15 @@ class Agent:
                              "or give it a larger context (ollama_context in config.json).".format(model, int(guess), size))
         payload = {"model": model, "stream": False, "think": bool(think), "format": answer_format, "keep_alive": self.keep_alive,
                    "options": {"temperature": 0.4, "num_ctx": size}, "messages": messages}
+        async with self.gpu.use("llm"):
+            body = await self._post_local(model, payload)
+        if body.get("error"):
+            raise AgentError("The agent's model failed: {}".format(str(body["error"])[:200]))
+        usage = {"prompt": int(body.get("prompt_eval_count") or 0), "cached": 0, "answer": int(body.get("eval_count") or 0)}
+        return (body.get("message") or {}).get("content"), usage
+
+    async def _post_local(self, model, payload):
+        """Send one chat to Ollama, trying again while it starts or loads the model."""
         for wait in (*LOAD_RETRIES, None):
             try:
                 body = (await self.http.post(self.url + "/api/chat", json=payload)).json()
@@ -752,10 +762,7 @@ class Agent:
                 await asyncio.sleep(wait)   # the model is being loaded, or another call has it
                 continue
             break
-        if body.get("error"):
-            raise AgentError("The agent's model failed: {}".format(str(body["error"])[:200]))
-        usage = {"prompt": int(body.get("prompt_eval_count") or 0), "cached": 0, "answer": int(body.get("eval_count") or 0)}
-        return (body.get("message") or {}).get("content"), usage
+        return body
 
     async def _ask_hosted(self, s, model, messages, answer_format):
         """Ask a model of the hosted service `s` through the OpenAI chat API. It is told the shape of the answer in
