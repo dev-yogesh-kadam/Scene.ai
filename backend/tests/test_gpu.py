@@ -104,3 +104,26 @@ def test_nothing_waits_when_the_gpu_is_not_shared():
                 log.append("both")
     asyncio.run(go())
     assert log == ["both"]
+
+
+def test_a_polite_call_waits_for_the_renders_queued_and_keeps_no_one_out():
+    log, queued = [], [2]   # two renders wait to start
+
+    async def go():
+        g = gpu.Gate(lambda: True, pending={"render": lambda: queued[0] > 0})
+
+        async def check():
+            with gpu.politely():
+                async with g.use("llm"):
+                    log.append("checked")
+
+        async def renders():
+            await asyncio.sleep(0.05)
+            for n in range(2):
+                async with g.use("render"):
+                    queued[0] -= 1
+                    log.append("render %d" % n)
+                    await asyncio.sleep(0.1)
+        await asyncio.gather(check(), renders())
+    asyncio.run(go())
+    assert log == ["render 0", "render 1", "checked"]

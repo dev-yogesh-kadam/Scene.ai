@@ -12,7 +12,7 @@ between two calls would make it unload and load its model again for every call."
 import asyncio
 import contextvars
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from urllib.parse import urlparse
 
 import httpx
@@ -28,6 +28,19 @@ class Stopped(Exception):
 
 
 _held = contextvars.ContextVar("gpu_held", default=None)   # the side this task (and the tasks it starts) holds
+_polite = contextvars.ContextVar("gpu_polite", default=False)
+
+
+@contextmanager
+def politely():
+    """Calls made in this block wait for the GPU without keeping the other side out, and also until it has nothing
+    more waiting to run: checking a finished picture waits for the renders queued behind it, rather than making the
+    GPU swap models between every two renders."""
+    token = _polite.set(True)
+    try:
+        yield
+    finally:
+        _polite.reset(token)
 
 
 def same_machine(a, b):
@@ -40,11 +53,13 @@ def same_machine(a, b):
 
 class Gate:
     """shared: function() -> bool, whether the GPU is shared now (the servers can move). free: {side: async function()}
-    that puts the other side's models out of the GPU before `side` takes it."""
+    that puts the other side's models out of the GPU before `side` takes it. pending: {side: function() -> bool},
+    whether that side has work waiting to start (renders queued), which a polite call waits for."""
 
-    def __init__(self, shared, free=None):
+    def __init__(self, shared, free=None, pending=None):
         self.shared = shared
         self.free = free or {}
+        self.pending = pending or {}
         self.side = None          # the side that holds the GPU, or had it last
         self.users = 0            # calls of that side using it now
         self.waiting = {s: 0 for s in SIDES}
@@ -67,10 +82,12 @@ class Gate:
             yield
             return
         other = SIDES[1 - SIDES.index(side)]
+        polite = _polite.get()
+        later = self.pending.get(other) or (lambda: False)
         async with self.changed:
-            self.waiting[side] += 1
+            self.waiting[side] += 0 if polite else 1
             try:
-                free = lambda: self.users == 0 or (self.side == side and self.waiting[other] == 0)
+                free = lambda: (self.users == 0 or (self.side == side and self.waiting[other] == 0)) and not (polite and later())
                 if not free() and waiting:
                     waiting()
                 while not free():
@@ -81,7 +98,7 @@ class Gate:
                     except asyncio.TimeoutError:
                         pass
             finally:
-                self.waiting[side] -= 1
+                self.waiting[side] -= 0 if polite else 1
             switching = self.side != side
             self.side, self.users = side, self.users + 1
             if switching:

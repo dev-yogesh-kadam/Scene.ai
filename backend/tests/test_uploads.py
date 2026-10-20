@@ -196,8 +196,9 @@ def test_a_run_keeps_its_files_for_the_messages_after(client, monkeypatch, tmp_p
     client.post("/api/agent/plan", json={"instruction": "@1 @2 /pocket-motion-seedance-v2", "selection": [sound["id"], script["id"]], "run": "pm-1"})
     asked.clear()
     plan = client.post("/api/agent/plan", json={"instruction": "Recommended. go", "selection": [], "run": "pm-1"}).json()
-    check = next(text for kind, text in asked if kind == "check")
-    assert "scenetest1 (a sound, 3.0 s long)" in check and "sceneaites-doc (a text of" in check   # still there after "go"
+    assert not any(kind == "check" for kind, _ in asked)   # the skill was checked when the run began, not again
+    told = next(text for kind, text in asked if kind == "plan")
+    assert "scenetest1" in told and "sceneaites-doc" in told   # still there after "go"
     assert any("scenetest1" in e["text"] and "sceneaites-doc" in e["text"] for e in plan["activity"] if e["text"].startswith("Read what you attached"))
     from scene import runs
     assert runs.kept_attached(client.app.state.db, 1, "pm-1") == [sound["id"], script["id"]]

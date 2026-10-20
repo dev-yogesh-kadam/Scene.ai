@@ -591,6 +591,7 @@ class Agent:
         self.think = bool(options.get("think"))
         self.tools = options.get("tools", True) is not False
         self.seen = {}   # local model -> what it can do ("vision", "tools", "thinking"), as Ollama says
+        self.longest = {}   # local model -> the most tokens it was made to read at once, as Ollama says
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(max(60, int(options.get("timeout") or 600)), connect=5))
         self.gpu = gpu.Gate(lambda: False)   # the GPU it may share with the renders (main.py sets the real one)
 
@@ -601,9 +602,14 @@ class Agent:
         """Whether a model works in the loop of tool calls: a hosted one always, a local one unless local_tools is off."""
         return not self.is_local(model) or self.tools
 
+    def reads(self, model):
+        """The tokens a local model reads at once: ollama_context, or less when the model was made for less (known once
+        abilities() has asked Ollama about it)."""
+        return min(self.context, self.longest.get(model) or self.context)
+
     def skill_room(self, model):
         """How many characters of a skill a model is given whole; a longer skill is read in parts (read_skill)."""
-        return None if not self.is_local(model) else int(self.context * CHARS_PER_TOKEN * SKILL_SHARE)
+        return None if not self.is_local(model) else int(self.reads(model) * CHARS_PER_TOKEN * SKILL_SHARE)
 
     def helper(self, model):
         """The model for the small jobs (a better prompt, a caption, the notes, the check of a skill): the fast local model
@@ -619,6 +625,10 @@ class Agent:
                 if not found and "clip" in ((shown.get("details") or {}).get("families") or []):
                     found = {"completion", "vision"}   # an older Ollama: a model with an image encoder can see
                 self.seen[name] = found
+                # the most it was made to read at once: a longer context is not asked of it
+                longest = [v for k, v in (shown.get("model_info") or {}).items() if k.endswith(".context_length") and isinstance(v, int)]
+                if longest:
+                    self.longest[name] = max(longest)
             except (httpx.HTTPError, ValueError, AttributeError):
                 return set()
         return self.seen[name]
@@ -728,7 +738,8 @@ class Agent:
     async def _ask_local(self, model, messages, answer_format, context, think=False):
         # One context size for every call. Without one Ollama cuts a long prompt from its start (the instructions), and a
         # call with another size than the last makes it load the model again and lose what it had already read.
-        size = max(self.context, context or 0)
+        await self.abilities(model)   # learns the most this model reads: ollama_context is not asked beyond it
+        size = min(max(self.context, context or 0), self.longest.get(model) or self.context)
         # Ollama does not refuse a prompt longer than its context: it drops the start, which is the instructions. So a
         # prompt that cannot fit is refused here, saying what to do, instead of being answered without them.
         guess = sum(len(str(m.get("content") or "")) for m in messages) / CHARS_PER_TOKEN
@@ -895,7 +906,7 @@ class Agent:
         answer, fixes = {}, 0
         for round_ in range(1, rounds + 1):
             if compact:
-                self._fit(messages)
+                self._fit(messages, model)
             asked = await self.chat(messages, shape, model=model, think=True)
             add_tokens(tokens, asked.get("_usage"))
             if compact:
@@ -909,7 +920,7 @@ class Agent:
             last = round_ == rounds
             if name == "finish":
                 if compact:   # the plan itself, in its own call with the plan's shape
-                    self._fit(messages)
+                    self._fit(messages, model)
                     answer = await self.chat(messages + [{"role": "user", "content": FINISH_NOW}], reply_format(workflow_ids),
                                              model=model, think=True)
                     add_tokens(tokens, answer.get("_usage"))
@@ -937,15 +948,15 @@ class Agent:
                          {"role": "user", "content": "Result of {}:\n{}".format(name, str(result)[:TOOL_RESULT])}]
         if not answer.get("reply") and not answer.get("steps") and compact and name != "finish":
             # the rounds ran out while it was still working: it gives its answer now, from what it has
-            self._fit(messages)
+            self._fit(messages, model)
             answer = await self.chat(messages + [{"role": "user", "content": FINISH_NOW}], reply_format(workflow_ids), model=model)
             add_tokens(tokens, answer.get("_usage"))
         return dict(shaped(answer), tools=used, tokens=tokens)
 
-    def _fit(self, messages):
+    def _fit(self, messages, model=None):
         """Keep a long run within a local model's context: the oldest tool results are shortened first (the newest
         KEEP_RESULTS stay whole), as the instructions and the question must stay as they are."""
-        room = int(self.context * CHARS_PER_TOKEN * 0.9)
+        room = int(self.reads(model or self.model) * CHARS_PER_TOKEN * 0.9)
         size = lambda: sum(len(str(m.get("content") or "")) for m in messages)
         results = [i for i, m in enumerate(messages) if m["role"] == "user" and str(m["content"]).startswith("Result of ")]
         for i in results[:-KEEP_RESULTS] if len(results) > KEEP_RESULTS else []:

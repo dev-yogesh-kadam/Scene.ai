@@ -10,7 +10,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from .. import agent, camera, cast, credits, edits, media, memory, motion, review, runs, sequence, skills
+from .. import agent, camera, cast, credits, edits, gpu, media, memory, motion, review, runs, sequence, skills
 from ..comfy import workflows
 from .deps import agent_user, current_user
 from .studio import price
@@ -33,6 +33,11 @@ CHECKED_SKILL = 4_000        # a skill longer than this, or one the user named w
 MOTION_WORKFLOW = credits.MOTION   # what a rendered motion graphic is filed and priced under
 STATE_PAGE = 25          # leaves of a run's state the agent is given at a time
 LIVE_EVERY = 1.0         # seconds between looks at what the agent's tools did while it works
+# A proxy in front of the studio (the Cloudflare tunnel) closes a request that sends nothing for 100 seconds, and a
+# local model can be quiet longer than that (loading, reading a long skill, waiting for the GPU). So a slow answer
+# sends a sign of life every KEEP_ALIVE seconds; one that comes within PATIENT seconds is sent as it is.
+KEEP_ALIVE = 15
+PATIENT = 20
 SLASH = re.compile(r"(?:^|(?<=\s))/([a-z0-9][a-z0-9-]*)(?=\s|$)")   # a /skill-id standing on its own, anywhere in a message
 RUN_ITEMS = 5000         # library items a long run's steps may name by id
 MAX_SELECTION = 24       # attached items read with one message (a long skill takes a cast, props and places at once)
@@ -215,6 +220,10 @@ async def motion_templates(request: Request, user: dict = Depends(current_user))
 
 @router.post("/motion/scenes")
 async def motion_scenes(body: dict, request: Request, user: dict = Depends(current_user)):
+    return await _patient(_motion_scenes(body, request, user))
+
+
+async def _motion_scenes(body, request, user):
     """Have the agent's model write a whole motion graphics video as scenes, from what it is about. Nothing is
     rendered: the scenes go back to the form, where they can be changed before Render."""
     about = str(body.get("about") or "").strip()[:2000]
@@ -349,6 +358,11 @@ async def list_skills(user: dict = Depends(current_user)):
 
 @router.post("/agent/review")
 async def agent_review(body: dict, request: Request, user: dict = Depends(agent_user)):
+    with gpu.politely():   # a check waits for the renders still queued, so the GPU does not swap models between them
+        return await _patient(_agent_review(body, request, user))
+
+
+async def _agent_review(body, request, user):
     """Have the agent look at a picture or clip it made and check it against its prompt, its reference pictures and
     the shot before. Body: {"item", "prompt"?, "uses"?: [{"id"} or {"asset"}], "previous"?: item id, "retake"?: bool}.
     Returns {"verdict", "retake"}: a failed result comes with a retake, priced but not queued, unless "retake" is false.
@@ -420,6 +434,10 @@ async def _retake(state, user, item, verdict, previous):
 
 @router.post("/agent/improve")
 async def agent_improve(body: dict, request: Request, user: dict = Depends(current_user)):
+    return await _patient(_agent_improve(body, request, user))
+
+
+async def _agent_improve(body, request, user):
     """Have the agent rewrite a prompt into a fuller one. Nothing is queued or charged."""
     prompt = str(body.get("prompt") or "").strip()[:2000]
     if not prompt:
@@ -444,6 +462,10 @@ async def agent_improve(body: dict, request: Request, user: dict = Depends(curre
 
 @router.post("/agent/compact")
 async def agent_compact(body: dict, request: Request, user: dict = Depends(current_user)):
+    return await _patient(_agent_compact(body, request, user))
+
+
+async def _agent_compact(body, request, user):
     """Fold a conversation into the Direction, the durable notes the agent reads in place of old turns.
     Body: {"history": [...as for plan], "direction"?: the notes so far}. Returns {"direction"}. Nothing is queued."""
     turns = agent.past_turns(body.get("history"))
@@ -679,20 +701,80 @@ async def agent_plan(body: dict, request: Request, user: dict = Depends(agent_us
     return {k: v for k, v in plan.items() if k != "type"}
 
 
+async def _patient(work):
+    """The answer of `work` (a coroutine that gives a dict). One that comes within PATIENT seconds is sent as it is,
+    errors with their status. A slower one is sent as a space every KEEP_ALIVE seconds and then the answer (JSON allows
+    spaces before it); the status is sent by then, so an error comes as {"detail", "failed": its status}."""
+    task = asyncio.ensure_future(work)
+    done, _ = await asyncio.wait([task], timeout=PATIENT)
+    if done:
+        return task.result()
+
+    async def slowly():
+        try:
+            while not task.done():
+                done, _ = await asyncio.wait([task], timeout=KEEP_ALIVE)
+                if not done:
+                    yield b" "
+            try:
+                answer = task.result()
+            except HTTPException as error:
+                answer = {"detail": error.detail, "failed": error.status_code}
+            except Exception as error:   # the status is sent already: the error goes in the answer
+                answer = {"detail": str(error) or type(error).__name__, "failed": 500}
+            yield json.dumps(answer, ensure_ascii=False).encode("utf-8")
+        finally:
+            if not task.done():
+                task.cancel()
+    return StreamingResponse(slowly(), media_type="application/json", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 async def _holding_gpu(request, body, events):
-    """The events of a plan, with the GPU held for the whole message when a local model answers on a GPU the renders
-    share: its calls come one after another, and a render between two of them would make it load its model again."""
+    """The events of a plan, with signs of life ({"type": "ping"}) while nothing happens for KEEP_ALIVE seconds, and
+    the GPU held for the whole message when a local model answers on a GPU the renders share: its calls come one after
+    another, and a render between two of them would make it load its model again.
+
+    The plan runs in a task of its own that holds the GPU, so the calls inside it know they hold it; this generator
+    passes on what it does, and pings while it is quiet (waiting for a render, a model loading, a long call)."""
     state = request.app.state
     gate = getattr(state, "gpu", None)
-    if gate is None or not state.agent.is_local(body.get("model") or state.agent.model):
-        async for event in events:
-            yield event
-        return
-    if gate.busy()["side"] == "render":
+    holds = gate is not None and state.agent.is_local(body.get("model") or state.agent.model)
+    queue, end = asyncio.Queue(), object()
+
+    async def work():
+        try:
+            if holds:
+                async with gate.use("llm"):
+                    async for event in events:
+                        await queue.put(event)
+            else:
+                async for event in events:
+                    await queue.put(event)
+            await queue.put(end)
+        except Exception as error:
+            await queue.put(error)
+
+    if holds and gate.busy()["side"] == "render":
         yield {"type": "status", "text": "Waiting for the render on the GPU to finish…"}
-    async with gate.use("llm"):
-        async for event in events:
+    task = asyncio.ensure_future(work())
+    getter = None
+    try:
+        while True:
+            getter = getter or asyncio.ensure_future(queue.get())
+            done, _ = await asyncio.wait([getter], timeout=KEEP_ALIVE)
+            if not done:
+                yield {"type": "ping"}
+                continue
+            event, getter = getter.result(), None
+            if event is end:
+                return
+            if isinstance(event, Exception):
+                raise event
             yield event
+    finally:
+        for waiting in (getter, task):
+            if waiting is not None and not waiting.done():
+                waiting.cancel()
 
 
 async def _planning(request, user, body, instruction, project):
@@ -764,8 +846,9 @@ async def _planning(request, user, body, instruction, project):
     instruction = re.sub(r"[ \t]{2,}", " ", instruction)
     # A long run follows the skill its first message named until another is named: "go" and every message after it
     # carry on with that skill, rather than skills picked afresh from their words.
+    carried = runs.kept_skill(state.db, user["id"], run_id) if run_id else None   # the skill this run follows already
     if run_id and not any(skills.find(f) for f in forced):
-        kept = runs.kept_skill(state.db, user["id"], run_id)
+        kept = carried
         if kept and skills.find(kept):
             forced.append(kept)
             yield activity("skill", "Carried on with “{}”, the skill of this run".format(skills.find(kept)["title"]))
@@ -838,6 +921,8 @@ async def _planning(request, user, body, instruction, project):
     charged = {"credits": 0, "model": chosen_model}
     # A skill is given whole when the model holds it; a longer one as its opening and a list of its parts, which the
     # model reads with read_skill as it comes to them. A skill is never cut, whatever its length or the model.
+    if state.agent.is_local(chosen_model):
+        await state.agent.abilities(chosen_model)   # how much it reads at once, which sets how much of a skill it is given whole
     room = state.agent.skill_room(chosen_model)
     limit = skills.MAX_CHARS if room is None else room
     for skill in picked:
@@ -864,6 +949,8 @@ async def _planning(request, user, body, instruction, project):
     for skill in picked:
         if not (skill["id"] in forced or len(skill["text"]) > CHECKED_SKILL):
             continue
+        if skill["id"] == carried:
+            continue   # checked when its run began: the run goes on, with what that message had
         yield status("Checking what the skill needs…")
         ability = "\n".join(["Workflows: " + "; ".join("{} ({})".format(o["id"], o.get("title") or o["id"]) for o in offers),
                              STUDIO_ABILITY])

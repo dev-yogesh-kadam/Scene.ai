@@ -19,7 +19,7 @@ from .comfy import workflows
 from .comfy.client import Comfy, ComfyError
 from .config import load_settings
 from .credits import Credits
-from .db import open_database
+from .db import as_everyone, open_database
 from .jobs import JobManager
 from .outputs import Outputs
 from .security import LoginThrottle, RateLimit, is_https, same_origin
@@ -104,10 +104,18 @@ def create_app(settings=None):
         service("gemini", "Gemini", settings.gemini_url, settings.gemini_key, settings.gemini_models,
                 only=r"^gemini-[\d.]+-(pro|flash)(-lite)?(-preview)?$"),
     ])
+    def renders_waiting():
+        """Whether renders wait to start, anyone's (the queue not paused): a polite call (a review) waits for them."""
+        if db.setting("queue_paused", "0") == "1":
+            return False
+        with as_everyone():
+            return bool(db.one("SELECT 1 FROM jobs WHERE status = 'queued' AND workflow NOT LIKE 'edit/%' LIMIT 1"))
+
     # The agent's model and the renders take turns on the GPU when they are on one machine (gpu_shared "auto").
     mode = str(settings.gpu_shared or "auto").strip().lower()
     turns = gpu.Gate(lambda: mode == "on" or (mode == "auto" and gpu.same_machine(agent.url, comfy.url)), free={
-        "llm": lambda: gpu.free_comfy(comfy.http, comfy.url), "render": lambda: gpu.unload_ollama(agent.http, agent.url)})
+        "llm": lambda: gpu.free_comfy(comfy.http, comfy.url), "render": lambda: gpu.unload_ollama(agent.http, agent.url)},
+        pending={"render": renders_waiting})
     agent.gpu = turns
     hub = Hub()
 
