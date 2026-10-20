@@ -8,9 +8,9 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
-from .. import media
+from .. import fetch, media
 from ..catalog import KINDS
-from ..references import media_kind, read_upload, safe_name, upload_reference
+from ..references import media_kind, read_text_upload, read_upload, safe_name, text_kind, upload_reference
 from .deps import current_user
 
 router = APIRouter(prefix="/api", tags=["library"])
@@ -37,14 +37,16 @@ def _own_project(request, user, project_id):
 # ---------------------------------------------------------------- items
 
 @router.get("/library")
-async def list_items(request: Request, kind: str = "", q: str = "", project: str = "",
+async def list_items(request: Request, kind: str = "", q: str = "", project: str = "", run: str = "",
                      user: dict = Depends(current_user)):
-    """`project` is a project id, "none" for items in no project, or empty for everything."""
+    """`project` is a project id, "none" for items in no project, or empty for everything. `run`: the working files of
+    that run (slices, trims, references of a long skill), which are otherwise left out."""
     # Each item comes with what its details panel shows: the job's cost and the project's name.
     sql = ("SELECT g.*, j.cost, p.name AS project_name FROM generations g LEFT JOIN jobs j ON j.id = g.job_id "
            "LEFT JOIN projects p ON p.id = g.project_id WHERE g.user_id = ?")
-    params = [user["id"]]
-    if kind in KINDS:
+    sql += " AND g.run = ?"
+    params = [user["id"], run[:64]]
+    if kind in (*KINDS, "text"):
         sql, params = sql + " AND g.kind = ?", params + [kind]
     if project == "none":
         sql += " AND g.project_id IS NULL"
@@ -67,21 +69,49 @@ UPLOADED = "upload/file"   # what an item the user brought in is filed under: it
 
 @router.post("/library/upload")
 async def upload_item(request: Request, user: dict = Depends(current_user)):
-    """Multipart form with "file" (an image, a video or a sound) and "project_id". The file joins the library and the
-    project's canvas like a finished generation, so it can be a frame to start on, a reference or a clip on the
-    timeline. Nothing is charged."""
+    """Multipart form with "file" (an image, a video, a sound, or a transcript: .srt, .json) and "project_id".
+    The file joins the library and the project's canvas like a finished generation, so it can be a frame to start on, a
+    reference or a clip on the timeline. Nothing is charged."""
     form = await request.form()
     upload = form.get("file")
     if not hasattr(upload, "filename"):
         raise HTTPException(400, "Choose a file.")
-    data = await read_upload(upload)   # refuses what is too large or is not the image, video or sound it says it is
-    kind = media_kind(upload.filename)
+    if text_kind(upload.filename):
+        data, kind = await read_text_upload(upload), "text"
+    else:
+        data = await read_upload(upload)   # refuses what is too large or is not the image, video or sound it says it is
+        kind = media_kind(upload.filename)
     project = str(form.get("project_id") or "")
     project_id = _own_project(request, user, int(project))["id"] if project.isdigit() and int(project) else None
+    return await _file_in(request, user, data, upload.filename, kind, project_id, "Uploaded")
+
+
+IMPORTED = "upload/link"   # an item brought in from a link on another site
+
+
+@router.post("/library/import")
+async def import_link(body: dict, request: Request, user: dict = Depends(current_user)):
+    """{"url", "project_id"?, "name"?}: the picture, clip or sound at a link on another site, brought into the library
+    (see fetch.py for what is fetched and what is refused). Nothing is charged."""
+    url = str(body.get("url") or "").strip()
+    if not url or len(url) > 2000:
+        raise HTTPException(400, "Give the link to bring in.")
+    project_id = _own_project(request, user, body["project_id"])["id"] if isinstance(body.get("project_id"), int) and body["project_id"] else None
+    try:
+        data, kind, final = await fetch.fetch(url)
+    except fetch.FetchError as error:
+        raise HTTPException(400, str(error))
+    name = " ".join(str(body.get("name") or "").split())[:80]
+    return await _file_in(request, user, data, fetch.filename_for(final, kind), kind, project_id, "Brought in from a link",
+                          workflow=IMPORTED, name=name, source=url)
+
+
+async def _file_in(request, user, data, filename, kind, project_id, summary, workflow=UPLOADED, name="", source=""):
+    """A file the user brought in, saved and filed in the library like a finished generation."""
     folder = request.app.state.outputs.folder(user["id"])
     folder.mkdir(parents=True, exist_ok=True)
-    name = (upload.filename.rsplit(".", 1)[0].strip() or kind)[:80]
-    target = folder / "{}_{}_{}".format("upload", time.strftime("%Y%m%d_%H%M%S"), safe_name(upload.filename))
+    name = name or (filename.rsplit(".", 1)[0].strip() or kind)[:80]
+    target = folder / "{}_{}_{}".format("upload", time.strftime("%Y%m%d_%H%M%S"), safe_name(filename))
     target.write_bytes(data)
     context = {}
     if kind in ("video", "image"):
@@ -96,8 +126,8 @@ async def upload_item(request: Request, user: dict = Depends(current_user)):
     db = request.app.state.db
     db.run("INSERT INTO generations (user_id, job_id, project_id, workflow, kind, name, filename, summary, settings, "
            "context, seconds, size, created) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
-           (user["id"], project_id, UPLOADED, kind, name, target.name, "Uploaded", json.dumps({"name": name, "prompt": ""}),
-            json.dumps(context), len(data), time.time()))
+           (user["id"], project_id, workflow, kind, name, target.name, summary,
+            json.dumps({"name": name, "prompt": "", **({"source": source} if source else {})}), json.dumps(context), len(data), time.time()))
     row = db.one("SELECT * FROM generations WHERE user_id = ? AND filename = ?", (user["id"], target.name))
     return dict(row, settings=json.loads(row["settings"]), context=json.loads(row["context"]))
 
@@ -195,7 +225,7 @@ async def as_reference(item_id: int, request: Request, kind: str = "image", user
         name = await upload_reference(comfy, path.name, path.read_bytes(), db=request.app.state.db, user_id=user["id"])
         return {"comfy_name": name, "name": row["name"]}
     raise HTTPException(400, "{} is {}, and this needs {}.".format(
-        row["name"], {"image": "an image", "video": "a video", "audio": "a sound"}[row["kind"]],
+        row["name"], {"image": "an image", "video": "a video", "audio": "a sound"}.get(row["kind"], "a text"),
         {"image": "an image or a video", "video": "a video", "audio": "a sound"}.get(kind, "something else")))
 
 
@@ -204,10 +234,10 @@ async def as_reference(item_id: int, request: Request, kind: str = "image", user
 @router.get("/projects")
 async def list_projects(request: Request, user: dict = Depends(current_user)):
     return {"projects": request.app.state.db.all(
-        "SELECT p.id, p.name, p.created, (SELECT COUNT(*) FROM generations g WHERE g.project_id = p.id) AS items, "
+        "SELECT p.id, p.name, p.created, (SELECT COUNT(*) FROM generations g WHERE g.project_id = p.id AND g.run = '') AS items, "
         # The newest item of a project is its cover on the Home page, and tells when it was last worked on.
-        "(SELECT g.id FROM generations g WHERE g.project_id = p.id ORDER BY g.created DESC LIMIT 1) AS cover_id, "
-        "(SELECT g.kind FROM generations g WHERE g.project_id = p.id ORDER BY g.created DESC LIMIT 1) AS cover_kind, "
+        "(SELECT g.id FROM generations g WHERE g.project_id = p.id AND g.run = '' ORDER BY g.created DESC LIMIT 1) AS cover_id, "
+        "(SELECT g.kind FROM generations g WHERE g.project_id = p.id AND g.run = '' ORDER BY g.created DESC LIMIT 1) AS cover_kind, "
         "(SELECT MAX(g.created) FROM generations g WHERE g.project_id = p.id) AS updated "
         "FROM projects p WHERE p.user_id = ? ORDER BY lower(p.name)", (user["id"],))}
 

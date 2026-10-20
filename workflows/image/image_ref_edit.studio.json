@@ -1,0 +1,109 @@
+{
+  "title": "Reference Image Edit",
+  "description": "An image from a prompt and up to 6 reference images: character sheets, location plates, scene anchors and edits (Qwen Image Edit 2511).",
+  "output_name": "9.filename_prefix",
+  "labels": {
+    "20:image": "Reference 1: base image or location (<Picture 1>)",
+    "21:image": "Reference 2 (part of <Picture 2>)",
+    "22:image": "Reference 3 (part of <Picture 2>)",
+    "23:image": "Reference 4 (part of <Picture 2>)",
+    "24:image": "Reference 5 (part of <Picture 2>)",
+    "25:image": "Reference 6 (part of <Picture 2>)"
+  },
+  "required_refs": [
+    "20:image"
+  ],
+  "optional_refs": [
+    "21:image",
+    "22:image",
+    "23:image",
+    "24:image",
+    "25:image"
+  ],
+  "controls": [
+    {
+      "node": "37",
+      "input": "aspect_ratio",
+      "type": "choice",
+      "choices": [
+        "1:1",
+        "16:9",
+        "9:16",
+        "4:3"
+      ],
+      "label": "Aspect ratio",
+      "primary": true
+    }
+  ],
+  "options": [
+    {
+      "id": "quality",
+      "label": "Quality",
+      "default": "draft",
+      "choices": [
+        {
+          "id": "draft",
+          "label": "Draft",
+          "hint": "4 steps, about 10 s"
+        },
+        {
+          "id": "final",
+          "label": "Final",
+          "hint": "40 steps + SeedVR2 upscale, about 2.5 min"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "quality": "draft"
+      },
+      "set": {
+        "15.steps": 4,
+        "15.cfg": 1.0,
+        "6.strength_model": 1.0,
+        "45.switch": false
+      }
+    },
+    {
+      "when": {
+        "quality": "final"
+      },
+      "set": {
+        "15.steps": 40,
+        "15.cfg": 4.0,
+        "6.strength_model": 0.0,
+        "45.switch": true
+      }
+    }
+  ],
+  "hide": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "10",
+    "12",
+    "13",
+    "14",
+    "15",
+    "16",
+    "40",
+    "41",
+    "42",
+    "43",
+    "44",
+    "45",
+    "47"
+  ],
+  "pricing": {},
+  "hints": [
+    "Reference 1 is Picture 1 (the base image, location or anchor). References 2-6 are placed side by side on one canvas that the model sees as Picture 2.",
+    "Name extra references by what they look like, e.g. 'the woman in the olive blazer from Picture 2', and say where each person goes.",
+    "For an edit, give only Reference 1 with the same aspect ratio as the output and say what must stay the same: the picture then stays pixel-aligned.",
+    "Sizes: 1:1 = 1536x1536, 16:9 = 2752x1536, 9:16 = 1536x2752, 4:3 = 2048x1536 (rendered at about 1.5 MP and upscaled)."
+  ]
+}

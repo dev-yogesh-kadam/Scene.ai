@@ -114,11 +114,13 @@ export function reel(count = 24) {
 export const phaseOf = (share) => (share < 0.02 ? 'Setting up the shot' : share < 0.35 ? 'Blocking the scene'
   : share < 0.7 ? 'Rolling camera' : share < 0.95 ? 'Developing frames' : 'Final touches');
 
-// A still of a made item, for a thumbnail: an image as it is, a video as its poster, a sound as a mark and its name.
+// A still of a made item, for a thumbnail: an image as it is, a video as its poster, a sound or a text (a transcript,
+// a list of times) as a mark and its name.
 // The poster is a small picture the server makes from the video, so a page of thumbnails doesn't start loading every video.
 export function still(url, kind, name = '') {
   if (kind === 'video') return el('img', { src: url.replace(/\/file$/, '/poster'), alt: name, loading: 'lazy', draggable: 'false' });
   if (kind === 'audio') return el('div', { class: 'sound' }, icon('audio'), el('span', {}, name));
+  if (kind === 'text') return el('div', { class: 'sound' }, icon('book'), el('span', {}, name));
   return el('img', { src: url, alt: name, loading: 'lazy', draggable: 'false' });
 }
 

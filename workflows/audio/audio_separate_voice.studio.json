@@ -1,0 +1,24 @@
+{
+  "title": "Separate Voice",
+  "description": "The voice stem of a mixed episode (wav, exactly the input's length, no time shift), plus the music and effects stem.",
+  "output_name": "3.filename_prefix",
+  "labels": {
+    "1:audio": "Episode audio (voice + music + effects)"
+  },
+  "required_refs": [
+    "1:audio"
+  ],
+  "optional_refs": [],
+  "controls": [],
+  "options": [],
+  "rules": [],
+  "hide": [
+    "2",
+    "4"
+  ],
+  "pricing": {},
+  "hints": [
+    "Works on full episodes: the audio is processed in 30 s chunks, so 30 minutes do not run out of memory.",
+    "Both stems are wav at the input's sample rate; voice + music/fx adds back up to the input exactly."
+  ]
+}

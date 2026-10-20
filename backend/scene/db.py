@@ -1,4 +1,5 @@
-"""Storage: users, sessions, jobs, finished generations, projects, boards, assets, credits, pricing and settings.
+"""Storage: users, sessions, jobs, finished generations, projects, boards, assets, credits, pricing, settings and the
+state of long runs (runs.py).
 
 Two databases with the same interface (run, change, all, one, setting, backup): PostgreSQL when `database_url` is set,
 otherwise SQLite in one file. The app's SQL is written once, with ? for each value; the PostgreSQL side translates it.
@@ -139,6 +140,15 @@ CREATE TABLE IF NOT EXISTS credit_packages (
     active INTEGER NOT NULL DEFAULT 1,
     created REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS run_state (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    run TEXT NOT NULL,
+    path TEXT NOT NULL,
+    value TEXT NOT NULL,
+    writer TEXT NOT NULL DEFAULT '',
+    updated REAL NOT NULL,
+    PRIMARY KEY (user_id, run, path)
+);
 CREATE TABLE IF NOT EXISTS servers (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -206,6 +216,11 @@ COLUMNS = [
     ("generations", "review", "TEXT NOT NULL DEFAULT ''"),
     # The user's thumbs on a result: 1 up, -1 down, 0 not rated. The agent reuses what was liked and avoids the rest.
     ("generations", "rating", "INTEGER NOT NULL DEFAULT 0"),
+    # The run (of a long skill such as Pocket Motion) a working file belongs to: its slices, trims and references. The
+    # library leaves them out unless that run is asked for; "" for everything else.
+    ("generations", "run", "TEXT NOT NULL DEFAULT ''"),
+    # The run a job was made for: what a long run has spent is counted from it (runs.spent).
+    ("jobs", "run", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 # The studio's two machines, added to an installation that has no servers yet. Every value can be changed in the
@@ -348,7 +363,7 @@ ID_TABLES = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+) \(\s*id INTEGER PR
 # and writes only that user's rows, even if its SQL forgot to say so. Tables of the whole installation (settings,
 # pricing, servers, the audit log) have no owner.
 OWNED = {"users": "id", "sessions": "user_id", "jobs": "user_id", "generations": "user_id", "projects": "user_id",
-         "boards": "user_id", "assets": "user_id", "credit_events": "user_id", "uploads": "user_id"}
+         "boards": "user_id", "assets": "user_id", "credit_events": "user_id", "uploads": "user_id", "run_state": "user_id"}
 ACTING_SQL = "current_setting('app.user_id', true)"
 OWN_ROWS = ("{acting} = 'all' OR {column} = (CASE WHEN {acting} ~ '^[0-9]+$' THEN {acting}::bigint END)")
 

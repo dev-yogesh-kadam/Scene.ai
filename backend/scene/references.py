@@ -21,6 +21,32 @@ KINDS = {
 }
 
 
+TEXT_SUFFIXES = {".srt", ".json"}   # a transcript the user brings, filed as "text" (a plain .txt has no times to use)
+MAX_TEXT_BYTES = 5 * 1024 * 1024
+
+
+def text_kind(filename):
+    return "text" if Path(filename or "").suffix.lower() in TEXT_SUFFIXES else None
+
+
+async def read_text_upload(upload):
+    """The bytes of an uploaded transcript (.srt, .json): at most 5 MB, and text — UTF-8, with no NUL bytes —
+    whatever its name says."""
+    label = upload.filename or "The file"
+    if (upload.size or 0) > MAX_TEXT_BYTES:
+        raise HTTPException(413, "{} is larger than 5 MB.".format(label))
+    data = await upload.read()
+    if len(data) > MAX_TEXT_BYTES:
+        raise HTTPException(413, "{} is larger than 5 MB.".format(label))
+    try:
+        if b"\x00" in data:
+            raise UnicodeError
+        data.decode("utf-8-sig")
+    except UnicodeError:
+        raise HTTPException(400, "{} is not a text file.".format(label))
+    return data
+
+
 def media_kind(filename):
     suffix = Path(filename or "").suffix.lower()
     return next((kind for kind, suffixes in KINDS.items() if suffix in suffixes), None)

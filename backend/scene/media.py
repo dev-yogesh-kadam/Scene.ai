@@ -26,10 +26,12 @@ def ffmpeg_path():
         return found
 
 
-async def _ffmpeg(*args, check=True):
+async def _ffmpeg(*args, check=True, cwd=None):
+    """Run ffmpeg and return what it said. cwd: the folder it runs in, so a filter can name its files (subtitles, a
+    font) without the escaping a full Windows path needs inside a filter."""
     process = await asyncio.create_subprocess_exec(
         ffmpeg_path(), "-hide_banner", "-y", *[str(a) for a in args],
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, cwd=cwd)
     try:
         _, stderr = await process.communicate()
     except asyncio.CancelledError:   # the job this was for was cancelled: don't leave ffmpeg running

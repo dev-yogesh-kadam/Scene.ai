@@ -463,6 +463,8 @@ def describe(wf):
         "max_clips": MAX_CLIPS,
         "resolutions": sorted(SHORT_EDGE),
         "approximate": wf["approximate"],
+        # The presets file says the prompt may be left empty: the workflow has its own instruction, the prompt only adds notes.
+        "prompt_optional": bool(profile.get("prompt_optional")),
     }
 
 
@@ -553,7 +555,7 @@ def build_prompt(wf, settings):
                 value = int.from_bytes(os.urandom(6), "big")
             ctx["seed"] = _cast("int", value)
         value = _cast(c["type"], value)
-        if c["role"] == "prompt" and not value.strip():
+        if c["role"] == "prompt" and not value.strip() and not schema["prompt_optional"]:
             raise WorkflowError("The prompt is empty.")
         if "choices" in c and value not in c["choices"]:
             raise WorkflowError("'{}' is not a choice for {}.".format(value, c["label"]))

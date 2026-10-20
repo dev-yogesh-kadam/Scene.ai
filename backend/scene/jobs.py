@@ -26,6 +26,7 @@ from .db import as_everyone
 VIDEO_TYPES = {".mp4", ".webm", ".mov", ".mkv", ".gif"}
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
 AUDIO_TYPES = {".mp3", ".flac", ".wav", ".opus", ".ogg", ".m4a"}
+TEXT_TYPES = {".json", ".srt", ".txt"}   # a transcript, a list of times: filed as "text"
 CLIP_BREAK = re.compile(r"^\s*-{3,}\s*$", re.M)  # a line of dashes separates per-clip prompts
 
 
@@ -84,10 +85,10 @@ class JobManager:
         job_id = uuid.uuid4().hex[:12]
         self.db.run(
             "INSERT INTO jobs (id, user_id, name, workflow, kind, settings, summary, status, est_seconds, cost, "
-            "credits_required, credits_reserved, seconds_requested, project_id, created) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)",
+            "credits_required, credits_reserved, seconds_requested, project_id, run, created) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)",
             (job_id, user_id, name, workflow_id, workflow_id.split("/", 1)[0], json.dumps(settings), summary,
-             est_seconds, cost, cost, cost, seconds, project_id, time.time()))
+             est_seconds, cost, cost, cost, seconds, project_id, str(settings.get("run_of") or settings.get("run") or "")[:32], time.time()))
         self.wake.set()
         self.notify(user_id)
         return job_id
@@ -187,10 +188,12 @@ class JobManager:
                 work.cancel()
                 await asyncio.gather(work, return_exceptions=True)
                 raise Cancelled()
-        target, ctx = work.result()
-        job["summary"] = "{} · {:.0f} s".format(job["summary"], ctx["duration"])
-        self.db.run("UPDATE jobs SET summary = ? WHERE id = ?", (job["summary"], job["id"]))
-        self._record(job, "video", target, ctx)
+        made = work.result()
+        if made[0][2]["duration"]:
+            job["summary"] = "{} · {:.0f} s".format(job["summary"], made[0][2]["duration"])
+            self.db.run("UPDATE jobs SET summary = ? WHERE id = ?", (job["summary"], job["id"]))
+        for target, kind, ctx in made:
+            self._record(job, kind, target, ctx)
 
     async def _run(self, job):
         if edits.is_edit(job["workflow"]):
@@ -211,7 +214,9 @@ class JobManager:
 
         folder, stem = self._target(job)
         saved = 0
-        for item, kind, suffix in _outputs(entry):
+        outputs = list(_outputs(entry))
+        labels = _output_labels(wf, outputs)
+        for (item, kind, suffix), label in zip(outputs, labels):
             target = folder / "{}{}{}".format(stem, "_{}".format(saved + 1) if saved else "", suffix)
             await self._fetch(item, target)
             # What the form did not say about the result is read from the file: the frame of a picture
@@ -219,9 +224,12 @@ class JobManager:
             found = await media.probe(target)
             if kind == "audio":
                 ctx = dict(ctx, duration=round(found["seconds"], 1))
+            elif kind == "text":
+                pass   # nothing to read from a transcript's file
             elif found["width"] and not ctx.get("width"):
                 ctx = dict(ctx, width=found["width"], height=found["height"])
-            self._record(job, kind, target, ctx)
+            self._record(job, kind, target, dict(ctx, output=label) if label else ctx,
+                         name="{} · {}".format(job["name"], label)[:120] if label else None)
             saved += 1
         if not saved:
             raise ComfyError("ComfyUI finished but saved no image, video or sound. Does the workflow have a Save node?")
@@ -364,13 +372,13 @@ class JobManager:
         finally:
             await response.aclose()
 
-    def _record(self, job, kind, target, ctx):
+    def _record(self, job, kind, target, ctx, name=None):
         item_id = self.db.run(
             "INSERT INTO generations (user_id, job_id, project_id, workflow, kind, name, filename, summary, settings, "
-            "context, seconds, size, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (job["user_id"], job["id"], job.get("project_id"), job["workflow"], kind, job["name"], target.name,
+            "context, seconds, size, run, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (job["user_id"], job["id"], job.get("project_id"), job["workflow"], kind, name or job["name"], target.name,
              job["summary"], json.dumps(job["settings"]), json.dumps(ctx), round(time.time() - job["started"], 1),
-             target.stat().st_size, time.time()))
+             target.stat().st_size, str((job.get("settings") or {}).get("run") or ""), time.time()))
         # A step the agent planned as something to reuse ("keep": a character called Maya) goes into shared memory.
         keep = (job.get("settings") or {}).get("keep")
         if keep and item_id and self.assets_dir:
@@ -409,8 +417,9 @@ class JobManager:
 
 
 def _outputs(entry):
-    """The images, videos and sounds a finished ComfyUI run saved: (item, kind, file suffix)."""
-    for node_output in (entry.get("outputs") or {}).values():
+    """The images, videos, sounds and texts a finished ComfyUI run saved: (item, kind, file suffix). Each item also
+    says which node saved it ("node"), so a workflow with several outputs can tell them apart."""
+    for node_id, node_output in (entry.get("outputs") or {}).items():
         for items in node_output.values():
             if not isinstance(items, list):
                 continue
@@ -418,9 +427,25 @@ def _outputs(entry):
                 if not isinstance(item, dict) or item.get("type") != "output" or not item.get("filename"):
                     continue
                 suffix = Path(item["filename"]).suffix.lower()
-                kind = "video" if suffix in VIDEO_TYPES else "image" if suffix in IMAGE_TYPES else "audio" if suffix in AUDIO_TYPES else None
+                kind = "video" if suffix in VIDEO_TYPES else "image" if suffix in IMAGE_TYPES else \
+                    "audio" if suffix in AUDIO_TYPES else "text" if suffix in TEXT_TYPES else None
                 if kind:
-                    yield item, kind, suffix
+                    yield dict(item, node=str(node_id)), kind, suffix
+
+
+def _output_labels(wf, outputs):
+    """What tells the outputs of one run apart, when it saved more than one: the title of the node that saved each
+    ("VOICE STEM", "MUSIC AND EFFECTS STEM"), or its file type alone when one node saved several (a transcript's JSON
+    and SRT). A run with one output needs none: [None]."""
+    if len(outputs) < 2:
+        return [None] * len(outputs)
+    nodes = wf.get("nodes") or {}
+    titles = [str(((nodes.get(item["node"]) or {}).get("_meta") or {}).get("title") or "").strip()[:60] for item, _, _ in outputs]
+    labels = []
+    for (item, kind, suffix), title in zip(outputs, titles):
+        alone = title and titles.count(title) == 1
+        labels.append(title if alone else suffix.lstrip(".").upper())
+    return labels
 
 
 def _execution_error(status):

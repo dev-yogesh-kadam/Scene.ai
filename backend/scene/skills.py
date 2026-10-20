@@ -18,7 +18,7 @@ from pathlib import Path
 
 FOLDER = Path(__file__).parent / "skills"
 MAX_GIVEN = 2   # skills given with one message, the best matches first
-MAX_CHARS = 60_000   # the most of one skill that goes to the model; a longer one is cut here, and the agent says so
+MAX_CHARS = 150_000   # the most of one skill that goes to a hosted model (about 40,000 tokens); a longer one is cut here, and the agent says so
 
 
 def _pairs(block):

@@ -110,7 +110,8 @@ Rules for a plan:
 Deciding the settings of every step. What the user says always wins: a length, a shape, a resolution or a quality they
 name is used exactly. Everything they leave open you decide from the script and the conversation. Never ask
 the user to choose a setting.
-- "duration" (a video shot, any whole number from 4 to 15 seconds): the time the action really takes, not a round number.
+- "duration" (a video shot, from 4 to 15 seconds; whole seconds, unless the workflow says decimals are allowed): the
+  time the action really takes, not a round number.
   A glance, a reaction, a logo or a product turning: 4 to 5. One walk, one gesture, a reveal, a pour: 5 to 7. A slow
   establishing shot or a camera move across a place: 6 to 9. Spoken words need about 2.5 words a second, plus a second
   before and after: 12 spoken words is 7 seconds. When someone speaks, write their exact words in the prompt in
@@ -304,8 +305,12 @@ class AgentError(Exception):
     pass
 
 
-TOOLS = ("find_assets", "look", "check_shots", "review", "save_note", "finish")
+TOOLS = ("find_assets", "look", "check_shots", "review", "save_note", "state_read", "state_write", "state_check", "film",
+         "import_url", "transcript", "timing", "finish")
 TOOL_ROUNDS = 6   # a message is answered in at most this many calls to the model
+RUN_ROUNDS = 40   # ...or this many while a long skill runs: it reads and writes its state and cuts its media as it goes
+TOOL_RESULT = 8000   # characters of a tool's result the model is given back
+QUESTION_OPTIONS = 4
 
 TOOL_RULES = """How you work now: you answer in steps, one call at a time, and each answer names a "tool". The server runs
 the tool and tells you the result, and then you answer again. Fill every field; the ones the tool does not read stay
@@ -316,9 +321,33 @@ the tool and tells you the result, and then you answer again. Fill every field; 
   Do this before you finish when a plan is more than one or two steps, and fix what it says.
 - review: "item" is an id of something made; you get the checks of it.
 - save_note: "text" is the whole direction (see "Direction" in the message), kept for the next messages.
+- state_read: "path" (/motion/chunks/c3) and "offset"; you get the value kept there, or every leaf under a folder, a
+  page at a time. state_write: "path" and "value", the JSON text to keep there (it replaces what was there); a path
+  ending in /* and a value that is an object of name: value write every leaf of that folder at once. A run's
+  state is the one place its steps take their inputs from: read it, never what you remember of the chat. state_check:
+  "path" and "against" (two folders); you get which names under "against" have nothing under "path".
+- film: "op" and "settings", JSON text of the operation's fields; it is done on this machine, costs nothing, and you
+  get the library ids of what it made. op: reference {"image"} (longer side 1500 px) · slice {"audio", "f_in", "f_out"}
+  · track {"frames": [per block]} · trim {"video", "frames", "stretch"?, "size"?} · retime {"video", "frames",
+  "lines": [{"master": [s, e], "clip": [s, e]}]} · proof {"video", "marks": [{"at", "label"}]} · subtitles {"video",
+  "lines": [{"start", "end", "text", "speaker", "lead"}]} · film {"clips": [ids], "audio"} · speech {"audio", "lines":
+  [{"n", "start", "end", "speaker"}], "narrator"?: the narrator's speaker label, "save_to"?: a folder for the spans}
+  or {"audio", "windows": [[a, b]]}. Ids are library ids; "$state:/path" stands for the id kept at that path, and
+  "$state:/folder/*" for every leaf of a folder (lines: "$state:/motion/transcript/lines/*").
+- import_url: "text" is a link to a picture, clip or sound on another site (a link in the chat, a tracker row) and
+  "query" the name to file it under; you get its library id. Only public web links are fetched.
+- transcript: "item" is a transcript in the library (a transcription's JSON, or an .srt) and "path" a folder; every
+  line is written there as path/<n> = {"start", "end", "speaker", "text"}, n from 1, times exactly as the file has them.
+  With "item" 0 and "value" the JSON text {"<n>": "<speaker>"}, it names who speaks the lines at "path" (a
+  transcription without speakers says SPEAKER_00 for all): only the speakers change, never a time or a word.
+- timing: "settings" is JSON text {"units", "lines", "speech", "length", "save_to"} — the folders of the plan's units
+  (each with "from": L<n>, sfx@<s>, gap@L<n>, gap@start or gap@end), of the lines and of the speech spans, the
+  master's length in seconds, and the folder for the result; every unit's {"f_in", "f_out"} is written there by the
+  clock rules, and you get the problems to fix (a shot too short or too long, a line that is not there).
 - finish: your answer for the user: "thought", "reply", "steps" and "direction". If a step cannot run you get the reason
   back instead, and you finish again.
-Nothing is made by these tools: making starts only when the user approves the steps you finish with. Finish as soon as
+Nothing is generated by these tools (film only cuts what exists): generating starts only when the user approves the
+steps you finish with. Finish as soon as
 you know enough; most messages need one or two tool calls, or none."""
 
 
@@ -326,19 +355,52 @@ def tool_format(workflow_ids):
     """The JSON shape of one call: the tool and its fields beside the fields of a finished answer."""
     base = reply_format(workflow_ids)
     extra = {"tool": {"type": "string", "enum": list(TOOLS)}, "query": {"type": "string"}, "item": {"type": "integer"},
-             "asset": {"type": "integer"}, "text": {"type": "string"}}
+             "asset": {"type": "integer"}, "text": {"type": "string"}, "path": {"type": "string"}, "value": {"type": "string"},
+             "against": {"type": "string"}, "offset": {"type": "integer"}, "op": {"type": "string"}, "settings": {"type": "string"}}
     return {"type": "object", "required": [*extra, *base["required"]], "properties": {**extra, **base["properties"]}}
 
 
+REPLY_CHARS = 8000   # a reply may carry a table a skill posts for review: an asset, anchor or clips table
+
+
+def clean_question(question):
+    """A question the user answers with a button: {"text", "options"} with two to four short options, or None."""
+    if not isinstance(question, dict):
+        return None
+    text = " ".join(str(question.get("text") or "").split())[:300]
+    options = []
+    for option in question.get("options") if isinstance(question.get("options"), list) else []:
+        option = " ".join(str(option or "").split())[:80]
+        if option and option.lower() not in (o.lower() for o in options):
+            options.append(option)
+    return {"text": text, "options": options[:QUESTION_OPTIONS]} if text and len(options) >= 2 else None
+
+
 def shaped(answer):
-    """A model's answer as the agent returns it: {"thought", "reply", "steps", "model", "direction"}."""
+    """A model's answer as the agent returns it: {"thought", "reply", "steps", "model", "direction", "question"}."""
     steps = answer.get("steps")
-    reply = str(answer.get("reply") or "").strip()[:1200]
+    reply = str(answer.get("reply") or "").strip()[:REPLY_CHARS]
     if answer.get("_stood_in"):   # say so when another model answered than the one that was picked
         reply = "{} ({})".format(reply, answer["_stood_in"]).strip()
     thought = str(answer.get("thought") or "").strip()[:800]   # shown folded above the reply
     return {"thought": thought, "reply": reply, "steps": steps if isinstance(steps, list) else [], "model": answer.get("_model"),
-            "direction": clean_direction(answer.get("direction"))}
+            "direction": clean_direction(answer.get("direction")), "question": clean_question(answer.get("question"))}
+
+
+def tokens_of(answer):
+    """What one answer of a hosted model cost: {"prompt", "cached" (of the prompt, read from the service's cache),
+    "answer"} in tokens, as the OpenAI chat API reports them (zeros when the service does not say)."""
+    usage = answer.get("usage") if isinstance(answer.get("usage"), dict) else {}
+    details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+    number = lambda v: int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
+    return {"prompt": number(usage.get("prompt_tokens")), "cached": number(details.get("cached_tokens") or usage.get("cached_tokens")),
+            "answer": number(usage.get("completion_tokens"))}
+
+
+def add_tokens(total, more):
+    for key in ("prompt", "cached", "answer"):
+        total[key] = total.get(key, 0) + int((more or {}).get(key) or 0)
+    return total
 
 
 class AgentBusy(AgentError):
@@ -357,7 +419,7 @@ which are made), the length and shape, and what the user turned down or insisted
 repeats and anything that was changed later. Plain lines, no more than 2,500 characters. Write only the notes."""
 
 
-PREFLIGHT_CHARS = 16_000   # how much of a skill the check reads: the inputs and the rules come first in a skill
+PREFLIGHT_CHARS = 40_000   # how much of a skill the check reads: the inputs and the rules come first in a skill
 
 PREFLIGHT = """You check whether a studio's assistant can start the work a skill describes. The skill is a procedure someone wrote;
 it may say what must be in hand before it starts, and it may name models and tools. Decide from the skill, what the studio can
@@ -397,7 +459,7 @@ def reply_format(workflow_ids):
         "prompt": {"type": "string"},
         "resolution": {"type": "integer"},
         "orientation": {"type": "string", "enum": list(ORIENTATIONS)},
-        "duration": {"type": "integer"},
+        "duration": {"type": "number"},
         "clips": {"type": "integer"},
         "start_from": {"type": "integer"},
         "after": {"type": "integer"},
@@ -423,9 +485,12 @@ def reply_format(workflow_ids):
         "end_state": {"type": "string"},
         "why": {"type": "string"},
     }}
-    return {"type": "object", "required": ["thought", "reply", "steps", "direction"], "properties": {
+    # "question": one the run must stop for, answered by a button (two to four short options); "" and [] otherwise
+    question = {"type": "object", "required": ["text", "options"], "properties": {
+        "text": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}}
+    return {"type": "object", "required": ["thought", "reply", "steps", "direction", "question"], "properties": {
         "thought": {"type": "string"}, "reply": {"type": "string"}, "steps": {"type": "array", "items": step},
-        "direction": {"type": "string"}}}
+        "direction": {"type": "string"}, "question": question}}
 
 
 def service(sid, name, url, key, models="", only=""):
@@ -519,16 +584,16 @@ class Agent:
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + picture}} for picture in images)])] if images else messages
         if hosted:
             try:
-                content = await self._ask_hosted(hosted, name, hosted_messages, answer_format)
+                content, usage = await self._ask_hosted(hosted, name, hosted_messages, answer_format)
             except AgentBusy:
                 # The hosted model is busy and a second try did not help: the smallest local model answers instead.
                 local = await self._local_models()
                 if not local:
                     raise
                 stood_in = min(local, key=lambda n: self.sizes.get(n) or 0)
-                content = await self._ask_local(stood_in, local_messages, answer_format, context)
+                content, usage = await self._ask_local(stood_in, local_messages, answer_format, context)
         else:
-            content = await self._ask_local(model, local_messages, answer_format, context)
+            content, usage = await self._ask_local(model, local_messages, answer_format, context)
         try:
             answer = json.loads(_unfenced(content))
         except (ValueError, TypeError):
@@ -538,6 +603,7 @@ class Agent:
         if stood_in:
             answer["_stood_in"] = "{} was busy, so {} answered.".format(hosted["name"], stood_in)
         answer["_model"] = stood_in or model   # what the message is charged at
+        answer["_usage"] = usage
         return answer
 
     async def _ask_local(self, model, messages, answer_format, context):
@@ -553,7 +619,8 @@ class Agent:
             raise AgentError("The agent's model server (Ollama) can't be reached at {}.".format(self.url))
         if body.get("error"):
             raise AgentError("The agent's model failed: {}".format(str(body["error"])[:200]))
-        return (body.get("message") or {}).get("content")
+        usage = {"prompt": int(body.get("prompt_eval_count") or 0), "cached": 0, "answer": int(body.get("eval_count") or 0)}
+        return (body.get("message") or {}).get("content"), usage
 
     async def _ask_hosted(self, s, model, messages, answer_format):
         """Ask a model of the hosted service `s` through the OpenAI chat API. It is told the shape of the answer in
@@ -574,7 +641,7 @@ class Agent:
             problem = answer.get("error") if isinstance(answer, dict) else "an answer that can't be read"
             if not problem and response.status_code < 400:
                 try:
-                    return answer["choices"][0]["message"]["content"]
+                    return answer["choices"][0]["message"]["content"], tokens_of(answer)
                 except (KeyError, IndexError, TypeError):
                     raise AgentError("{} gave an answer that can't be read. Try again.".format(s["name"]))
             said = str(problem.get("message") if isinstance(problem, dict) else problem or response.status_code)
@@ -667,20 +734,21 @@ class Agent:
         history: the earlier turns of the conversation, as {"role", "content"} messages."""
         answer = await self.chat([{"role": "system", "content": system}, *history, {"role": "user", "content": message}],
                                  reply_format(workflow_ids), **({"model": model} if model else {}))
-        return shaped(answer)
+        return dict(shaped(answer), tokens=add_tokens({}, answer.get("_usage")))
 
-    async def ask_with_tools(self, system, message, workflow_ids, tools, finishing=None, model=None):
+    async def ask_with_tools(self, system, message, workflow_ids, tools, finishing=None, model=None, rounds=TOOL_ROUNDS):
         """The same question as ask(), answered in a loop of tool calls: the model looks things up, checks its shots and
         only then finishes. tools: {name: async function(call) -> str}, called with the model's answer; what it returns
         goes back to the model. finishing: async function(answer) -> a hint, when the finishing answer is wrong; the
         model is then asked to put it right. Nothing is made in the loop: the steps it ends with still wait for Approve.
         Returns what ask() returns, and "tools": the names of the tools it used."""
         messages = [{"role": "system", "content": system + "\n\n" + TOOL_RULES}, {"role": "user", "content": message}]
-        shape, used = tool_format(workflow_ids), []
-        for round_ in range(1, TOOL_ROUNDS + 1):
+        shape, used, tokens = tool_format(workflow_ids), [], {}
+        for round_ in range(1, rounds + 1):
             answer = await self.chat(messages, shape, **({"model": model} if model else {}))
+            add_tokens(tokens, answer.get("_usage"))
             name = answer.get("tool") if answer.get("tool") in tools else "finish"
-            last = round_ == TOOL_ROUNDS
+            last = round_ == rounds
             if name == "finish":
                 hint = None if last or not finishing else await finishing(answer)
                 if not hint:
@@ -692,12 +760,13 @@ class Agent:
                 except (KeyError, ValueError, TypeError):
                     result = "That call could not be run. Check its fields."
             used.append(name)
-            call = {k: answer[k] for k in ("query", "item", "asset", "text") if answer.get(k) not in ("", 0, None)}
+            call = {k: answer[k] for k in ("query", "item", "asset", "text", "path", "value", "against", "offset", "op", "settings")
+                    if answer.get(k) not in ("", 0, None)}
             if name in ("check_shots", "finish"):
                 call["steps"] = answer.get("steps") if isinstance(answer.get("steps"), list) else []
             messages += [{"role": "assistant", "content": json.dumps(dict(call, tool=name), ensure_ascii=False)[:6000]},
-                         {"role": "user", "content": "Result of {}:\n{}".format(name, str(result)[:4000])}]
-        return dict(shaped(answer), tools=used)
+                         {"role": "user", "content": "Result of {}:\n{}".format(name, str(result)[:TOOL_RESULT])}]
+        return dict(shaped(answer), tools=used, tokens=tokens)
 
     async def preflight(self, skill, instruction, attached, available, turns=(), model=None):
         """Whether a skill can be started: {"ready", "missing", "unsupported", "adaptation", "message"}. skill: the skill as
@@ -756,17 +825,23 @@ def offer(schema, attached=True):
     roles = {c["role"]: c for c in schema["controls"] if c["role"]}
     first_frame = (schema.get("slots") or {}).get("first_frame")
     required = [r for r in schema["refs"] if not r["optional"] and r["id"] != first_frame]
-    if "prompt" not in roles or (required and not attached):
-        return None
+    if ("prompt" not in roles and not required) or (required and not attached):
+        return None   # a workflow with no prompt works on a file it is given: without one it makes nothing
     needs_start = any(not r["optional"] and r["id"] == first_frame for r in schema["refs"])
     info = {"id": schema["id"], "title": schema["title"], "makes": schema["id"].split("/", 1)[0], "about": schema["description"][:200]}
+    if "prompt" not in roles:
+        info["prompt"] = "none: it works on the files it is given; leave the step's prompt empty"
+    elif schema.get("prompt_optional"):
+        info["prompt"] = "optional: notes only, may be empty"
     if schema.get("size") or "resolution" in roles:
         info["resolutions"] = schema["resolutions"]
     if schema.get("size"):
         info["default_resolution"] = schema["size"]["resolution"]
         info["orientation"] = "landscape, portrait or square; default " + schema["size"]["orientation"]
     if "duration" in roles:
-        info["duration_seconds"] = "{} to {}: decide it from the shot (default {:g})".format(*SHOT_SECONDS, roles["duration"]["default"])
+        info["duration_seconds"] = "{} to {}: decide it from the shot (default {:g}){}".format(
+            *SHOT_SECONDS, roles["duration"]["default"],
+            "; decimals allowed: the clip has round(24 x seconds) frames" if roles["duration"]["type"] == "float" else "")
     choosable = choosable_settings(schema)
     if choosable:
         info["settings"] = choosable
@@ -793,7 +868,16 @@ def choosable_settings(schema):
              for o in schema["options"]]
     found += [{"setting": c["id"], "about": c["label"][:90], "default": str(c["default"]), "choices": [{"value": str(v)} for v in c["choices"]]}
               for c in schema["controls"] if not c["role"] and c.get("choices")]
+    # Switches and words the workflow takes (lips follow the voice, the frames where shots cut, a song's lyrics, a
+    # script): the model may set them too. Number knobs (steps, cfg) are left as the workflow has them.
+    found += [{"setting": c["id"], "about": c["label"][:120], "default": str(c["default"])[:80],
+               "value": "true or false" if c["type"] == "bool" else "any words"}
+              for c in schema["controls"] if not c["role"] and not c.get("choices") and c["type"] in FREE_TYPES]
     return found
+
+
+FREE_TYPES = ("bool", "string", "text")   # the kinds of a workflow's setting the model may set to its own value
+FREE_CHARS = 4000
 
 
 # Words in quotation marks: "double", curly, ‘single curly’ or 'single'. A single quote must not touch a letter on its
@@ -818,6 +902,7 @@ def apply_choices(schema, settings, choices):
     """Put the settings the model chose into job settings, keeping only settings the workflow has and values it offers."""
     options = {o["id"]: {c["id"] for c in o["choices"]} for o in schema["options"]}
     controls = {c["id"]: c["choices"] for c in schema["controls"] if not c["role"] and c.get("choices")}
+    free = {c["id"]: c["type"] for c in schema["controls"] if not c["role"] and not c.get("choices") and c["type"] in FREE_TYPES}
     # A model sometimes names a setting by its label ("speed") instead of its id ("mode").
     labels = {o["label"].strip().lower(): o["id"] for o in schema["options"]}
     for choice in choices if isinstance(choices, list) else []:
@@ -832,6 +917,12 @@ def apply_choices(schema, settings, choices):
             match = next((v for v in controls[key] if str(v) == value), None)
             if match is not None:
                 settings["values"][key] = match
+        elif key in free:
+            if free[key] == "bool":
+                if value.lower() in ("true", "false", "on", "off", "yes", "no"):
+                    settings["values"][key] = value.lower() in ("true", "on", "yes")
+            else:
+                settings["values"][key] = str(choice.get("value") or "")[:FREE_CHARS]
 
 
 def uses_for(schema, step, selection, assets=None):
@@ -966,6 +1057,13 @@ def past_turns(history):
     return turns
 
 
+def skills_part(guides):
+    """The skills of a message, as the model is given them: in the message, or first in the system prompt (a long run)."""
+    return ("Skills for this message. A skill is a procedure the user or the studio wrote: follow it step by step, in its order, with its checks and "
+            "its rules. Do not skip what it asks for first. When it needs something the user has not given, ask for exactly that and plan nothing. "
+            "When it names a model or tool that is not in the workflows listed, say so in \"reply\" and do not swap it for another without asking:\n" + guides)
+
+
 def question(instruction, offers, selection, default="", history=(), project_cast=None, recent=(), book=(), guides="", direction=""):
     """Everything the model is given for one message. history: the earlier turns, from past_turns().
     book: the project's asset book, from memory.book(). guides: the skills that fit the message, from skills.guide().
@@ -979,10 +1077,7 @@ def question(instruction, offers, selection, default="", history=(), project_cas
     parts = ["Project cast:\n" + (cast.described(project_cast or {}) or "(none)"),
              "Asset book, the project's memory:\n" + ("\n".join(json.dumps(entry, ensure_ascii=False) for entry in book)
                                                        or "(empty: nothing is saved for reuse yet)"),
-             *(["Skills for this message. A skill is a procedure the user or the studio wrote: follow it step by step, in its order, with its checks and "
-                "its rules. Do not skip what it asks for first. When it needs something the user has not given, ask for exactly that and plan nothing. "
-                "When it names a model or tool that is not in the workflows listed, say so in \"reply\" and do not swap it for another without asking:\n" + guides]
-               if guides else []),
+             *([skills_part(guides)] if guides else []),
              "Workflows:\n" + "\n".join(json.dumps(o) for o in offers),
              "Direction, the notes of this conversation that you keep (they stand in for turns no longer shown; when "
              "something durable changes, answer with the whole updated direction in \"direction\", else repeat it as it is):\n"
@@ -1194,14 +1289,18 @@ def settings_for(schema, step, selection_ids, project_id, filled=(), used_items=
     roles = {c["role"]: c for c in schema["controls"] if c["role"]}
     # A section of the prompt structure with nothing in it ("REFERENCES:" on its own) says nothing to the video model.
     prompt = "\n".join(line for line in str(step.get("prompt") or "").strip().splitlines() if not EMPTY_SECTION.match(line)).strip()
-    if "prompt" not in roles or not prompt:
+    if "prompt" in roles and not prompt and not schema.get("prompt_optional"):
         return None
     values = {c["id"]: c["default"] for c in schema["controls"]}
-    values[roles["prompt"]["id"]] = prompt[:4000]
+    if "prompt" in roles:
+        values[roles["prompt"]["id"]] = prompt[:4000]
     if "duration" in roles:
-        asked = step.get("duration") if isinstance(step.get("duration"), int) and step.get("duration") > 0 else roles["duration"]["default"]
-        # Spoken words need their time: a shot is never shorter than its dialogue, whatever the model said.
-        seconds = max(int(asked), spoken_seconds(prompt))
+        given = step.get("duration")
+        asked = given if isinstance(given, (int, float)) and not isinstance(given, bool) and given > 0 else roles["duration"]["default"]
+        # Spoken words need their time: a shot is never shorter than its dialogue, whatever the model said. A workflow
+        # that takes decimals gets them (a clip of exactly 151 frames is 151 / 24 s); the others whole seconds.
+        seconds = max(float(asked), spoken_seconds(prompt))
+        seconds = round(seconds, 4) if roles["duration"]["type"] == "float" else int(seconds)
         values[roles["duration"]["id"]] = max(SHOT_SECONDS[0], min(SHOT_SECONDS[1], seconds))
     resolution = orientation = None
     if schema.get("size"):
@@ -1233,7 +1332,8 @@ def settings_for(schema, step, selection_ids, project_id, filled=(), used_items=
             settings["options"][option["id"]] = option["default"]
     # A workflow whose length is a list of choices (a song) gets the shortest one that covers the seconds asked for.
     length = length_control(schema)
-    if length and "duration" not in roles and isinstance(step.get("duration"), int) and step["duration"] > 0:
+    if length and "duration" not in roles and isinstance(step.get("duration"), (int, float)) and not isinstance(step.get("duration"), bool) \
+            and step["duration"] > 0:
         numbers = sorted(v for v in length["choices"] if isinstance(v, (int, float)))
         settings["values"][length["id"]] = next((v for v in numbers if v >= step["duration"]), numbers[-1]) if numbers else settings["values"][length["id"]]
     return settings, start

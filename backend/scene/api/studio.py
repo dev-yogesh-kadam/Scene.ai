@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 
 import httpx
 
-from .. import media, memory
+from .. import media, memory, runs
 from ..catalog import KINDS
 from ..comfy import workflows
 from ..agent import AgentError
@@ -33,6 +33,12 @@ def current_announcement(db):
     return {"text": found["text"], "level": found.get("level", "info"), "until": found.get("until")}
 
 
+def by_source(wf):
+    """Whether a job is as long as the video it is given, and billed by that: an upscale, and any workflow whose presets
+    file says {"pricing": {"source": "video"}} (a lip sync)."""
+    return wf["id"].startswith("upscaler/") or (wf["profile"].get("pricing") or {}).get("source") == "video"
+
+
 async def billed_seconds(state, wf, schema, settings, user_id=None):
     """The length of the result these settings ask for, which is what a per-second price is based on. None when
     the workflow does not say."""
@@ -47,9 +53,9 @@ async def billed_seconds(state, wf, schema, settings, user_id=None):
             return max(0.0, float((settings.get("values") or {}).get(control["id"], control["default"])))
         except (TypeError, ValueError):
             return None
-    if not wf["id"].startswith("upscaler/"):
+    if not by_source(wf):
         return None
-    # An upscale is as long as the video it is made from. For a file the user brought, the browser says how long
+    # An upscale (or a lip sync) is as long as the video it is made from. For a file the user brought, the browser says how long
     # it is for the estimate, and the job is charged by what the server measures (see create_job).
     given = settings.get("source_seconds")
     if isinstance(given, (int, float)) and not isinstance(given, bool) and 0 < given < 86400:
@@ -193,8 +199,8 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     settings["keep"] = memory.clean_keep(settings.get("keep"), wf["id"].split("/", 1)[0])
     settings["shot"] = memory.clean_shot(settings.get("shot"))
 
-    # The length of a video the user brought to an upscaler, measured here: it is what the upscale is charged by.
-    videos = {r["id"] for r in schema["refs"] if r["kind"] == "video"} if wf["id"].startswith("upscaler/") else set()
+    # The length of a video the user brought to an upscaler or a lip sync, measured here: it is what the job is charged by.
+    videos = {r["id"] for r in schema["refs"] if r["kind"] == "video"} if by_source(wf) else set()
     settings.pop("source_seconds", None)
 
     async def measure(slot, data, filename):
@@ -254,6 +260,11 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     over = state.credits.cap_problem(user["id"], quote["credits"])
     if over:
         raise HTTPException(429, over)
+    run_of = settings.get("run_of") if isinstance(settings.get("run_of"), str) and runs.RUN.match(settings["run_of"]) else ""
+    settings["run_of"] = run_of
+    over = runs.budget_problem(state.db, user["id"], run_of, quote["credits"])
+    if over:
+        raise HTTPException(402, over)
     if not state.credits.charge(user["id"], quote["credits"], "generation"):
         raise HTTPException(402, "This needs {} credits and you have {}. Ask an admin for more.".format(
             quote["credits"], state.credits.balance(user["id"])))

@@ -623,10 +623,11 @@ def test_a_hosted_model_is_listed_beside_the_local_ones_and_asked_over_its_api(m
     asyncio.run(brain.ask("You plan.", "hi", [], model="gemini/gemini-flash"))
     assert sent.pop()["url"] == "https://g.example.com/openai/chat/completions" and sent.pop()["auth"] == "Bearer g-key"
     answer = asyncio.run(brain.ask("You plan.", "hi", ["video/h3_master"], model="kimi/kimi-k2.6"))
-    assert answer == {"thought": "", "reply": "Hello.", "steps": [], "model": "kimi/kimi-k2.6", "direction": ""}
+    assert answer == {"thought": "", "reply": "Hello.", "steps": [], "model": "kimi/kimi-k2.6", "direction": "", "question": None,
+                      "tokens": {"prompt": 0, "cached": 0, "answer": 0}}
     assert [s["url"] for s in sent] == ["https://api.example.com/v1/chat/completions"] * 2 and sent[0]["auth"] == "Bearer secret-key"
     assert sent[1]["body"]["model"] == "kimi-k2.6" and "temperature" not in sent[1]["body"]            # asked again without it
-    assert sent[1]["body"]["response_format"] == {"type": "json_object"} and '"required": ["thought", "reply", "steps", "direction"]' in sent[1]["body"]["messages"][0]["content"]
+    assert sent[1]["body"]["response_format"] == {"type": "json_object"} and '"required": ["thought", "reply", "steps", "direction", "question"]' in sent[1]["body"]["messages"][0]["content"]
 
     # a busy service is tried again, and when it stays busy the smallest local model answers and the reply says so
     calls = []
@@ -1084,7 +1085,8 @@ def test_every_workflow_is_listed_in_the_section_of_its_kind(client):
     assert not [w for w in listed.values() if w["kind"] == "video" and w.get("error")]   # the fixture has the video nodes only
     assert {w for w in listed if w.startswith("video/")} == {
         "video/h3_master", "video/h3_director", "video/video_minimax_h3_i2v", "video/video_minimax_h3_r2v", "video/ai_influencer",
-        "video/MiniMax_H3_AI_Influencer", "video/MiniMax_H3_AI_Influencer_v2", "video/ref2va_vsa_4step_rtx4090_v2", "video/comfy_plus_codex"}
+        "video/MiniMax_H3_AI_Influencer", "video/MiniMax_H3_AI_Influencer_v2", "video/ref2va_vsa_4step_rtx4090_v2", "video/comfy_plus_codex",
+        "video/h3_chunk", "video/video_lipsync"}
     assert {w["kind"] for w in listed.values()} == {"video", "image", "audio", "upscaler"}
     assert client.get("/api/workflows/video/h3_director").json()["id"] == "video/h3_director"
 

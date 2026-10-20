@@ -1,22 +1,19 @@
-// The landing page: what a visitor who is not signed in sees at the site's address. It should feel like walking into a
-// working studio: a slate that claps, a set whose mood you can change, takes developing, an agent planning a shot, a
-// showreel of what people make. Everything it shows is something the studio does; the pictures are drawn in CSS, so
-// the page needs no media files.
+// The landing page: what a visitor who is not signed in sees at the site's address. The first screen is a camera
+// monitor on the set: the frame is a scene, with frame lines, a timecode that runs, the lens and light readouts, and a
+// slate where the plan of the shot types itself. Picking another scene cuts the whole set. Below it, plain sections in
+// the monitor's language: the take report, the agent, what is on the cart, the price, and the cut. Everything it shows
+// is something the studio does; the pictures are drawn as SVG (landing-scenes.js), so the page needs no media files.
 
-import { el, icon } from '../dom.js';
+import { el } from '../dom.js';
+import * as scenes from './landing-scenes.js';
 
 // What can be made, with the models that make it. Kept in step with workflows/ (see docs/HANDOVER.md, Workflows).
-const MAKES = [
-  { kind: 'Video', icon: 'video', model: 'MiniMax H3', tone: 'amber', wide: true,
-    text: 'Clips of 5 to 15 seconds from a prompt and up to eight references: a character, an outfit, a place, a motion to copy, a voice. Chain clips into longer scenes that pick up where the last one ended.' },
-  { kind: 'Images', icon: 'image', model: 'Z-Image Turbo, SDXL, Ideogram 4', tone: 'violet',
-    text: 'Stills in a few seconds, and posters with lettering that reads right.' },
-  { kind: 'Music', icon: 'audio', model: 'MiniMax Music 3', tone: 'teal',
-    text: 'Songs and scores from 30 seconds to 5 minutes, with your lyrics or without.' },
-  { kind: 'Motion graphics', icon: 'title', model: 'Drawn in the studio', tone: 'coral',
-    text: 'Title cards, lower thirds and whole videos of animated words, written from a sentence and editable scene by scene.' },
-  { kind: 'Upscale', icon: 'upscale', model: 'SeedVR2', tone: 'amber',
-    text: 'A finished video made larger and sharper, up to four times its size.' },
+const KIT = [
+  ['Video', 'Clips with sound', 'MiniMax H3', 'Clips of 5 to 15 seconds from a prompt and up to eight references: a character, an outfit, a place, a motion to copy, a voice. Chain clips into longer scenes that pick up where the last one ended.'],
+  ['Images', 'Stills and posters', 'Z-Image Turbo · SDXL · Ideogram 4', 'Stills in a few seconds, and posters with lettering that reads right.'],
+  ['Music', 'Songs and scores', 'MiniMax Music 3', 'From 30 seconds to 5 minutes, with your lyrics or without.'],
+  ['Titles', 'Motion graphics', 'Drawn in the studio', 'Title cards, lower thirds and whole videos of animated words, written from a sentence and editable scene by scene.'],
+  ['Finish', 'Upscale', 'SeedVR2', 'A finished video made larger and sharper, up to four times its size.'],
 ];
 
 const STEPS = [
@@ -25,215 +22,169 @@ const STEPS = [
   ['Cut it together', 'Put clips in order on the timeline, trim them, add music, and export one video.'],
 ];
 
-const WORDS = ['scene', 'story', 'ad', 'film', 'reel'];
-const TICKER = ['Video', 'Images', 'Music', 'Motion graphics', 'Upscale', 'Storyboards', 'Takes', 'A cast that stays the same', 'The agent', 'Timeline'];
+// The camera's readouts for each scene: lens and stop, sensitivity and shutter, colour temperature.
+const READOUT = { rooftop: ['35mm · T2.0', 'ISO 800 · 1/48', '3200K'], neon: ['24mm · T1.4', 'ISO 1600 · 1/48', '5600K'],
+  desert: ['85mm · T5.6', 'ISO 100 · 1/96', '6500K'], deep: ['18mm · T2.8', 'ISO 3200 · 1/48', '4300K'] };
 
-// The mood of the set: pick one and the light, the frames and the plan change. Each is a look, not a promise of a result.
-const MOODS = [
-  { id: 'dusk', label: 'Rooftop at dusk', rows: ['Wide shot, rooftop at dusk', 'Close-up, she turns to camera', 'Push in on the skyline'], caps: ['Shot 1 · Take 3', 'Still · Maya', 'Shot 2 · Take 1', 'Shot 3 · Take 2'] },
-  { id: 'neon', label: 'Neon alley', rows: ['Low angle, rain on a neon alley', 'Track the runner past the signs', 'Close-up, breath in cold air'], caps: ['Shot 1 · Take 2', 'Still · Rin', 'Shot 2 · Take 1', 'Shot 3 · Take 4'] },
-  { id: 'desert', label: 'Desert chase', rows: ['Extreme wide, dust trail at noon', 'Handheld beside the jeep', 'Crane up over the dunes'], caps: ['Shot 1 · Take 1', 'Still · Kade', 'Shot 2 · Take 3', 'Shot 3 · Take 2'] },
-  { id: 'deep', label: 'Deep sea', rows: ['Wide shot, a lantern in the deep', 'Orbit the diver, bubbles rising', 'Pull back to the whale'], caps: ['Shot 1 · Take 2', 'Still · Ione', 'Shot 2 · Take 2', 'Shot 3 · Take 1'] },
-];
-
-// What people make, as a showreel: each tile is a frame with its kind and shape.
-const REEL = [
-  ['Product ad', '15 s · 9:16', 'amber', 'tall'], ['Music video', '3 min', 'violet', 'wide'], ['Short film', '5 shots', 'coral', 'wide'],
-  ['Social reel', '9:16', 'teal', 'tall'], ['Character sheet', 'one face, every shot', 'violet', 'sq'], ['Title sequence', 'motion graphics', 'amber', 'wide'],
-  ['Storyboard', 'stills first', 'teal', 'sq'], ['Explainer', 'words that move', 'coral', 'wide'],
-];
-
-// A frame on the set: a picture drawn in CSS with a caption and, sometimes, a state.
-const frame = (cls, tone, label, state) => el('div', { class: `lx-frame ${cls} tone-${tone}` },
-  el('div', { class: 'lx-pic' }), el('span', { class: 'lx-cap' }, label), state && el('b', { class: 'lx-state' }, state));
-
-// The hero's set: frames floating at different depths, the agent's plan, and a timeline whose playhead runs.
-function set() {
-  return el('div', { class: 'lx-set', 'aria-hidden': 'true' },
-    el('div', { class: 'lx-layer d1' }, frame('a', 'amber', MOODS[0].caps[0], 'Kept'), frame('b', 'violet', MOODS[0].caps[1])),
-    el('div', { class: 'lx-layer d2' }, frame('c', 'coral', MOODS[0].caps[2], 'Rendering'), frame('d', 'teal', MOODS[0].caps[3])),
-    el('div', { class: 'lx-plan' },
-      el('div', { class: 'lx-plan-head' }, icon('film'), el('b', {}, 'Plan · 3 shots'), el('span', {}, 'Nothing is made until you approve')),
-      MOODS[0].rows.map((row) => el('div', { class: 'lx-plan-row' }, el('i', {}), el('span', {}, row), el('em', {}, '60 cr'))),
-      el('div', { class: 'lx-plan-bar' }, el('span', {}, 'Stop'), el('button', { type: 'button', tabindex: '-1' }, 'Approve · 180'))),
-    el('div', { class: 'lx-timeline' },
-      el('div', { class: 'lx-clips' }, el('i', { class: 'c1' }), el('i', { class: 'c2' }), el('i', { class: 'c3' }), el('i', { class: 'c4' })),
-      el('div', { class: 'lx-music' }), el('div', { class: 'lx-playhead' })));
-}
-
-// A few lines of the agent at work, typed out when the section comes into view.
-const CHAT = [
-  ['you', 'A 20 second ad for our sneaker drop. Rooftop, golden hour, the same runner in every shot.'],
-  ['agent', 'Four shots, one cast: the runner from your assets in every shot. I will draw cheap stills first so you can fix a face before any clip is paid for.'],
-];
+// Four takes of one shot for the take report: what each was, and the one that was kept.
+const TAKES = [['rooftop', 'Take 1', '6.0 s', 'Rejected · face', 'dull'], ['rooftop', 'Take 2', '6.0 s', 'Soft focus', 'soft'],
+  ['rooftop', 'Take 3', '6.0 s', 'Kept', 'kept'], ['neon', 'Take 4', '5.0 s', 'New seed', '']];
 
 const still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-function agentDemo() {
-  const lines = el('div', { class: 'lx-chat' }, CHAT.map(([who, text]) => el('div', { class: 'lx-line ' + who, 'data-text': text }, el('span', {}))));
-  const card = el('div', { class: 'lx-approve' },
-    el('div', {}, el('b', {}, 'Storyboard first'), el('span', {}, '4 stills · 40 cr')),
-    el('div', { class: 'lx-approve-bar' }, el('span', {}, 'Type something else…'), el('b', {}, 'Approve · 40')));
-  const box = el('div', { class: 'lx-agent' }, lines, card);
-  let started = false;
-  const type = () => {
-    if (started) return;
-    started = true;
-    let at = 0;
-    const next = () => {
-      const row = lines.children[at];
-      if (!row) return card.classList.add('on');
-      row.classList.add('on');
-      const out = row.firstChild, text = row.dataset.text;
-      let i = 0;
-      const tick = () => { out.textContent = text.slice(0, (i += 2)); if (i < text.length) setTimeout(tick, 18); else { at += 1; setTimeout(next, 500); } };
-      tick();
-    };
-    next();
-  };
-  if ('IntersectionObserver' in window && !still()) {
-    const watch = new IntersectionObserver((seen) => { if (seen[0].isIntersecting) { watch.disconnect(); type(); } }, { threshold: 0.35 });
-    watch.observe(box);
-  } else {
-    for (const row of lines.children) { row.classList.add('on'); row.firstChild.textContent = row.dataset.text; }
-    card.classList.add('on');
-  }
-  return box;
-}
-
-// The slate that claps once when someone first arrives in a session, then gets out of the way (a click skips it).
-function slate() {
-  let seen = false;
-  try { seen = sessionStorage.getItem('scene.slate') === '1'; sessionStorage.setItem('scene.slate', '1'); } catch (e) { /* no storage */ }
-  if (seen || still()) return null;
-  const node = el('div', { class: 'lx-slate', role: 'presentation', onclick: () => node.remove() },
-    el('div', { class: 'lx-board' },
-      el('div', { class: 'lx-stick' }),
-      el('div', { class: 'lx-board-body' },
-        el('div', {}, el('span', {}, 'Scene'), el('b', {}, '01')), el('div', {}, el('span', {}, 'Take'), el('b', {}, '1')),
-        el('div', { class: 'lx-board-title' }, el('span', {}, 'Production'), el('b', {}, 'Scene.ai')))));
-  setTimeout(() => node.classList.add('out'), 1500);
-  setTimeout(() => node.remove(), 2100);
+// A picture the studio draws: one of the landing scenes, filling its box. The markup is the page's own, never anyone's input.
+function picture(name, cls = '', sketch = false) {
+  const node = el('div', { class: cls, 'aria-hidden': 'true' });
+  node.innerHTML = scenes.svg(name, { sketch });
   return node;
 }
 
-// A big clapper over the closing call to action; the stick opens and snaps shut.
-const clapper = () => el('div', { class: 'lx-clapper', 'aria-hidden': 'true' },
-  el('div', { class: 'lx-clapper-stick' }), el('div', { class: 'lx-clapper-body' }, el('span', {}, 'Scene 01 · Take 1'), el('b', {}, 'Action')));
+// The frame counter of the camera: hours, minutes, seconds and frames at 24 a second, from one hour in.
+function timecode(frames) {
+  const two = (n) => String(n).padStart(2, '0');
+  return `${two(Math.floor(frames / 86400) % 24)}:${two(Math.floor(frames / 1440) % 60)}:${two(Math.floor(frames / 24) % 60)}:${two(frames % 24)}`;
+}
+
+function monitor(join, signupOpen) {
+  const frames = [el('div', { class: 'la-frame' }), el('div', { class: 'la-frame out' })];
+  let shown = 0, current = -1, touched = false, typing = null;
+  const tc = el('span', { class: 'la-rec' }, '01:00:00:00');
+  const lens = el('span'), iso = el('span'), wb = el('span');
+  const sceneName = el('span');
+  const typed = el('div', { class: 'la-typed' });
+  const rows = el('ol');
+  const buttons = scenes.names.map((name, i) => el('button', { type: 'button', 'aria-pressed': 'false',
+    onclick: () => { touched = true; cut(i); } }, `${i + 1} · ${scenes.info(name).title}`));
+
+  function type(text) {
+    clearInterval(typing);
+    if (still()) { typed.textContent = text; return; }
+    let n = 0;
+    typing = setInterval(() => { typed.textContent = text.slice(0, ++n); if (n >= text.length) clearInterval(typing); }, 32);
+  }
+  // Cut to a scene: the new frame fades in over the old, and the readouts, the slate and its plan change with it.
+  function cut(i) {
+    if (i === current) return;
+    current = i;
+    const name = scenes.names[i], info = scenes.info(name);
+    const next = 1 - shown;
+    frames[next].innerHTML = scenes.svg(name);
+    frames[next].classList.remove('out');
+    frames[shown].classList.add('out');
+    shown = next;
+    [lens.textContent, iso.textContent, wb.textContent] = READOUT[name];
+    sceneName.textContent = `Scene 0${i + 1} · ${info.title}`;
+    rows.replaceChildren(...info.shots.map((shot, n) => el('li', {}, el('span', {}, `0${n + 1}`), el('span', {}, shot), el('span', {}, '60 cr'))));
+    buttons.forEach((b, n) => b.setAttribute('aria-pressed', String(n === i)));
+    type(`${info.shots[0]}. The same runner in every shot.`);
+  }
+
+  const node = el('section', { class: 'la-monitor' },
+    frames[0], frames[1],
+    el('div', { class: 'la-grade' }), el('div', { class: 'la-grain' }),
+    el('div', { class: 'la-hud', 'aria-hidden': 'true' }, ['tl', 'tr', 'bl', 'br'].map((c) => el('i', { class: 'la-corner la-' + c })),
+      el('div', { class: 'la-thirds' }), el('div', { class: 'la-cross' })),
+    el('header', { class: 'la-top' },
+      el('a', { class: 'la-brand', href: '/' }, el('img', { src: '/assets/img/logo.svg?v=clapper', alt: '' }), 'Scene.ai'),
+      el('div', { class: 'la-readout la-mono', 'aria-hidden': 'true' }, tc, lens, iso, wb),
+      el('nav', { class: 'la-doors' },
+        signupOpen && el('a', { class: 'la-btn quiet', href: '/signin' }, 'Sign in'),
+        join('solid'))),
+    el('div', { class: 'la-lower' },
+      el('div', {},
+        el('h1', {}, 'Direct', el('br'), 'your ', el('b', {}, 'scene.')),
+        el('p', { class: 'la-sub' }, 'Write the shot. The studio makes the takes, keeps the same faces from shot to shot, and cuts them together, without a node graph in sight.'),
+        join('solid big')),
+      el('div', { class: 'la-slate', 'aria-hidden': 'true' },
+        el('header', { class: 'la-mono' }, sceneName, el('span', {}, 'Plan')),
+        typed, rows,
+        el('footer', {}, el('span', { class: 'la-mono' }, 'Nothing is made until you approve'), el('span', { class: 'la-btn solid small' }, 'Approve · 180')))),
+    el('div', { class: 'la-scenes', role: 'group', 'aria-label': 'Scene' }, el('span', { class: 'la-mono' }, 'Scene'), buttons),
+    el('div', { class: 'la-meters', 'aria-hidden': 'true' }, el('i'), el('i'), el('i')));
+
+  cut(0);
+  // The timecode runs at 24 frames a second, as the camera's would; the set cuts to the next scene now and then until
+  // the visitor picks one. Both stop once the page is left.
+  const started = performance.now();
+  const tick = () => {
+    if (!node.isConnected && node.dataset.placed) return;
+    if (node.isConnected) node.dataset.placed = '1';
+    tc.textContent = timecode(Math.floor((performance.now() - started) / (1000 / 24)) + 24 * 3600);
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  if (!still()) {
+    const timer = setInterval(() => {
+      if (node.dataset.placed && !node.isConnected) clearInterval(timer);
+      else if (!touched) cut((current + 1) % scenes.names.length);
+    }, 8000);
+  }
+  return node;
+}
+
+// A row of a section's label: its number and name on the left, a note on the right.
+const label = (left, right) => el('div', { class: 'la-label la-mono' }, el('span', {}, left), el('span', {}, right));
 
 export function renderLanding(root, { signupOpen }) {
   // A new button for each place it appears: one element can only stand in one place on the page.
   const join = (cls = '') => (signupOpen
-    ? el('a', { class: 'btn generate lp-cta ' + cls, href: '/signup' }, 'Create an account')
-    : el('a', { class: 'btn generate lp-cta ' + cls, href: '/signin' }, 'Sign in'));
-  const word = el('span', { class: 'lx-rotor' }, WORDS.map((w, i) => el('span', { style: `--i:${i}` }, w + '.')));
-  word.style.setProperty('--n', WORDS.length);
+    ? el('a', { class: 'la-btn ' + cls, href: '/signup' }, 'Create an account')
+    : el('a', { class: 'la-btn ' + cls, href: '/signin' }, 'Sign in'));
 
-  // The mood chips under the headline: they change the light of the set and what its frames and plan say.
-  let mood = 0, touched = false, timer = null;
-  const chips = MOODS.map((m, i) => el('button', { type: 'button', class: 'lx-chip' + (i ? '' : ' on'), onclick: () => { touched = true; clearInterval(timer); pick(i); } }, m.label));
-  const hero = el('section', { class: 'lx-hero', 'data-mood': MOODS[0].id },
-    el('div', { class: 'lx-glow g1' }), el('div', { class: 'lx-glow g2' }), el('div', { class: 'lx-glow g3' }),
-    el('div', { class: 'lx-words' },
-      el('p', { class: 'lx-live' }, el('i', {}), 'The studio is open · takes are developing'),
-      el('h1', {}, 'Direct your ', word),
-      el('p', { class: 'lx-lead' }, 'A studio for making video, pictures and music with AI. Describe the shot, make takes, and cut them together, without touching a node graph.'),
-      el('div', { class: 'lp-actions' }, join(), signupOpen && el('a', { class: 'btn lp-outline lp-cta', href: '/signin' }, 'Sign in')),
-      el('div', { class: 'lx-moods' }, el('span', {}, 'Set the mood'), chips)),
-    set());
-  function pick(i) {
-    mood = i;
-    const m = MOODS[i];
-    hero.dataset.mood = m.id;
-    chips.forEach((chip, n) => chip.classList.toggle('on', n === i));
-    hero.querySelectorAll('.lx-plan-row span').forEach((row, n) => { row.textContent = m.rows[n]; });
-    hero.querySelectorAll('.lx-cap').forEach((cap, n) => { cap.textContent = m.caps[n]; });
-    const board = hero.querySelector('.lx-set');
-    board.classList.remove('swap');
-    void board.offsetWidth;   // the frames flash as if a new take came in
-    board.classList.add('swap');
-  }
-  if (!still()) {
-    timer = setInterval(() => {
-      if (!hero.isConnected) clearInterval(timer);
-      else if (!touched) pick((mood + 1) % MOODS.length);
-    }, 6500);
-  }
-  // The set leans a little toward the pointer.
-  hero.addEventListener('pointermove', (e) => {
-    const box = hero.getBoundingClientRect();
-    hero.style.setProperty('--px', ((e.clientX - box.left) / box.width - 0.5).toFixed(3));
-    hero.style.setProperty('--py', ((e.clientY - box.top) / box.height - 0.5).toFixed(3));
-  });
+  const takes = el('div', { class: 'la-strip' }, TAKES.map(([scene, take, length, note, look]) => el('div', { class: 'la-take ' + look },
+    picture(scene, 'la-pic'),
+    el('dl', {}, el('dt', {}, 'Shot'), el('dd', {}, `01 · ${take}`), el('dt', {}, 'Model'), el('dd', {}, 'MiniMax H3'),
+      el('dt', {}, 'Length'), el('dd', {}, length), el('dt', {}, 'Note'), el('dd', {}, note)))));
 
-  const ticker = el('div', { class: 'lx-ticker', 'aria-hidden': 'true' },
-    el('div', {}, [...TICKER, ...TICKER].map((t) => el('span', {}, el('i', {}), t))));
+  const plan = el('div', { class: 'la-screen', 'aria-hidden': 'true' },
+    el('div', { class: 'la-bar la-mono' }, el('span', {}, 'Agent 1'), el('span', {}, 'Plans first')),
+    el('div', { class: 'la-you' }, 'A 20 second ad for our sneaker drop. Rooftop, golden hour, the same runner in every shot.'),
+    el('div', { class: 'la-plan' },
+      el('header', {}, el('b', {}, 'Plan · 3 shots'), el('span', {}, 'Nothing is made until you approve')),
+      scenes.info('rooftop').shots.map((shot) => el('div', { class: 'la-row' }, picture('rooftop', 'la-thumb'), el('span', {}, shot), el('em', {}, '60 cr'))),
+      el('footer', {}, el('span', { class: 'la-mono' }, 'Storyboard first'), el('span', { class: 'la-btn solid small' }, 'Approve · 180'))));
 
-  const reelRow = (items, back) => el('div', { class: 'lx-reel-row' + (back ? ' back' : '') },
-    el('div', {}, [...items, ...items].map(([title, note, tone, shape]) => el('figure', { class: `lx-reel-tile tone-${tone} ${shape}` },
-      el('div', { class: 'lx-pic' }), el('figcaption', {}, el('b', {}, title), el('span', {}, note))))));
-  const reel = el('section', { class: 'lx-reel lx-reveal', 'aria-label': 'What people make' },
-    el('h2', {}, 'Made on Scene.ai'),
-    reelRow(REEL.slice(0, 4)), reelRow(REEL.slice(4), true));
+  const page = el('div', { class: 'la' },
+    monitor(join, signupOpen),
 
-  const light = (e) => {
-    const b = e.currentTarget.getBoundingClientRect();
-    e.currentTarget.style.setProperty('--cx', (e.clientX - b.left) + 'px');
-    e.currentTarget.style.setProperty('--cy', (e.clientY - b.top) + 'px');
-  };
-  const page = el('div', { class: 'lp lx' },
-    el('header', { class: 'lp-top' },
-      el('a', { class: 'brand', href: '/' }, el('img', { src: '/assets/img/logo.svg?v=clapper', alt: '' }), 'Scene.ai'),
-      el('nav', { class: 'lp-nav' },
-        el('a', { class: 'btn lp-outline', href: '/signin' }, 'Sign in'),
-        signupOpen && el('a', { class: 'btn generate', href: '/signup' }, 'Create an account'))),
+    el('section', { class: 'la-wrap la-manifesto' },
+      label('01 · Why', 'Scene.ai'),
+      el('p', {}, 'Most AI video tools give you a slot machine. ', el('em', {}, 'Scene.ai gives you a set:'),
+        ' a cast that stays the same, takes you can keep or roll again, and a cut you can trust.')),
 
-    hero, ticker,
+    el('section', { class: 'la-wrap la-report' },
+      label('02 · The take report', 'Shot 1 · Rooftop at dusk'),
+      takes,
+      el('div', { class: 'la-steps' }, STEPS.map(([title, text], i) => el('div', {}, el('b', { class: 'la-mono' }, `0${i + 1}`), el('h3', {}, title), el('p', {}, text))))),
 
-    el('section', { class: 'lp-section lx-section lx-reveal' },
-      el('h2', {}, 'What you can make'),
-      el('div', { class: 'lx-bento' }, MAKES.map((m) => el('div', { class: `lx-card tone-${m.tone}` + (m.wide ? ' wide' : ''), onpointermove: light },
-        el('div', { class: 'lx-card-glow' }),
-        el('div', { class: 'lx-card-head' }, icon(m.icon), el('div', {}, el('b', {}, m.kind), el('span', {}, m.model))),
-        el('p', {}, m.text))))),
+    el('section', { class: 'la-wrap la-agent' },
+      label('03 · The agent', 'Plans first, makes later'),
+      el('div', { class: 'la-split' },
+        el('div', {},
+          el('h2', {}, 'An assistant director that asks before it spends.'),
+          el('p', {}, 'Tell it what you are making, in plain words. It plans the shots, prices them and waits for your nod; then it looks at every take and offers a retake when a face or a place is wrong.'),
+          el('p', { class: 'la-note la-mono' }, 'The agent is open to invited accounts for now.')),
+        plan)),
 
-    reel,
+    el('section', { class: 'la-wrap la-kit' },
+      label('04 · On the cart', 'The models'),
+      el('h2', {}, 'Everything on the cart.'),
+      el('table', {}, el('tbody', {}, KIT.map(([kind, what, model, text]) => el('tr', {},
+        el('td', { class: 'la-mono' }, kind), el('th', { scope: 'row' }, what), el('td', { class: 'la-model' }, model), el('td', {}, text)))))),
 
-    el('section', { class: 'lp-section lx-section lx-reveal' },
-      el('h2', {}, 'From an idea to a cut'),
-      el('ol', { class: 'lx-steps' }, STEPS.map(([title, text]) => el('li', {}, el('b', {}, title), el('p', {}, text))))),
+    el('section', { class: 'la-wrap la-price' },
+      label('05 · Credits', 'Pay for what you make'),
+      el('div', { class: 'la-split' },
+        el('h2', {}, 'You pay for the take, not the render time.'),
+        el('p', {}, 'A flat price for a picture, a price per second for video and music. You see it before you press Generate, and a job that fails or is cancelled is refunded.'))),
 
-    el('section', { class: 'lp-section lx-section lx-agent-section lx-reveal' },
-      el('div', {},
-        el('h2', {}, 'Ask the agent'),
-        el('p', { class: 'lx-lead' }, 'Tell it what you want in plain words, attach frames from the canvas, and it answers with a plan: each shot, cut, song or title, and what it costs. It looks at its own results and offers a retake when a face or a place is wrong. Nothing is made or charged until you approve it.'),
-        el('p', { class: 'lp-note' }, 'The agent is open to invited accounts for now.')),
-      agentDemo()),
+    el('section', { class: 'la-cut' },
+      el('h2', {}, 'CUT.'),
+      el('p', {}, signupOpen ? 'Your first scene is a sentence away.' : 'Welcome back. The set is as you left it.'),
+      el('div', { class: 'la-doors center' }, join('solid big'), signupOpen && el('a', { class: 'la-btn big', href: '/signin' }, 'Sign in'))),
 
-    el('section', { class: 'lp-section lx-section lx-pay lx-reveal' },
-      el('div', { class: 'lx-pay-card' },
-        el('h2', {}, 'Pay for what you make'),
-        el('p', { class: 'lx-lead' }, 'Credits pay for results, not for computer time: a flat price for a picture, a price per second for video and music. You see the price before you press Generate, and a job that fails or is cancelled is refunded.'))),
+    el('footer', { class: 'la-end la-mono' }, el('span', {}, 'Scene.ai'), el('span', {}, 'A studio for video, pictures and music')));
 
-    el('section', { class: 'lx-end lx-reveal' },
-      el('div', { class: 'lx-glow g1' }), el('div', { class: 'lx-glow g3' }),
-      clapper(),
-      el('h2', {}, signupOpen ? 'Make your first scene.' : 'Welcome back.'),
-      join()),
-
-    el('footer', { class: 'lp-foot' },
-      el('span', {}, 'Scene.ai'), el('a', { href: '/signin' }, 'Sign in')));
-
-  // The light follows the pointer over the whole page; sections rise into view as they are scrolled to.
-  page.addEventListener('pointermove', (e) => { page.style.setProperty('--mx', e.clientX + 'px'); page.style.setProperty('--my', e.clientY + 'px'); });
-  const rise = page.querySelectorAll('.lx-reveal');
-  if ('IntersectionObserver' in window && !still()) {
-    const watch = new IntersectionObserver((seen) => seen.forEach((s) => { if (s.isIntersecting) { s.target.classList.add('in'); watch.unobserve(s.target); } }), { threshold: 0.12 });
-    rise.forEach((node) => watch.observe(node));
-  } else {
-    rise.forEach((node) => node.classList.add('in'));
-  }
-  const intro = slate();
-  root.replaceChildren(page, ...(intro ? [intro] : []));
+  root.replaceChildren(page);
   window.scrollTo(0, 0);
 }

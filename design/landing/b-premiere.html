@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option B · The Premiere — Scene.ai</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Instrument+Sans:wdth,wght@75..100,400..700&family=Caveat:wght@600&family=Martian+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+  :root { --paper: #f4efe6; --paper2: #ebe4d6; --ink: #17140f; --soft: #6f675c; --rule: #17140f; --pencil: #d23a2c; --edge: #e88a2e;
+    --serif: 'Instrument Serif', Georgia, serif; --sans: 'Instrument Sans', system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  html { background: var(--paper); color: var(--ink); }
+  body { margin: 0; font: 400 17px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+  body::before { content: ''; position: fixed; inset: 0; pointer-events: none; opacity: .35; mix-blend-mode: multiply; z-index: 50;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='3'/%3E%3CfeColorMatrix values='0 0 0 0 .4 0 0 0 0 .35 0 0 0 0 .3 0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  a { color: inherit; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 0 40px; }
+  .caps { font: 600 11px/1.4 var(--sans); letter-spacing: .16em; text-transform: uppercase; }
+
+  .mast { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 22px 0 18px; border-bottom: 1.5px solid var(--rule); }
+  .mast .issue { color: var(--soft); }
+  .mast .name { display: flex; align-items: center; gap: 10px; font: 400 34px/1 var(--serif); letter-spacing: -.01em; text-decoration: none; }
+  .mast .name svg { width: 26px; height: 26px; }
+  .mast nav { justify-self: end; display: flex; gap: 22px; align-items: center; }
+  .mast nav a { text-decoration: none; font-weight: 600; font-size: 15px; }
+  .pill { padding: 11px 20px; border-radius: 999px; background: var(--ink); color: var(--paper) !important; }
+  .sub-mast { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid rgba(23, 20, 15, .25); color: var(--soft); }
+
+  .hero { display: grid; grid-template-columns: 7fr 5fr; gap: 64px; padding: 64px 0 80px; border-bottom: 1.5px solid var(--rule); }
+  h1 { margin: 0; font: 400 clamp(84px, 11vw, 176px)/.84 var(--serif); letter-spacing: -.035em; }
+  h1 i { color: var(--pencil); }
+  .lede { max-width: 520px; margin: 34px 0 30px; font-size: 20px; line-height: 1.5; }
+  .lede::first-letter { float: left; font: 400 76px/.8 var(--serif); margin: 6px 10px 0 0; }
+  .ctas { display: flex; gap: 14px; align-items: center; }
+  .ctas a { text-decoration: none; font-weight: 600; }
+  .ctas .pill { padding: 16px 28px; font-size: 16px; }
+  .ctas .under { border-bottom: 1.5px solid var(--ink); padding-bottom: 2px; }
+  .billing { margin-top: 56px; padding-top: 18px; border-top: 1px solid rgba(23, 20, 15, .25); font: 500 13px/1.75 var(--sans); font-stretch: 75%; letter-spacing: .12em;
+    text-transform: uppercase; text-align: justify; text-align-last: center; color: #3a352d; }
+  .billing b { font-size: 16px; font-weight: 700; letter-spacing: .06em; }
+  .poster { position: relative; align-self: start; }
+  .poster .mat { background: #fff; padding: 14px 14px 18px; box-shadow: 0 1px 0 rgba(0, 0, 0, .06), 0 30px 60px -30px rgba(40, 30, 10, .45); transform: rotate(1.2deg); }
+  .poster .pic { aspect-ratio: 4 / 5; overflow: hidden; position: relative; }
+  .poster .pic svg { width: 100%; height: 100%; display: block; }
+  .poster .pic .title { position: absolute; left: 0; right: 0; bottom: 22px; text-align: center; color: #fff; font: 400 italic 46px/1 var(--serif); text-shadow: 0 2px 20px rgba(0, 0, 0, .5); }
+  .poster figcaption { margin-top: 12px; font: 400 italic 16px/1.4 var(--serif); color: var(--soft); }
+  .poster .moods { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+  .poster .moods button { font: 600 12px/1 var(--sans); letter-spacing: .06em; padding: 9px 13px; border-radius: 999px; border: 1px solid rgba(23, 20, 15, .35); background: transparent; color: var(--ink); cursor: pointer; }
+  .poster .moods button[aria-pressed=true] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+  .sheet { padding: 80px 0 90px; border-bottom: 1.5px solid var(--rule); }
+  .head { display: grid; grid-template-columns: 5fr 7fr; gap: 64px; align-items: end; margin-bottom: 42px; }
+  h2 { margin: 0; font: 400 clamp(52px, 6vw, 92px)/.92 var(--serif); letter-spacing: -.025em; }
+  h2 i { color: var(--pencil); }
+  .head p { margin: 0; max-width: 560px; font-size: 19px; color: #3a352d; }
+  .film { position: relative; background: #111; padding: 26px 22px; display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px 10px; }
+  .film::before, .film::after { content: ''; position: absolute; left: 10px; right: 10px; height: 9px;
+    background: repeating-linear-gradient(90deg, #f4efe6 0 12px, transparent 12px 26px); opacity: .85; border-radius: 2px; }
+  .film::before { top: 8px; } .film::after { bottom: 8px; }
+  .film .cell { position: relative; }
+  .film .cell .pic { aspect-ratio: 3 / 2; overflow: hidden; } .film .cell svg { width: 100%; height: 100%; display: block; }
+  .film .cell span { display: block; margin-top: 6px; font: 400 10px/1 'Martian Mono', monospace; color: var(--edge); letter-spacing: .1em; }
+  .film .cell.x .pic { opacity: .45; }
+  .circle { position: absolute; inset: -18px -16px -26px -16px; pointer-events: none; }
+  .circle path { fill: none; stroke: var(--pencil); stroke-width: 4; stroke-linecap: round; stroke-dasharray: 900; stroke-dashoffset: 900; transition: stroke-dashoffset 1.4s ease; }
+  .circle.on path { stroke-dashoffset: 0; }
+  .note { position: absolute; font: 600 42px/1 'Caveat', cursive; color: var(--pencil); transform: rotate(-6deg); white-space: nowrap; }
+
+  .acts { padding: 90px 0; border-bottom: 1.5px solid var(--rule); display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; }
+  .act { padding: 0 36px; border-left: 1px solid rgba(23, 20, 15, .25); }
+  .act:first-child { padding-left: 0; border-left: 0; }
+  .act .num { font: 400 96px/.9 var(--serif); }
+  .act h3 { margin: 18px 0 12px; font: 400 34px/1.05 var(--serif); }
+  .act p { margin: 0; color: #3a352d; }
+
+  .quote { padding: 100px 0; border-bottom: 1.5px solid var(--rule); display: grid; grid-template-columns: 7fr 5fr; gap: 64px; align-items: center; }
+  blockquote { margin: 0; font: 400 italic clamp(40px, 4.6vw, 70px)/1.04 var(--serif); letter-spacing: -.02em; }
+  blockquote cite { display: block; margin-top: 26px; font: 600 12px/1 var(--sans); letter-spacing: .16em; text-transform: uppercase; font-style: normal; color: var(--soft); }
+  .card { background: #fff; border: 1px solid rgba(23, 20, 15, .18); box-shadow: 0 30px 60px -36px rgba(40, 30, 10, .5); }
+  .card .you { margin: 18px 18px 0 auto; max-width: 80%; background: var(--paper2); padding: 12px 16px; border-radius: 16px 16px 4px 16px; font-size: 15px; }
+  .card .plan { margin: 16px 18px 18px; border: 1px solid rgba(23, 20, 15, .15); border-radius: 12px; overflow: hidden; }
+  .card .plan header { padding: 12px 16px; display: flex; justify-content: space-between; font-weight: 600; border-bottom: 1px solid rgba(23, 20, 15, .12); }
+  .card .plan header span { color: var(--soft); font-weight: 400; font-size: 13px; }
+  .card .row { display: grid; grid-template-columns: 70px 1fr auto; gap: 12px; align-items: center; padding: 9px 16px; border-bottom: 1px solid rgba(23, 20, 15, .08); font-size: 14px; }
+  .card .row .t { aspect-ratio: 16 / 10; overflow: hidden; border-radius: 4px; } .card .row svg { width: 100%; height: 100%; display: block; }
+  .card .row em { font-style: normal; color: var(--soft); font-size: 12px; }
+  .card footer { display: flex; justify-content: flex-end; padding: 12px 16px; }
+  .card footer span { background: var(--ink); color: var(--paper); border-radius: 999px; padding: 9px 16px; font-weight: 600; font-size: 14px; }
+
+  .playbill { padding: 90px 0; border-bottom: 1.5px solid var(--rule); }
+  .bill { margin-top: 40px; }
+  .bill div { display: grid; grid-template-columns: 220px 1fr 1.2fr; gap: 30px; padding: 22px 0; border-top: 1px solid rgba(23, 20, 15, .25); align-items: baseline; }
+  .bill b { font: 400 40px/1 var(--serif); }
+  .bill span { font: 600 13px/1.4 var(--sans); letter-spacing: .14em; text-transform: uppercase; }
+  .bill p { margin: 0; color: #3a352d; }
+
+  .credits { padding: 110px 0 70px; text-align: center; }
+  .credits .roll { font: 500 13px/2.1 var(--sans); letter-spacing: .2em; text-transform: uppercase; color: var(--soft); }
+  .credits .roll b { display: block; color: var(--ink); font-size: 15px; }
+  .credits h2 { margin: 60px 0 30px; font-size: clamp(64px, 8vw, 128px); }
+  .credits .ctas { justify-content: center; }
+  .foot { display: flex; justify-content: space-between; padding: 22px 0 30px; border-top: 1.5px solid var(--rule); color: var(--soft); }
+
+  @media (max-width: 900px) {
+    .wrap { padding: 0 16px; } .mast { grid-template-columns: 1fr auto; } .mast .issue { display: none; }
+    .hero, .head, .quote, .acts { grid-template-columns: 1fr; gap: 40px; } .act { padding: 0; border: 0; }
+    .film { grid-template-columns: repeat(3, 1fr); } .bill div { grid-template-columns: 1fr; gap: 8px; }
+    .note { right: 0 !important; font-size: 32px !important; } .poster .mat { transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { .circle path { transition: none; } }
+</style>
+</head>
+<body>
+<script src="scenes.js"></script>
+<div class="wrap">
+  <header class="mast">
+    <span class="issue caps">The studio issue · No. 1</span>
+    <a class="name" href="#"><img src="../../frontend/assets/img/logo.svg" alt="" style="width:30px;height:30px;border-radius:8px;display:block">Scene.ai</a>
+    <nav><a href="#">Sign in</a><a class="pill" href="#">Create an account</a></nav>
+  </header>
+  <div class="sub-mast caps"><span>Video</span><span>Pictures</span><span>Music</span><span>Motion graphics</span><span>Storyboards</span><span>One cast, every shot</span></div>
+
+  <section class="hero">
+    <div>
+      <h1>Direct<br>your <i>scene.</i></h1>
+      <p class="lede">Write the shot, and Scene.ai makes the takes. It keeps the same faces from one shot to the next and lets you cut the keepers together: a film studio run on AI, without ever touching a node graph.</p>
+      <div class="ctas"><a class="pill" href="#">Create an account</a><a class="under" href="#">Sign in</a></div>
+      <div class="billing">A Scene.ai picture · <b>written by you</b> · directed by you · starring <b>the same cast in every shot</b> · shot on MiniMax H3 · stills by Z-Image, SDXL &amp; Ideogram · music by MiniMax Music 3 · titles drawn in the studio · <b>cut on the timeline</b></div>
+    </div>
+    <figure class="poster" style="margin:0">
+      <div class="mat"><div class="pic" id="poster"></div></div>
+      <figcaption id="caption">Fig. 1 — Rooftop at dusk. Shot 1, take 3: the keeper.</figcaption>
+      <div class="moods" id="moods"></div>
+    </figure>
+  </section>
+
+  <section class="sheet">
+    <div class="head"><h2>Every take is kept. <i>You circle one.</i></h2>
+      <p>Each shot gets as many takes as you like, on a board with one row per shot. Start the next clip on the last frame of the one you circled, or roll it again. Nothing is thrown away until you say so.</p></div>
+    <div class="film" id="film"></div>
+  </section>
+
+  <section class="acts">
+    <div class="act"><div class="num">I.</div><h3>Describe the shot</h3><p>Write what happens and add reference pictures. Pin a cast to the project, and the same face, outfit and place carry from shot to shot.</p></div>
+    <div class="act"><div class="num">II.</div><h3>Make the takes</h3><p>Every result lands on the canvas. Keep the take you like, start the next clip from its last frame, or roll it again with a new seed.</p></div>
+    <div class="act"><div class="num">III.</div><h3>Cut it together</h3><p>Put the keepers in order on the timeline, trim them, lay music under them, and export one video.</p></div>
+  </section>
+
+  <section class="quote">
+    <blockquote>“Three shots, 180 credits. Nothing is made until you approve.”<cite>— The agent, planning a sneaker ad</cite></blockquote>
+    <div class="card" aria-hidden="true">
+      <div class="you">A 20 second ad for our sneaker drop. Rooftop, golden hour, the same runner in every shot.</div>
+      <div class="plan"><header>Plan · 3 shots<span>Storyboard first</span></header><div id="rows"></div><footer><span>Approve · 180</span></footer></div>
+    </div>
+  </section>
+
+  <section class="playbill">
+    <h2>Now showing <i>in the studio</i></h2>
+    <div class="bill">
+      <div><b>Video</b><span>MiniMax H3</span><p>Clips of 5 to 15 seconds from a prompt and up to eight references: a character, an outfit, a place, a motion to copy, a voice.</p></div>
+      <div><b>Pictures</b><span>Z-Image Turbo · SDXL · Ideogram 4</span><p>Stills in a few seconds, and posters with lettering that reads right.</p></div>
+      <div><b>Music</b><span>MiniMax Music 3</span><p>Songs and scores from 30 seconds to 5 minutes, with your lyrics or without.</p></div>
+      <div><b>Titles</b><span>Drawn in the studio</span><p>Title cards, lower thirds and whole videos of animated words, editable scene by scene.</p></div>
+      <div><b>Finish</b><span>SeedVR2</span><p>A finished video made larger and sharper, up to four times its size.</p></div>
+    </div>
+  </section>
+
+  <section class="credits">
+    <div class="roll">Directed by<b>you</b>Assistant director<b>the agent</b>Cast<b>the same, every shot</b>Edited on<b>the timeline</b></div>
+    <h2>Your name <i>here.</i></h2>
+    <div class="ctas"><a class="pill" href="#">Create an account</a><a class="under" href="#">Sign in</a></div>
+  </section>
+  <footer class="foot caps"><span>Scene.ai</span><span>A studio for video, pictures and music</span></footer>
+</div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const names = Scenes.names;
+  function show(i) {
+    const info = Scenes.info(names[i]);
+    $('poster').innerHTML = Scenes.svg(names[i]) + `<div class="title">${info.title}</div>`;
+    $('caption').textContent = `Fig. 1 — ${info.title}. Shot 1, take ${[3, 2, 1, 2][i]}: the keeper.`;
+    document.querySelectorAll('#moods button').forEach((b, n) => b.setAttribute('aria-pressed', String(n === i)));
+    $('rows').innerHTML = info.shots.map((s) => `<div class="row"><div class="t">${Scenes.svg(names[i])}</div><span>${s}</span><em>60 cr</em></div>`).join('');
+  }
+  names.forEach((n, i) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = Scenes.info(n).title; b.onclick = () => show(i); $('moods').append(b); });
+  show(0);
+  // the contact sheet: twelve frames, the rejected ones faded, the keeper circled in red pencil as it scrolls into view
+  const frames = ['rooftop', 'rooftop', 'rooftop', 'neon', 'neon', 'neon', 'desert', 'desert', 'deep', 'deep', 'deep', 'rooftop'];
+  const keeper = 2;
+  $('film').innerHTML = frames.map((s, i) => `<div class="cell${[0, 3, 7, 9].includes(i) ? ' x' : ''}"><div class="pic">${Scenes.svg(s)}</div><span>${String(14 + i).padStart(2, '0')}A ▸ ${i % 2 ? 'TAKE 2' : 'TAKE 1'}</span>
+    ${i === keeper ? `<svg class="circle" viewBox="0 0 200 140" preserveAspectRatio="none"><path d="M24 70 C20 26 90 8 140 16 C186 24 196 66 182 98 C166 132 80 138 40 118 C14 104 12 76 30 52"/></svg><div class="note" style="right:-70px;top:-76px">this one.</div>` : ''}</div>`).join('');
+  const circle = document.querySelector('.circle');
+  new IntersectionObserver((seen) => seen.forEach((s) => s.isIntersecting && circle.classList.add('on')), { threshold: .6 }).observe(circle);
+</script>
+</body>
+</html>

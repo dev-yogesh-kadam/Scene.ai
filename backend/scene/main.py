@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import backup, media, motion, sequence
 from .agent import Agent, AgentError, service
-from .api import admin, assets, auth, library, studio, workspace
+from .api import admin, assets, auth, film, library, runs, studio, workspace
 from .catalog import Catalog
 from .comfy import workflows
 from .comfy.client import Comfy, ComfyError
@@ -203,7 +203,7 @@ def create_app(settings=None):
             headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
 
-    for module in (auth, studio, library, workspace, assets, admin):
+    for module in (auth, studio, library, workspace, film, runs, assets, admin):
         app.include_router(module.router)
 
     frontend = settings.path("frontend_dir").resolve()

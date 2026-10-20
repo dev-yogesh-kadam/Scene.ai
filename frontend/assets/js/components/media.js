@@ -48,7 +48,12 @@ export function openViewer(item, { base = '/api/library', owner = false, actions
   const url = `${base}/${item.id}/file`;
   const media = item.kind === 'video' ? el('video', { src: url, controls: true, autoplay: true, loop: true })
     : item.kind === 'audio' ? el('audio', { src: url, controls: true, autoplay: true })
-      : el('img', { src: url, alt: item.name });
+      : item.kind === 'text' ? el('pre', { class: 'viewer-text' }, 'Loading…')
+        : el('img', { src: url, alt: item.name });
+  // A text is shown as it is: its first 200,000 characters
+  if (item.kind === 'text') fetch(url).then((r) => (r.ok ? r.text() : Promise.reject(new Error(r.statusText))))
+    .then((text) => { media.textContent = text.length > 200000 ? text.slice(0, 200000) + '\n…' : text; })
+    .catch(() => { media.textContent = 'This text could not be loaded.'; });
   const promptText = promptOf(item);
   const copy = el('button', { class: 'btn small quiet', onclick: async () => {
     try { await navigator.clipboard.writeText(promptText); copy.textContent = 'Copied'; } catch (e) { copy.textContent = 'Copy failed'; }

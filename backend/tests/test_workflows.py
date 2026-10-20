@@ -163,7 +163,7 @@ def master(**settings):
 
 def test_every_video_workflow_has_a_presets_file_and_only_drafts_stay_archived():
     flows = sorted(p.stem for p in VIDEO.glob("*.json") if not p.name.endswith(".studio.json"))
-    assert len(flows) == 9 and "h3_master" in flows
+    assert len(flows) == 11 and "h3_master" in flows and "h3_chunk" in flows
     for name in flows:
         profile = json.loads((VIDEO / (name + ".studio.json")).read_text(encoding="utf-8"))
         assert profile["title"] and not profile.get("replaces"), name

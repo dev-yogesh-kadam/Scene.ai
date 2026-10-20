@@ -45,6 +45,9 @@ const KIND_ICONS = { video: 'video', image: 'image', audio: 'audio' };
 const KIND_NAMES = { video: 'Video', image: 'Image', audio: 'Audio' };
 
 // A small menu that opens under (or above) a button and closes on a click elsewhere or Escape.
+// A length as the card shows it: whole seconds as they are, a clip timed to its frames (6.2917 s) to two decimals.
+const secs = (d) => (Number.isInteger(Number(d)) ? `${d}s` : `${Number(d).toFixed(2)}s`);
+
 export function popover(anchor, content, className = '') {
   document.querySelectorAll('.pop').forEach((open) => open.close());
   const box = el('div', { class: 'pop ' + className, role: 'menu' }, content);
@@ -429,7 +432,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     drawSuggest();
   } });
   // "+": attach a file from the computer (it joins the project's library and canvas), from the canvas, or from the library.
-  const upload = el('input', { type: 'file', accept: 'image/*,video/*,audio/*', multiple: true, hidden: true,
+  const upload = el('input', { type: 'file', accept: 'image/*,video/*,audio/*,.srt,.json', multiple: true, hidden: true,
     onchange: async (e) => {
       const files = [...e.target.files];
       e.target.value = '';
@@ -659,7 +662,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
         menu.resolutions.map((r) => ({ id: r, label: r + 'p' })), current.resolution, (r) => changeStep(run, index, { resolution: r }), 'pop-row')));
     }
     if (menu.durations.length && current.duration) {
-      pills.push(pill(current.duration + 's', 'clock', 'Duration', (b) => choose(b,
+      pills.push(pill(secs(current.duration), 'clock', 'Duration', (b) => choose(b,
         menu.durations.map((d) => ({ id: d, label: d + 's' })), current.duration, (d) => changeStep(run, index, { duration: d }), 'pop-row')));
     }
     return pills.length ? el('div', { class: 'agent-pills' }, pills) : null;
@@ -712,7 +715,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     const current = step.current || {};
     return (step.settings
       ? [step.workflow_title, cameraOf(step), current.orientation && SHAPE_NAMES[current.orientation], current.resolution && current.resolution + 'p',
-        current.duration && current.duration + 's', step.settings.clips > 1 && '× ' + step.settings.clips + ' clips',
+        current.duration && secs(current.duration), step.settings.clips > 1 && '× ' + step.settings.clips + ' clips',
         step.settings.options && step.settings.options.quality && step.settings.options.quality + ' quality']
       : [step.workflow_title, step.facts]).filter(Boolean);
   };
@@ -1049,6 +1052,34 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
 
   const minorNotes = (verdict) => (verdict.checks || []).filter((c) => c.level === 'minor' && c.note).map((c) => c.note).join('; ');
 
+  // A long skill's run goes on by itself. Once every step of its newest plan has come to an end (made, failed or
+  // skipped), the agent is told what each one made, by library id, and carries on from the run's state. Once per plan;
+  // it waits while anything is still being made or the agent is busy, and never runs a plan that was stopped.
+  function carryOn() {
+    const run = runs[runs.length - 1];
+    if (!run || !run.continues || run.continued || run.state !== 'approved' || busy || generating() || halted) return;
+    const lines = [];
+    for (const step of run.steps) {
+      if (step.skipped) { lines.push(`- “${step.name}”: skipped`); continue; }
+      const take = step.take2 || step;
+      const job = take.job && store.jobs.find((j) => j.id === take.job);
+      if (take.made && take.madeAll) {
+        lines.push(`- “${step.name}”: ${take.madeAll.map((i) => `item ${i.id} (${i.kind}, “${i.name}”)`).join('; ')}`);
+      } else if (take.made) {
+        const info = take.madeInfo || {};
+        const size = info.width ? `, ${info.width}×${info.height}` : '';
+        lines.push(`- “${step.name}”: item ${take.made} (${step.kind}${size}${info.duration ? `, ${info.duration} s` : ''})`);
+      } else if (take.error || (job && (job.status === 'failed' || job.status === 'cancelled'))) {
+        lines.push(`- “${step.name}”: not made — ${take.error || job.error || job.status}`);
+      } else return;   // still on its way
+    }
+    run.continued = true;
+    saveRuns();
+    const shown = `Continue the run (${run.steps.length} ${run.steps.length === 1 ? 'step' : 'steps'} done)`;
+    send({ text: `Continue the run. The steps you planned have come to an end:\n${lines.join('\n')}\n`
+      + 'Write what they made to the run\'s state, then go on from its status.', shown, ids: [], parts: [{ text: shown }] });
+  }
+
   // The library item a job made, or null while it is not in the library yet.
   async function itemOf(jobId) {
     const made = (await api('/api/library' + (projectId() ? '?project=' + projectId() : ''))).items.find((i) => i.job_id === jobId);
@@ -1135,6 +1166,8 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     try {
       const items = (await api('/api/library' + (projectId() ? '?project=' + projectId() : ''))).items;
       const byJob = new Map(items.filter((i) => i.job_id).map((i) => [i.job_id, i]));
+      // A job may save several files (a voice stem and the music; a transcript as JSON and SRT): all of them are kept.
+      const allOf = (jobId) => items.filter((i) => i.job_id === jobId).sort((a, b) => a.id - b.id);
       let found = false;
       for (const [run, step, take] of open) {
         const item = byJob.get(take.job);
@@ -1142,12 +1175,15 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
         const c = item.context || {};
         take.made = item.id;
         take.madeInfo = { duration: c.duration ? c.duration * (c.clips || 1) : null, width: c.width || null, height: c.height || null };
+        const every = allOf(take.job);
+        if (every.length > 1) take.madeAll = every.map((i) => ({ id: i.id, kind: i.kind, name: i.name }));
         if (item.rating) take.rating = item.rating;
         work(run, 'ready', take === step ? `“${step.name}” is ready` : `The retake of “${step.name}” is ready`);
         found = true;
       }
       if (found) { saveRuns(); drawLog(); }
     } catch { /* the next update tries again */ }
+    carryOn();
     collecting = false;
   }
 
@@ -1161,7 +1197,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     step.take2 = { prompt: plan.prompt, queuedAt: Date.now() };
     drawLog();
     try {
-      const settings = { ...plan.settings, refs: { ...(plan.settings.refs || {}) } };
+      const settings = { ...plan.settings, refs: { ...(plan.settings.refs || {}) }, ...runOf() };
       if (plan.start) {   // the review found that the cut jumps: the retake starts on the last frame of the shot before
         const ref = await api(`/api/library/${plan.start.id}/reference`, { method: 'POST' });
         settings.refs[plan.start.slot] = { comfy_name: ref.comfy_name, name: ref.name };
@@ -1219,6 +1255,54 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       el('div', { class: 'md' + (long && !run.ui.more ? ' clamped' : '') }, markdown(run.reply, run.chips || {}, pick)),
       long && el('button', { type: 'button', class: 'more-btn', onclick: () => { run.ui.more = !run.ui.more; drawLog(); } },
         run.ui.more ? 'Show less' : 'Show more', el('span', { class: run.ui.more ? 'flip' : '' }, icon('down'))));
+  }
+
+  // A question the agent stopped for (a review, a choice a skill asks): its options as buttons. A click sends the
+  // option as the next message; once answered, or once anything newer is said, the buttons stand as a record.
+  function asked(run) {
+    const open = !run.question.answer && runs[runs.length - 1] === run;
+    return el('div', { class: 'turn-question' },
+      el('p', { class: 'turn-question-text' }, run.question.text),
+      el('div', { class: 'turn-question-options' }, run.question.options.map((option) =>
+        el('button', { type: 'button', class: 'btn small' + (run.question.answer === option ? ' primary' : ''), disabled: !open,
+          'aria-pressed': String(run.question.answer === option),
+          onclick: () => {
+            if (busy || generating()) return;
+            run.question.answer = option;
+            saveRuns();
+            send({ text: option, shown: option, ids: [], parts: [{ text: option }] });
+          } }, option))));
+  }
+
+  // Every job of a long run is counted against its budget: a retake, a still of the storyboard or a clip animated from it
+  // as much as a planned step. A conversation is a long run once the server has shown a budget for it.
+  const runOf = () => (runs.some((r) => r.budget) ? { run_of: session || 'main' } : {});
+
+  // A long run's budget: what it has spent, and the most it may. The user sets it here (the agent cannot); a step that
+  // would pass it is refused by the server before anything is charged.
+  function budgetLine(run) {
+    const b = run.budget;
+    const ui = run.ui;
+    const done = () => { if (document.activeElement && log.contains(document.activeElement)) document.activeElement.blur(); };   // a focused field holds the log still
+    const save = async (credits) => {
+      done();
+      try {
+        run.budget = await api(`/api/runs/${session || 'main'}/budget`, { method: 'PUT', json: { credits } });
+        ui.editBudget = false;
+        saveRuns();
+      } catch (e) { alert(e.message); }
+      drawLog();
+    };
+    if (ui.editBudget) {
+      const field = el('input', { type: 'number', min: '0', step: '100', class: 'budget-field', value: b.credits ?? '', 'aria-label': 'Run budget in credits' });
+      return el('form', { class: 'turn-budget', onsubmit: (e) => { e.preventDefault(); save(field.value === '' ? null : Math.max(0, Math.round(Number(field.value)))); } },
+        el('span', {}, 'Run budget'), field, el('span', {}, 'cr'),
+        el('button', { type: 'submit', class: 'btn small primary' }, 'Save'),
+        el('button', { type: 'button', class: 'btn small quiet', onclick: () => { done(); ui.editBudget = false; drawLog(); } }, 'Cancel'));
+    }
+    return el('div', { class: 'turn-budget' },
+      el('span', {}, b.credits == null ? `Run budget: no limit · spent ${b.spent} cr` : `Run budget: ${b.spent} of ${b.credits} cr spent`),
+      el('button', { type: 'button', class: 'btn small quiet', onclick: () => { ui.editBudget = true; drawLog(); } }, b.credits == null ? 'Set a budget' : 'Change'));
   }
 
   // The newest plan that waits for approval: its bar goes in the dock.
@@ -1378,6 +1462,8 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       thought && fold({ glyph: 'bulb', title: `Thought for ${span(thought.seconds)}`, state: (ui.thought = ui.thought || {}), onToggle: redraw,
         className: 'thought', body: thought.text ? el('p', { class: 'fold-text' }, thought.text) : null }),
       run.reply && reply(run),
+      run.question && asked(run),
+      run.budget && runs[runs.length - 1] === run && budgetLine(run),
       run.steps.length > 0 && plan(run),
       after.length > 0 && fold({ glyph: 'wrench', title: `Worked ${span((after[after.length - 1].at - (run.approvedAt || after[0].at)) / 1000)}`,
         sub: after[after.length - 1].text, state: (ui.after = ui.after || {}), onToggle: redraw, className: 'work',
@@ -1513,7 +1599,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     try {
       let answer = null;
       await apiLines('/api/agent/plan', { signal: controller.signal, json: { instruction: text, project_id: projectId() || null, selection: ids,
-        model: localStorage.getItem('scene.agent.model') || null, direction,
+        model: localStorage.getItem('scene.agent.model') || null, direction, run: session || 'main',
         history: recalled().map((r) => ({ instruction: r.instruction, reply: r.reply,
           steps: r.steps.map((s) => ({ name: s.name, uses: (s.uses || []).map((u) => u.name) })) })) } }, (event) => {
         if (event.type === 'error') throw new Error(event.message);
@@ -1525,7 +1611,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
       if (!answer) throw new Error('The agent stopped before it finished. Try again.');
       made = { instruction, parts, reply: answer.reply, thought: answer.thought, activity: answer.activity || [], seconds: answer.seconds,
         chips: answer.chips || {}, steps: answer.steps, total: answer.total, state: answer.steps.length ? 'proposed' : 'answered', at: Date.now(), ui: {},
-        llm: answer.llm || null };
+        llm: answer.llm || null, question: answer.question || null, continues: !!answer.continues, budget: answer.budget || null };
       if (answer.direction) direction = answer.direction;   // the agent kept its notes up to date
       if (store.user && answer.balance != null) { store.user.credits = answer.balance; }   // the message itself may have cost credits
       runs.push(made);
@@ -1623,7 +1709,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
           continue;
         }
         const uses = step.uses || [];
-        const settings = { ...step.settings, refs: {}, parent: step.start ? step.start.id : uses.length ? uses[0].id : null };
+        const settings = { ...step.settings, refs: {}, parent: step.start ? step.start.id : uses.length ? uses[0].id : null, ...runOf() };
         for (const use of uses) {   // each attached item goes into the slot the plan named for it
           if (use.asset) {   // a saved asset from the agent's memory: the server takes it by its id
             settings.refs[use.slot] = { asset_id: use.asset, name: use.name };
@@ -1710,6 +1796,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     if (change === 'jobs') {
       collectResults();   // a shot the agent made has finished: it shows, and the agent looks at it
       reviewFinished();
+      carryOn();          // a long skill's plan has come to an end: the run goes on (a failed last step too)
       onSaved({ spent: spentBy(runs, store.jobs), updated: null });   // a job that failed gave its credits back
     }
     if (change === 'jobs' || change === 'credits') drawLog();

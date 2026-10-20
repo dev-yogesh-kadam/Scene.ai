@@ -147,10 +147,12 @@ def _item_entry(row, in_cast):
 
 
 def _project_items(db, user_id, project, limit, kinds=("image", "video")):
+    """The project's newest pictures and clips. A long run's working files (its slices, trims, references) are left
+    out: there are hundreds of them, and the run's own state names them."""
     where, params = ("project_id = ?", (user_id, project)) if project else ("project_id IS NULL", (user_id,))
     marks = ", ".join("?" for _ in kinds)
     return db.all("SELECT id, name, kind, filename, about, settings, workflow, created, review, rating FROM generations WHERE user_id = ? AND "
-                  + where + " AND kind IN (" + marks + ") ORDER BY created DESC LIMIT ?", (*params, *kinds, limit))
+                  + where + " AND run = '' AND kind IN (" + marks + ") ORDER BY created DESC LIMIT ?", (*params, *kinds, limit))
 
 
 def _uploads(db, user_id, project, limit):

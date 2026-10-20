@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Landing page options — Scene.ai</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #111; --card: #1a1a1a; --text: #f2efea; --dim: #9a958e; --line: rgba(255, 255, 255, .1); }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 400 15px/1.5 'Archivo', system-ui, sans-serif; padding: 40px 32px 60px; }
+  h1 { margin: 0 0 6px; font-size: 28px; font-weight: 800; }
+  .intro { margin: 0 0 30px; color: var(--dim); max-width: 760px; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+  .opt { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+  .view { position: relative; aspect-ratio: 16 / 10; overflow: hidden; background: #000; }
+  .view iframe { position: absolute; left: 0; top: 0; width: 1440px; height: 900px; border: 0; transform-origin: 0 0; pointer-events: none; }
+  .about { padding: 18px 20px 20px; display: grid; gap: 6px; }
+  .about h2 { margin: 0; font-size: 19px; font-weight: 800; display: flex; justify-content: space-between; align-items: baseline; }
+  .about h2 a { font-size: 13px; font-weight: 600; color: var(--text); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; text-decoration: none; }
+  .about h2 a:hover { background: rgba(255, 255, 255, .08); }
+  .about p { margin: 0; color: var(--dim); }
+  .about .tags { color: var(--text); font-size: 13px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } body { padding: 24px 16px; } }
+</style>
+</head>
+<body>
+  <h1>Four directions for the landing page</h1>
+  <p class="intro">Each is a different idea, not a recolour: its own layout, type, structure and moving parts. All four say the same true things about the studio and use the same drawn stills, so they can be compared on design alone. Open one to scroll it and click around.</p>
+  <div class="grid">
+    <article class="opt"><div class="view"><iframe src="a-monitor.html" title="Option A" loading="lazy" tabindex="-1"></iframe></div>
+      <div class="about"><h2>A · The Monitor <a href="a-monitor.html">Open →</a></h2>
+        <p>The first screen is a camera monitor: frame lines, a running timecode, lens readouts, a REC light, a plan typing itself on a slate. Switching the scene cuts the whole set.</p>
+        <p class="tags">Dark · technical · cinematic · black, white and one red</p></div></article>
+    <article class="opt"><div class="view"><iframe src="b-premiere.html" title="Option B" loading="lazy" tabindex="-1"></iframe></div>
+      <div class="about"><h2>B · The Premiere <a href="b-premiere.html">Open →</a></h2>
+        <p>A film poster and a magazine: ivory paper, a large serif title, a credits block, a contact sheet where the kept take is circled in red pencil, a playbill of the models.</p>
+        <p class="tags">Light · editorial · premium · ink and pencil red</p></div></article>
+    <article class="opt"><div class="view"><iframe src="c-screenplay.html" title="Option C" loading="lazy" tabindex="-1"></iframe></div>
+      <div class="about"><h2>C · The Screenplay <a href="c-screenplay.html">Open →</a></h2>
+        <p>The page is a script. The opening scene types itself while the shot develops beside it; every section is a scene heading, the agent speaks in dialogue, the models are the cast list.</p>
+        <p class="tags">Dark desk, white pages · narrative · typewriter and highlighter</p></div></article>
+    <article class="opt"><div class="view"><iframe src="d-storyboard.html" title="Option D" loading="lazy" tabindex="-1"></iframe></div>
+      <div class="about"><h2>D · The Storyboard <a href="d-storyboard.html">Open →</a></h2>
+        <p>A Swiss poster on a strict grid: huge wide type, numbered panels that render from pencil to frame one after another, the studio's numbers set huge, one signal orange.</p>
+        <p class="tags">Light · bold · graphic · black and orange</p></div></article>
+  </div>
+<script>
+  // each preview is the real page at 1440 × 900, scaled to its card
+  const fit = () => document.querySelectorAll('.view').forEach((v) => { v.querySelector('iframe').style.transform = `scale(${v.clientWidth / 1440})`; });
+  addEventListener('resize', fit); fit();
+</script>
+</body>
+</html>

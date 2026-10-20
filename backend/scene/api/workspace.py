@@ -1,5 +1,6 @@
 """The canvas, the timeline and the agent: arranging finished work, queueing edits and motion graphics, and planning new work."""
 
+import asyncio
 import json
 import math
 import re
@@ -9,7 +10,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from .. import agent, camera, cast, credits, edits, media, memory, motion, review, sequence, skills
+from .. import agent, camera, cast, credits, edits, media, memory, motion, review, runs, sequence, skills
 from ..comfy import workflows
 from .deps import agent_user, current_user
 from .studio import price
@@ -31,6 +32,23 @@ MAX_CLIPS = 50
 LOCAL_SKILL_CHARS = 24_000   # the most of a skill a local model is given (about 6,000 tokens)
 CHECKED_SKILL = 4_000        # a skill longer than this, or one the user named with /command, is checked before the agent plans
 MOTION_WORKFLOW = credits.MOTION   # what a rendered motion graphic is filed and priced under
+STATE_PAGE = 25          # leaves of a run's state the agent is given at a time
+LIVE_EVERY = 1.0         # seconds between looks at what the agent's tools did while it works
+RUN_ITEMS = 5000         # library items a long run's steps may name by id
+FILM_WAIT = 900          # seconds the agent waits for one film operation (a long film joined, a retime) before giving up
+# What the studio can do beside its workflows, for the check of a skill before it starts.
+STUDIO_ABILITY = (
+    "Editing: trim, split, join, sound on a video, the finished cut (assemble). Motion graphics and titles drawn in the studio. "
+    "Frame-exact film operations on this machine, free, as the agent's \"film\" tool: a reference image at 1500 px, a slice of an "
+    "audio by frames, a timing track video of blocks, a clip trimmed or stretched to an exact frame count, a clip retimed so lips meet "
+    "the master's words, proof sheets, subtitles burned in (house style), clips joined on the master audio, and the spans where speech "
+    "is heard in a voice track. A run state store (state_read, state_write, state_check) kept per conversation, written a leaf or a "
+    "whole folder at a time. Reading a transcript (a transcription workflow's JSON, or an .srt the user uploads) into the state with "
+    "its times exact, and working out every shot's frames from it (transcript, timing). Bringing pictures, clips and sounds in from "
+    "links on other sites (import_url). Questions to the user with two to four buttons; tables of pictures in a reply. A run goes on "
+    "by itself when its steps are made, and may have a budget the user sets. A permission under the Agent box lets plans run "
+    "without waiting for Approve. Looking at pictures and "
+    "clips, reviewing results, remembering assets. Not here: running other programs or scripts, other models than the workflows listed.")
 
 
 def _project_id(request, user, project):
@@ -692,10 +710,27 @@ async def _planning(request, user, body, instruction, project):
 
     # What was made lately here, so "the music you just made" can be put on "this video" without attaching either.
     recent = [{"id": r["id"], "kind": r["kind"], "name": r["name"]} for r in state.db.all(
-        "SELECT id, kind, name FROM generations WHERE user_id = ? AND " + ("project_id = ?" if project else "project_id IS NULL")
+        "SELECT id, kind, name FROM generations WHERE user_id = ? AND run = '' AND " + ("project_id = ?" if project else "project_id IS NULL")
         + " ORDER BY created DESC LIMIT 8", (user["id"], project) if project else (user["id"],))]
     known = {s["id"]: {"name": s["name"], "kind": s["kind"]} for s in selection}
     known.update({r["id"]: {"name": r["name"], "kind": r["kind"]} for r in recent if r["id"] not in known})
+
+    # The user can name a skill with /<id> at the start of the message, or the panel can pass skill ids; those are
+    # always used. The rest are picked by what the message says, as before.
+    forced = list(body.get("skills") or [])
+    match = re.match(r"\s*/([a-z0-9][a-z0-9-]*)\s*", instruction)
+    if match and skills.find(match.group(1)):
+        forced.append(match.group(1))
+        instruction = instruction[match.end():].strip()   # the /command is an instruction to the agent, not shot text
+    picked = skills.pick(instruction, body.get("history"), force=forced)
+    for skill in picked:
+        yield activity("skill", "Read the skill “{}”".format(skill["title"]))
+    # A long skill asks the user which models to use, so it is shown every one; and a model named anywhere in the
+    # conversation (the message, its notes, the turns before) stays offered for the rest of it.
+    long_skill = any(len(s["text"]) > CHECKED_SKILL for s in picked)
+    said = " ".join([instruction, str(body.get("direction") or "")] + [
+        "{} {}".format(t.get("instruction") or "", t.get("reply") or "") for t in (body.get("history") or [])[-agent.MAX_HISTORY:]
+        if isinstance(t, dict)]).lower()
 
     schemas = {}
     default = state.catalog.current(state.settings.default_workflow)
@@ -704,9 +739,10 @@ async def _planning(request, user, body, instruction, project):
         if listed.get("error") or not state.credits.enabled(listed["id"]):
             continue
         # Video is made with the default workflow, which has the cast's slots and the quality choices; the other video
-        # workflows are for the Create page, and the agent uses one only when the message names it.
-        if listed["kind"] == "video" and default.startswith("video/") and listed["id"] != default \
-                and listed["title"].lower() not in instruction.lower():
+        # workflows are for the Create page, and the agent uses one only when the conversation names it (or a long skill
+        # has the user choose).
+        if listed["kind"] == "video" and default.startswith("video/") and listed["id"] != default and not long_skill \
+                and listed["title"].lower() not in said and listed["id"].lower() not in said:
             continue
         schemas[listed["id"]] = workflows.describe(await state.catalog.load(listed["id"]))
     pinned = cast.load(state.db, user["id"], project)
@@ -739,16 +775,6 @@ async def _planning(request, user, body, instruction, project):
         if problem:
             raise HTTPException(400, problem)
     charged = {"credits": 0, "model": chosen_model}
-    # The user can name a skill with /<id> at the start of the message, or the panel can pass skill ids; those are
-    # always used. The rest are picked by what the message says, as before.
-    forced = list(body.get("skills") or [])
-    match = re.match(r"\s*/([a-z0-9][a-z0-9-]*)\s*", instruction)
-    if match and skills.find(match.group(1)):
-        forced.append(match.group(1))
-        instruction = instruction[match.end():].strip()   # the /command is an instruction to the agent, not shot text
-    picked = skills.pick(instruction, body.get("history"), force=forced)
-    for skill in picked:
-        yield activity("skill", "Read the skill “{}”".format(skill["title"]))
     # A local model is not given more of a skill than it can hold; a hosted one reads it whole.
     limit = skills.MAX_CHARS if state.agent._service_of(chosen_model)[0] is not None else LOCAL_SKILL_CHARS
     for skill in picked:
@@ -763,9 +789,7 @@ async def _planning(request, user, body, instruction, project):
             continue
         yield status("Checking what the skill needs…")
         ability = "\n".join(["Workflows: " + "; ".join("{} ({})".format(o["id"], o.get("title") or o["id"]) for o in offers),
-                             "Editing the user's videos: trim, split, join, sound on a video, the finished cut (assemble). Motion graphics and titles drawn "
-                             "in the studio. Looking at pictures and clips, reviewing results, remembering assets. Nothing else: no programs or scripts, "
-                             "no audio analysis, no file store, no other models than those listed."])
+                             STUDIO_ABILITY])
         attached = "\n".join(["{} {} ({})".format(s["tag"], s["name"], s["kind"]) for s in selection]
                              + ["in the project: {} {}".format(n, k) for k, n in sorted(__import__("collections").Counter(
                                  e["kind"] for e in book).items())]) if selection or book else ""
@@ -789,10 +813,18 @@ async def _planning(request, user, body, instruction, project):
     guides = (guides + "\n\n" if guides else "") + agent.STRUCTURE_GUIDE.format(structure=agent.PROMPT_STRUCTURE)
     names = {s["id"]: s["name"] for s in selection}
     # The items a step may put in its reference slots: the attached ones, and the project's pictures in the book.
+    # A long run keeps its state under the conversation's id (see runs.py).
+    run = body.get("run") if isinstance(body.get("run"), str) and runs.RUN.match(body["run"]) else ""
     kinds = {**book_items, **{s["id"]: {"name": s["name"], "kind": s["kind"]} for s in selection}}
+    if run:   # a long run names its references by library id from its state: any of the project's items, or the run's own
+        kinds = {**{r["id"]: {"name": r["name"], "kind": r["kind"]} for r in state.db.all(
+            "SELECT id, name, kind FROM generations WHERE user_id = ? AND (run = ? OR " + ("project_id = ?)" if project else "project_id IS NULL)")
+            + " ORDER BY id DESC LIMIT ?", (user["id"], run, *([project] if project else []), RUN_ITEMS))}, **kinds}
     videos = [s for s in selection if s.get("seconds")]
 
     with_tools = state.agent._service_of(chosen_model)[0] is not None and body.get("tools", True) is not False
+    # A long run (a long skill) keeps its state under the conversation's id and works in many more tool calls.
+    rounds = agent.RUN_ROUNDS if run and any(len(s["text"]) > CHECKED_SKILL for s in picked) else agent.TOOL_ROUNDS
     tool_events = []   # what the tools did, shown as the agent's work once the answer is in
     noted = lambda glyph, text: tool_events.append((glyph, text))
     saved_direction = []
@@ -852,16 +884,175 @@ async def _planning(request, user, body, instruction, project):
         return "These steps cannot run: {}. Fix them or leave them out, and finish again.".format(
             "; ".join("“{}”: {}".format(name, reason) for name, reason in left))
 
-    tools = {"find_assets": find_assets, "look": look, "check_shots": check_shots, "review": review_it, "save_note": save_note}
+    def no_run():
+        return "This conversation keeps no run state: start the skill again from the Agent tab."
+
+    def value_of(call):
+        try:
+            return json.loads(call.get("value") or "null")
+        except ValueError:
+            raise ValueError("value must be JSON text")
+
+    async def state_read(call):
+        if not run:
+            return no_run()
+        try:
+            found = runs.read(state.db, user["id"], run, call.get("path"), call.get("offset") or 0, STATE_PAGE)
+        except runs.RunError as error:
+            return str(error)
+        noted("book", "Read {} of the run".format(found["path"]))
+        if found.get("folder"):
+            shown = found["offset"] + len(found["leaves"])
+            more = "" if shown >= found["total"] else "\n({} of {} shown: call again with offset {}.)".format(shown, found["total"], shown)
+            return "\n".join(json.dumps(leaf, ensure_ascii=False) for leaf in found["leaves"]) + more
+        return json.dumps(found, ensure_ascii=False)
+
+    async def state_write(call):
+        if not run:
+            return no_run()
+        path = str(call.get("path") or "")
+        try:
+            if path.endswith("/*"):   # every leaf of a folder at once
+                written = runs.write_many(state.db, user["id"], run, path[:-2], value_of(call), "agent")
+                noted("book", "Wrote {} leaves under {}".format(written["written"], written["path"]))
+                return "Written: {} leaves under {}".format(written["written"], written["path"])
+            written = runs.write(state.db, user["id"], run, path, value_of(call), "agent")
+        except (runs.RunError, ValueError) as error:
+            return "Not written: {}".format(error)
+        noted("book", "Wrote {} of the run".format(written["path"]))
+        return "Written: {}".format(written["path"])
+
+    async def read_transcript(call):
+        if not run:
+            return no_run()
+        from .. import transcript
+        if not call.get("item") and call.get("value"):   # who speaks each line, from the script: only the speakers change
+            try:
+                names = json.loads(call["value"])
+                if not isinstance(names, dict):
+                    raise ValueError
+                lines = dict(runs.leaves(state.db, user["id"], run, call.get("path")))
+                changed = {}
+                for n, who in names.items():
+                    if isinstance(lines.get(str(n)), dict):
+                        changed[str(n)] = dict(lines[str(n)], speaker=" ".join(str(who).split())[:60])
+                if not changed:
+                    return "None of those lines is at {}.".format(call.get("path"))
+                runs.write_many(state.db, user["id"], run, call.get("path"), changed, "speakers")
+            except ValueError:
+                return "value must be JSON text of {\"<line number>\": \"<speaker>\"}."
+            except runs.RunError as error:
+                return "Not written: {}".format(error)
+            noted("book", "Named the speakers of {} lines".format(len(changed)))
+            return json.dumps({"named": len(changed), "speakers": sorted({l["speaker"] for l in changed.values()})}, ensure_ascii=False)
+        row = state.db.one("SELECT name, filename FROM generations WHERE id = ? AND user_id = ? AND kind = 'text'", (call.get("item"), user["id"])) \
+            if isinstance(call.get("item"), int) else None
+        path = state.outputs.folder(user["id"]) / row["filename"] if row else None
+        if not path or not path.is_file():
+            return "That item is not a transcript in the library."
+        try:
+            lines = transcript.parse(path.read_text(encoding="utf-8-sig", errors="replace"))
+            written = runs.write_many(state.db, user["id"], run, call.get("path"), {str(n): l for n, l in enumerate(lines, start=1)}, "transcript", replace=True)
+        except (transcript.TranscriptError, runs.RunError) as error:
+            return "Not read: {}".format(error)
+        noted("book", "Read {} lines of “{}” into {}".format(len(lines), row["name"], written["path"]))
+        speakers = sorted({l["speaker"] for l in lines})
+        return json.dumps({"written": len(lines), "path": written["path"], "speakers": speakers, "first": lines[:3], "last": lines[-1]}, ensure_ascii=False)
+
+    async def timing(call):
+        if not run:
+            return no_run()
+        from .. import transcript
+        try:
+            asked = json.loads(call.get("settings") or "{}")
+            length = float(asked["length"])
+            units = [dict(value, id=name) for name, value in runs.leaves(state.db, user["id"], run, asked["units"]) if isinstance(value, dict)]
+            lines = {int(n): v for n, v in runs.leaves(state.db, user["id"], run, asked["lines"]) if n.isdigit() and isinstance(v, dict)}
+            speech = {int(n): v for n, v in runs.leaves(state.db, user["id"], run, asked["speech"]) if n.isdigit()} if asked.get("speech") else {}
+        except (ValueError, KeyError, TypeError) as error:
+            return "settings must be JSON text with units, lines, length and save_to ({}).".format(type(error).__name__)
+        except runs.RunError as error:
+            return str(error)
+        if not units or not lines:
+            return "No units or no lines were found at those paths."
+        frames, problems = transcript.grid(units, lines, speech, length)
+        if frames:
+            try:
+                runs.write_many(state.db, user["id"], run, asked.get("save_to") or "", frames, "timing", replace=True)
+            except runs.RunError as error:
+                return "Not written: {}".format(error)
+        noted("clock", "Timed {} shots{}".format(len(frames), ", {} to fix".format(len(problems)) if problems else ""))
+        return json.dumps({"timed": len(frames), "frames": sum(f["f_out"] - f["f_in"] for f in frames.values()),
+                           "problems": problems[:40]}, ensure_ascii=False)
+
+    async def state_check(call):
+        if not run:
+            return no_run()
+        try:
+            found = runs.coverage(state.db, user["id"], run, call.get("path"), call.get("against"))
+        except runs.RunError as error:
+            return str(error)
+        noted("check", "Checked {} against {}: {}".format(call.get("path"), call.get("against"),
+                                                         "complete" if found["ok"] else "{} missing".format(len(found["missing"]))))
+        return json.dumps(found, ensure_ascii=False)
+
+    async def film_op(call):
+        """One film operation, queued and waited for (they are quick, free and made on this machine)."""
+        from .film import queue as film_queue   # film.py builds on this module
+        if call.get("op") not in edits.FILM:
+            return "op must be one of: {}.".format(", ".join(edits.FILM))
+        try:
+            settings = json.loads(call.get("settings") or "{}")
+            if not isinstance(settings, dict):
+                raise ValueError
+        except ValueError:
+            return "settings must be JSON text of an object."
+        try:
+            settings = _resolve_state(state.db, user["id"], run, settings) if run else settings
+            queued = film_queue(request, user, dict(settings, op=call["op"], run=run, project_id=project or None))
+        except runs.RunError as error:
+            return str(error)
+        except HTTPException as error:
+            return "Not done: {}".format(error.detail)
+        noted("wrench", "{} ({})".format(edits.FILM[call["op"]][1], queued["name"]))
+        job = await _finished(state, queued["job"])
+        if job["status"] != "done":
+            return "The {} failed: {}".format(call["op"], job.get("error") or job["status"])
+        made = state.db.all("SELECT id, kind, name, context FROM generations WHERE job_id = ? ORDER BY id", (queued["job"],))
+        return json.dumps([{"item": r["id"], "kind": r["kind"], **json.loads(r["context"] or "{}")} for r in made],
+                          ensure_ascii=False)[:agent.TOOL_RESULT]
+
+    async def import_url(call):
+        from .. import fetch
+        from .library import IMPORTED, _file_in   # library.py files what is brought in
+        url = str(call.get("text") or "").strip()
+        try:
+            data, kind, final = await fetch.fetch(url)
+        except fetch.FetchError as error:
+            return "Not brought in: {}".format(error)
+        made = await _file_in(request, user, data, fetch.filename_for(final, kind), kind, project or None, "Brought in from a link",
+                              workflow=IMPORTED, name=" ".join(str(call.get("query") or "").split())[:80], source=url)
+        noted("attach", "Brought in “{}” from a link".format(made["name"]))
+        return json.dumps({"item": made["id"], "kind": kind, "name": made["name"], **made["context"]}, ensure_ascii=False)
+
+    tools = {"find_assets": find_assets, "look": look, "check_shots": check_shots, "review": review_it, "save_note": save_note,
+             "state_read": state_read, "state_write": state_write, "state_check": state_check, "film": film_op, "import_url": import_url,
+             "transcript": read_transcript, "timing": timing}
 
     async def plan(message):
         """One answer of the model, timed, and the steps of it that can run. Returns (answer, steps, dropped, seconds)."""
         asked = time.monotonic()
         system = agent.SYSTEM.format(max_steps=agent.MAX_STEPS)
+        # A long skill goes first, in the system prompt: every call of a run then opens the same way, and a hosted
+        # service can read that opening from its cache instead of anew (the rest of the message changes as the run goes).
+        first = long_skill and with_tools
+        if first:
+            system += "\n\n" + agent.skills_part(guides)
         asking = agent.question(message, offers, selection, state.catalog.current(state.settings.default_workflow),
-                                agent.past_turns(body.get("history")), pinned, recent, memory.book_for_model(book), guides, body.get("direction") or "")
+                                agent.past_turns(body.get("history")), pinned, recent, memory.book_for_model(book), "" if first else guides,
+                                body.get("direction") or "")
         if with_tools:   # a hosted model works in a loop of tool calls; a local one answers once
-            answer = await state.agent.ask_with_tools(system, asking, [o["id"] for o in offers], tools, finishing, **_model(body))
+            answer = await state.agent.ask_with_tools(system, asking, [o["id"] for o in offers], tools, finishing, rounds=rounds, **_model(body))
         else:
             answer = await state.agent.ask(system, asking, [o["id"] for o in offers], **_model(body))
         seconds = time.monotonic() - asked
@@ -874,6 +1065,7 @@ async def _planning(request, user, body, instruction, project):
         steps, dropped = await build(answer["steps"])
         if answer.get("tools") is not None:
             answer["tools"] = list(answer["tools"])
+        agent.add_tokens(tokens, answer.get("tokens"))
         return answer, steps, dropped, seconds
 
     async def build(raw):
@@ -911,12 +1103,30 @@ async def _planning(request, user, body, instruction, project):
     def thought(answer, seconds):
         return logged({"type": "thought", "text": str(answer.get("thought") or ""), "seconds": round(seconds, 1)})
 
+    tokens = {}   # what the model read and wrote for this message, every call added up
     message = agent.carry_over(instruction, body.get("history"))
     yield status("Thinking…")
-    answer, steps, dropped, seconds = await plan(message)
-    for glyph, text in tool_events:
-        yield activity(glyph, text)
-    tool_events.clear()
+    # The model is asked in a task, so what its tools do is shown while it works (a long run makes dozens of calls),
+    # and the stream keeps moving. A closed stream (the user pressed Stop) stops the work too.
+    async def live(asking):
+        task = asyncio.ensure_future(plan(asking))
+        try:
+            while True:
+                done, _ = await asyncio.wait([task], timeout=LIVE_EVERY)
+                while tool_events:
+                    yield activity(*tool_events.pop(0))
+                if done:
+                    break
+                yield status("Working…" if run else "Thinking…")
+        finally:
+            if not task.done():
+                task.cancel()
+        result[:] = [task.result()]
+
+    result = []
+    async for event in live(message):
+        yield event
+    answer, steps, dropped, seconds = result[0]
     if saved_direction and not answer.get("direction"):
         answer["direction"] = saved_direction[0]
     yield thought(answer, seconds)
@@ -925,10 +1135,9 @@ async def _planning(request, user, body, instruction, project):
     if not steps and agent.claims_work(instruction, answer["reply"]):
         yield activity("retry", "The first answer said it was making something but planned nothing, so I asked again")
         yield status("Thinking again…")
-        answer, steps, dropped, seconds = await plan(message + "\n" + agent.NO_STEPS)
-        for glyph, text in tool_events:
-            yield activity(glyph, text)
-        tool_events.clear()
+        async for event in live(message + "\n" + agent.NO_STEPS):
+            yield event
+        answer, steps, dropped, seconds = result[0]
         yield thought(answer, seconds)
         if not steps and agent.claims_work(instruction, answer["reply"]):
             answer["reply"] = agent.EMPTY_CLAIM
@@ -945,8 +1154,13 @@ async def _planning(request, user, body, instruction, project):
         if step.get("settings"):
             step["shot_id"] = uuid.uuid4().hex[:8]
             step["settings"]["shot"] = {"id": step["shot_id"], "take": 1}
+            if run:   # counted against the run's budget
+                step["settings"]["run_of"] = run
     if steps:
         yield activity("plan", "Checked and priced {} {}".format(len(steps), "step" if len(steps) == 1 else "steps"))
+    if tokens.get("prompt"):
+        yield activity("info", "Read {:,} tokens{} and wrote {:,}".format(
+            tokens["prompt"], " ({:,} from the cache)".format(tokens["cached"]) if tokens.get("cached") else "", tokens.get("answer", 0)))
     # Items the reply names as [[item:12]] or [[asset:3]] are shown as small pictures; the browser gets their names.
     chips, reply = agent.chips_in(answer["reply"], {**book_items, **known}, book_assets)
     if charged["credits"]:
@@ -954,7 +1168,10 @@ async def _planning(request, user, body, instruction, project):
     yield {"type": "plan", "reply": reply or ("Here is the plan." if steps else "Tell me what you would like to see and I will plan it."),
            "thought": str(answer.get("thought") or ""), "activity": log, "seconds": round(time.monotonic() - started, 1),
            "chips": chips, "direction": answer.get("direction") or "", "steps": steps, "total": sum(s["credits"] for s in steps), "llm": charged,
-           "balance": state.credits.balance(user["id"])}
+           "balance": state.credits.balance(user["id"]), "question": answer.get("question"), "run": run,
+           # a long skill's run goes on by itself: once these steps are made, the Agent tab tells the agent what they made
+           "continues": bool(run and long_skill and steps and not answer.get("question")),
+           "budget": runs.budget(state.db, user["id"], run) if run and long_skill else None, "tokens": tokens}
 
 
 async def _plan_step(state, proposed, instruction, steps, made_by, schemas, names, kinds, videos, pinned, project, shapes, assets=None, menu=None):
@@ -1056,3 +1273,25 @@ async def _shown_step(state, schema, settings, menu, uses, start, after, why="")
                      "durations": SHOT_LENGTHS if "duration" in roles else []},
             "current": {"orientation": _orientation(schema, settings, ctx), "resolution": ctx.get("resolution"),
                         "duration": int(ctx["duration"]) if ctx.get("duration") else None}}
+
+
+def _resolve_state(db, user_id, run, value):
+    """Every "$state:/path" in an operation's settings replaced by what is kept there (a library id, most often)."""
+    if isinstance(value, str) and value.startswith("$state:"):
+        return runs.resolve(db, user_id, run, value)
+    if isinstance(value, list):
+        return [_resolve_state(db, user_id, run, v) for v in value]
+    if isinstance(value, dict):
+        return {k: _resolve_state(db, user_id, run, v) for k, v in value.items()}
+    return value
+
+
+async def _finished(state, job_id, timeout=FILM_WAIT):
+    """The job, once it is no longer waiting or running (or as it is when the time is up)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        job = state.db.one("SELECT id, status, error FROM jobs WHERE id = ?", (job_id,))
+        if job["status"] not in ("queued", "running") or time.monotonic() > deadline:
+            return job
+        await asyncio.sleep(0.4)
+
