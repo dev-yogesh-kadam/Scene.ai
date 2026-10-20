@@ -204,6 +204,13 @@ def saved_any(db, user_id, run):
     return any(not _protected(r["path"]) for r in rows)
 
 
+def saved_since(db, user_id, run, since):
+    """Whether anything was saved to the run (not by the studio itself) after the time `since`."""
+    found = db.one("SELECT MAX(updated) AS last FROM run_state WHERE user_id = ? AND run = ? AND writer <> 'studio'",
+                   (user_id, clean_run(run)))
+    return bool(found and found["last"] and found["last"] > since)
+
+
 def kept_skill(db, user_id, run):
     """The id of the long skill this run follows, or None."""
     found = read(db, user_id, run, SKILL)

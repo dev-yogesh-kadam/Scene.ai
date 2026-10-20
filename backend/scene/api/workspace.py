@@ -1060,6 +1060,8 @@ async def _planning(request, user, body, instruction, project):
         return "Saved." if text else "Nothing to save."
 
     reminded = []   # the run was reminded once to save its work
+    stalled = []    # the model was told once that it announced work it did not do
+    since = time.time()   # what the run saved during this message is newer than this
 
     async def finishing(answer):
         """A hint when the steps it finishes with cannot all run, so the model puts them right; nothing when they can.
@@ -1070,6 +1072,13 @@ async def _planning(request, user, body, instruction, project):
             reminded.append(True)
             noted("retry", "Nothing of the run was saved yet, so the model was asked to save its work first")
             return agent.SAVE_FIRST
+        reply = str(answer.get("reply") or "")
+        if not left and run and long_skill and not stalled and not answer.get("steps") and not answer.get("question") \
+                and agent.ABOUT_TO.search(reply) and not runs.saved_since(state.db, user["id"], run, since):
+            # A long run's turn that only says what it will do (no steps, no question, nothing saved) does nothing.
+            stalled.append(True)
+            noted("retry", "The model said what it would do but did not do it, so it was asked to")
+            return agent.SAID_NOT_DONE.format(" ".join(reply.split())[:300])
         if not left:
             return None
         noted("retry", "A step could not run, so the model was asked to fix it: {}".format("; ".join(r for _, r in left)[:160]))

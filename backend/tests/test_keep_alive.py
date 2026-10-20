@@ -66,3 +66,27 @@ def test_a_model_that_stops_with_nothing_is_asked_to_carry_on(client, monkeypatc
     told = [m["content"] for m in seen[-1] if m["role"] == "user"]
     assert any("You were thinking" in t and "name the speakers" in t for t in told)
     assert any(e["text"].startswith("The model stopped with nothing to show") for e in plan["activity"])
+
+
+def test_a_long_run_that_only_says_what_it_will_do_is_asked_to_do_it(client, monkeypatch):
+    from scene import runs
+    from test_agent_shots import hosted
+    me = register(client)
+    db = client.app.state.db
+    runs.keep_skill(db, me["id"], "pm-3", "pocket-motion-seedance-v2")
+    runs.write(db, me["id"], "pm-3", "/motion/status", "name the speakers", "agent")   # saved before this message
+    ready = {"ready": True, "missing": [], "unsupported": [], "adaptation": "", "message": ""}
+    monkeypatch.setattr(client.app.state.agent, "preflight", lambda *a, **k: asyncio.sleep(0, ready))
+    said = "Picking up where we left off. Let me check the speech spans output first."
+    seen = hosted(monkeypatch, client, {"tool": "finish", "reply": said, "steps": []},
+                  {"tool": "state_write", "path": "/motion/transcript/speakers", "value": '{"16": "Madelyn"}'},
+                  {"tool": "finish", "reply": "Named the speakers.", "steps": []})
+    plan = client.post("/api/agent/plan", json={"instruction": "go", "run": "pm-3"}).json()
+    assert plan["reply"] == "Named the speakers." and len(seen) == 3
+    assert any("you finished without doing it" in m["content"] for m in seen[1] if m["role"] == "user")
+    assert any(e["text"].startswith("The model said what it would do but did not do it") for e in plan["activity"])
+    # once it has done something, a reply about what comes next is a reply
+    seen = hosted(monkeypatch, client, {"tool": "state_write", "path": "/motion/status", "value": '"anchor next"'},
+                  {"tool": "finish", "reply": "Saved. Next I will plan the anchor.", "steps": []})
+    plan = client.post("/api/agent/plan", json={"instruction": "go", "run": "pm-3"}).json()
+    assert plan["reply"] == "Saved. Next I will plan the anchor." and len(seen) == 2

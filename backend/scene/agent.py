@@ -1330,6 +1330,12 @@ def wants_sound(instruction, history=()):
 
 EMPTY_FINISH = ("You finished with no reply, no steps and no question, so the user would get nothing. You were thinking: "
                 "\"{}\". Do that now: call the tool you need next, or finish with the steps to make, a reply, or a question.")
+# A reply that says what it is about to do ("Let me check the spans first", "I need to name the speakers").
+ABOUT_TO = re.compile(r"\b(let me|let's|i need to|i will|i'll|i am going to|i'm going to|i'm now|i am now|next,? i|now i|first,? i|"
+                      r"i should|i have to|i must)\b", re.IGNORECASE)
+SAID_NOT_DONE = ("Your reply says what you are about to do (\"{}\"), but you finished without doing it: no steps, no "
+                 "question, nothing saved, so the run would stop here. Do it now: call the tools it takes (state_write, "
+                 "transcript, film, …), plan the steps, and finish again.")
 SAVE_FIRST = ("Nothing of this run is saved yet, and the next message only knows what the run state holds. Before you "
               "finish, save what the skill says to keep at this point (the models and cutting the user chose, the inventory of "
               "what is attached, what you worked out) with state_write, then finish again.")
