@@ -1,5 +1,5 @@
 {
-  "title": "Transcribe",
+  "title": "Transcribe Audio",
   "description": "Timestamped transcript with speakers: JSON (segments + words, seconds with 3 decimals) and SRT.",
   "output_name": "12.filename_prefix",
   "labels": {

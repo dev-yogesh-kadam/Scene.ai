@@ -19,6 +19,14 @@ MANY = 2000             # leaves written by one write_many
 
 
 BUDGET = "/budget"      # the most credits the run may spend: set by the user only, never by the agent's tools
+SKILL = "/skill"        # the long skill the run follows, kept from the message that named it: set by the studio only
+ATTACHED = "/attached"  # the library ids of every file attached in the run, so later messages still have them: the studio's
+PROTECTED = (BUDGET, SKILL, ATTACHED)
+MOST_ATTACHED = 64
+
+
+def _protected(path):
+    return any(path == p or path.startswith(p + "/") for p in PROTECTED)
 
 
 class RunError(ValueError):
@@ -46,10 +54,11 @@ def _under(path):
 
 def write(db, user_id, run, path, value, writer="", budget=False):
     """Put a value at a leaf, replacing what was there. Refused when the path is a folder, sits under a leaf, the value
-    is too large, or the run is full; and the budget's path unless `budget` (set_budget, for the user)."""
+    is too large, or the run is full; and a protected path (the budget, the run's skill, its attachments) unless
+    `budget`: only the user's or the studio's own code sets those."""
     run, path = clean_run(run), clean_path(path)
-    if (path == BUDGET or path.startswith(BUDGET + "/")) and not budget:
-        raise RunError("{} is the run's budget: only the user sets it.".format(BUDGET))
+    if _protected(path) and not budget:
+        raise RunError("{} is kept by the studio and the user: the agent cannot set it.".format(path))
     text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     if len(text) > MAX_VALUE:
         raise RunError("{} is too large to keep ({:,} characters; at most {:,}). Split it into several paths.".format(path, len(text), MAX_VALUE))
@@ -137,8 +146,8 @@ def coverage(db, user_id, run, path, against):
 def delete(db, user_id, run, path, budget=False):
     """Remove a leaf, or a folder and everything in it (never the budget, unless `budget`). Returns how many went."""
     run, path = clean_run(run), clean_path(path)
-    if (path == BUDGET or path.startswith(BUDGET + "/")) and not budget:
-        raise RunError("{} is the run's budget: only the user sets it.".format(BUDGET))
+    if _protected(path) and not budget:
+        raise RunError("{} is kept by the studio and the user: the agent cannot set it.".format(path))
     where, params = _under(path)
     return db.change("DELETE FROM run_state WHERE user_id = ? AND run = ? AND (path = ? OR " + where + ")", (user_id, run, path, *params))
 
@@ -187,6 +196,37 @@ def budget_problem(db, user_id, run, credits):
         return "This run's budget is {:,} credits and it has spent {:,}: this step needs {:,} more. Raise the budget to go on.".format(
             found["credits"], found["spent"], credits)
     return None
+
+
+def saved_any(db, user_id, run):
+    """Whether the run holds anything the agent saved (not only what the studio keeps for it)."""
+    rows = db.all("SELECT path FROM run_state WHERE user_id = ? AND run = ?", (user_id, clean_run(run)))
+    return any(not _protected(r["path"]) for r in rows)
+
+
+def kept_skill(db, user_id, run):
+    """The id of the long skill this run follows, or None."""
+    found = read(db, user_id, run, SKILL)
+    return found["value"] if isinstance(found.get("value"), str) else None
+
+
+def kept_attached(db, user_id, run):
+    """The library ids of the files attached so far in this run, oldest first."""
+    found = read(db, user_id, run, ATTACHED)
+    return [i for i in found.get("value") or [] if isinstance(i, int)] if isinstance(found.get("value"), list) else []
+
+
+def keep_attached(db, user_id, run, ids):
+    """Add files attached to a message of this run to the ones it keeps."""
+    kept = kept_attached(db, user_id, run)
+    more = [i for i in ids if isinstance(i, int) and i not in kept]
+    if more:
+        write(db, user_id, run, ATTACHED, (kept + more)[-MOST_ATTACHED:], "studio", budget=True)
+
+
+def keep_skill(db, user_id, run, skill_id):
+    """Remember the long skill this run follows, so the messages after the one that named it carry on with it."""
+    write(db, user_id, run, SKILL, skill_id, "studio", budget=True)
 
 
 STATE_REF = re.compile(r"^\$state:(/[a-z0-9_./-]+?)(/\*)?$")

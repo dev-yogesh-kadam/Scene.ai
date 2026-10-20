@@ -603,10 +603,13 @@ async def agent_step(body: dict, request: Request, user: dict = Depends(agent_us
     except workflows.WorkflowError as e:
         raise HTTPException(400, str(e))
     roles = {c["role"]: c for c in old_schema["controls"] if c["role"]}
-    prompt = change["prompt"] if isinstance(change.get("prompt"), str) else (old.get("values") or {}).get(roles["prompt"]["id"], "")
+    if isinstance(change.get("prompt"), str):
+        prompt = change["prompt"]
+    else:   # a workflow with no prompt (a transcription, a voice separation) has none to keep
+        prompt = (old.get("values") or {}).get(roles["prompt"]["id"], "") if "prompt" in roles else ""
     # The step as the model would have proposed it, with the change made: settings_for keeps what the workflow takes.
     proposed = {"prompt": str(prompt).strip(), "name": old.get("name"), "clips": old.get("clips", 1),
-                "duration": int(change.get("duration") or ctx.get("duration") or 0),
+                "duration": float(change.get("duration") or ctx.get("duration") or 0),   # a clip timed to its frames keeps its decimals
                 "resolution": int(change.get("resolution") or ctx.get("resolution") or 0),
                 "orientation": change.get("orientation") or _orientation(old_schema, old, ctx)}
     if not proposed["prompt"]:
@@ -695,6 +698,13 @@ async def _planning(request, user, body, instruction, project):
 
     selection, shapes = [], {}   # shapes: item id -> [width, height], for shots that start on an item
     chosen = (body.get("selection") or [])[:MAX_SELECTION] if agent.points_at_selection(instruction) else []
+    # A run that follows a long skill keeps every file attached to it: "go", and every message after the one the files
+    # came with, still has them (they come first, as they were attached), whether or not the model saved them itself.
+    run_id = body.get("run") if isinstance(body.get("run"), str) and runs.RUN.match(body["run"]) else ""
+    if run_id and runs.kept_skill(state.db, user["id"], run_id):
+        earlier = runs.kept_attached(state.db, user["id"], run_id)
+        given = [i for i in body.get("selection") or [] if isinstance(i, int)]
+        chosen = (earlier + [i for i in given if i not in earlier])[:MAX_SELECTION]
     for item_id in chosen:
         row = state.db.one("SELECT id, kind, name, filename, settings, context, about FROM generations WHERE id = ? AND user_id = ?", (item_id, user["id"]))
         if row:
@@ -733,10 +743,21 @@ async def _planning(request, user, body, instruction, project):
             # the /command is an instruction to the agent, not shot text
             instruction = (instruction[:match.start()] + " " + instruction[match.end():]).strip()
     instruction = re.sub(r"[ \t]{2,}", " ", instruction)
+    # A long run follows the skill its first message named until another is named: "go" and every message after it
+    # carry on with that skill, rather than skills picked afresh from their words.
+    if run_id and not any(skills.find(f) for f in forced):
+        kept = runs.kept_skill(state.db, user["id"], run_id)
+        if kept and skills.find(kept):
+            forced.append(kept)
+            yield activity("skill", "Carried on with “{}”, the skill of this run".format(skills.find(kept)["title"]))
     picked = skills.pick(instruction, body.get("history"), force=forced)
-    # A long skill the user named is the whole procedure: no other skill picked by the message's words goes beside it.
+    # A long skill the user named is the whole procedure: no other skill picked by the message's words goes beside it,
+    # and the run keeps it for the messages that follow.
     if any(s["id"] in forced and len(s["text"]) > CHECKED_SKILL for s in picked):
         picked = [s for s in picked if s["id"] in forced]
+        if run_id:
+            runs.keep_skill(state.db, user["id"], run_id, next(s["id"] for s in picked if len(s["text"]) > CHECKED_SKILL))
+            runs.keep_attached(state.db, user["id"], run_id, [s["id"] for s in selection])
     for skill in picked:
         yield activity("skill", "Read the skill “{}”".format(skill["title"]))
     # A long skill asks the user which models to use, so it is shown every one; and a model named anywhere in the
@@ -774,6 +795,7 @@ async def _planning(request, user, body, instruction, project):
     offers = [o for o in (agent.offer(schema, can_fill) for schema in schemas.values()) if o]
     if not offers:
         raise HTTPException(400, "There is no workflow the agent can use yet.")
+    hears = agent.takes_sound(offers)   # the workflows that work on a sound file (separate a voice, transcribe)
     # A message costs what the chosen model costs: the user must have it before the model is asked.
     chosen_model = body.get("model") or state.agent.model or ""
     if state.credits.llm_prices():   # only worth asking which model answers when some model has a price
@@ -917,9 +939,17 @@ async def _planning(request, user, body, instruction, project):
             noted("book", "Updated the direction")
         return "Saved." if text else "Nothing to save."
 
+    reminded = []   # the run was reminded once to save its work
+
     async def finishing(answer):
-        """A hint when the steps it finishes with cannot all run, so the model puts them right; nothing when they can."""
+        """A hint when the steps it finishes with cannot all run, so the model puts them right; nothing when they can.
+        A long skill's run that would finish with nothing saved is reminded once: the next message only knows what
+        the run state holds."""
         built, left = await build(answer.get("steps"))
+        if not left and run and long_skill and not reminded and not runs.saved_any(state.db, user["id"], run):
+            reminded.append(True)
+            noted("retry", "Nothing of the run was saved yet, so the model was asked to save its work first")
+            return agent.SAVE_FIRST
         if not left:
             return None
         noted("retry", "A step could not run, so the model was asked to fix it: {}".format("; ".join(r for _, r in left)[:160]))
@@ -1150,12 +1180,16 @@ async def _planning(request, user, body, instruction, project):
         for number, proposed in enumerate(raw[:agent.MAX_STEPS] if isinstance(raw, list) else [], start=1):
             made_by[number] = len(steps)   # taken back below if the step is dropped
             before = len(steps)
+            # Separating a voice or transcribing is work on a sound, and a model often calls it "sound": a sound step
+            # that names a workflow made to take a sound file is that workflow's step, not a sound put on a video.
+            if isinstance(proposed, dict) and proposed.get("tool") == agent.SOUND_TOOL and proposed.get("workflow") in hears:
+                proposed = dict(proposed, tool="generate")
             if isinstance(proposed, dict) and proposed.get("tool") == agent.SOUND_TOOL:
                 made = agent.sound_for(proposed, known)
                 if made:   # a sound on a video: queued on Approve through the sound endpoint, which costs nothing
                     steps.append({"name": made["name"], "workflow_title": "Sound", "kind": "video", "prompt": "", "facts": made["facts"],
                                   "time": "a few seconds", "credits": 0, "settings": None, "start": None, "sound": made["sound"]})
-                reason = None if made else "there was no video and sound to put together"
+                reason = None if made else agent.NO_SOUND_EDIT
             elif isinstance(proposed, dict) and proposed.get("tool") == agent.ASSEMBLE_TOOL:
                 planned = [n for n, s in enumerate(steps) if s["kind"] == "video" and s.get("settings")]
                 music_at = made_by.get(proposed.get("after"))
@@ -1339,7 +1373,7 @@ async def _shown_step(state, schema, settings, menu, uses, start, after, why="")
     aspect = any(c["input"] == "aspect_ratio" and c.get("choices") for c in schema["controls"])
     resolutions = schema["resolutions"] if schema.get("size") or "resolution" in roles else []
     return {"name": settings["name"], "workflow_title": schema["title"], "kind": kind,
-            "prompt": settings["values"][roles["prompt"]["id"]], "facts": workflows.summary(schema, ctx), "time": quote["text"],
+            "prompt": settings["values"][roles["prompt"]["id"]] if "prompt" in roles else "", "facts": workflows.summary(schema, ctx), "time": quote["text"],
             "credits": quote["credits"], "settings": settings, "start": start, "uses": uses, "after": after,
             "shape": agent.shape_of(schema, settings, ctx), "why": why, "keep": settings.get("keep"),
             # What the card offers: the other workflows of the same kind, and this one's shapes, sizes and lengths.

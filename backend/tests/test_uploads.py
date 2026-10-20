@@ -6,6 +6,8 @@ import io
 import json
 import zipfile
 
+import pytest
+
 from scene import media, runs
 from test_agent_shots import hosted
 from test_api import register
@@ -144,3 +146,58 @@ def test_what_the_check_calls_missing_but_is_attached_is_set_aside(client, monke
     # with nothing attached, the check still stops the run
     plan = client.post("/api/agent/plan", json={"instruction": "/pocket-motion-seedance-v2 go"}).json()
     assert plan["reply"].startswith("I need the episode audio")
+
+
+def test_a_run_keeps_its_skill_after_the_message_that_named_it(client, monkeypatch, tmp_path):
+    register(client)
+    long_skill(tmp_path, monkeypatch)
+    asked = []
+
+    async def answer(messages, answer_format, **kwargs):
+        if "ready" in (answer_format.get("properties") or {}):
+            return {"ready": True, "missing": [], "unsupported": [], "adaptation": "", "message": ""}
+        asked.append(messages[0]["content"])
+        return {"tool": "finish", "thought": "", "reply": "ok", "steps": [], "direction": "", "question": None}
+    agent_ = client.app.state.agent
+    monkeypatch.setattr(agent_, "chat", answer)
+    monkeypatch.setattr(agent_, "_service_of", lambda name: ({"name": "Test"}, name))
+    client.post("/api/agent/plan", json={"instruction": "/pocket-motion-seedance-v2 here is the episode", "run": "pm-1"})
+    # "go": no command, and words that would pick another skill (vlog, camera) — the run carries on with its own
+    plan = client.post("/api/agent/plan", json={"instruction": "Recommended, one clip per shot. go. Madelyn's vlog camera", "run": "pm-1"}).json()
+    read = [e["text"] for e in plan["activity"] if e["text"].startswith(("Read the skill", "Carried on"))]
+    assert read == ["Carried on with “Pocket Motion”, the skill of this run", "Read the skill “Pocket Motion”"]
+    assert "A rule of the run." in asked[-1]
+    # the agent cannot change the skill its run follows
+    from scene import runs
+    with pytest.raises(runs.RunError):
+        runs.write(client.app.state.db, 1, "pm-1", "/skill", "social-video")
+    # another conversation starts fresh
+    other = client.post("/api/agent/plan", json={"instruction": "a vlog camera shot", "run": "other"}).json()
+    assert not any(e["text"].startswith("Carried on") for e in other["activity"])
+
+
+def test_a_run_keeps_its_files_for_the_messages_after(client, monkeypatch, tmp_path):
+    register(client)
+    long_skill(tmp_path, monkeypatch)
+    asyncio.run(media._ffmpeg("-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=300:duration=3", tmp_path / "episode.mp3"))
+    sound = upload(client, "scenetest1.mp3", (tmp_path / "episode.mp3").read_bytes(), "audio/mpeg").json()
+    script = upload(client, "sceneaites-doc.docx", docx()).json()
+    asked = []
+
+    async def answer(messages, answer_format, **kwargs):
+        if "ready" in (answer_format.get("properties") or {}):
+            asked.append(("check", messages[-1]["content"]))
+            return {"ready": True, "missing": [], "unsupported": [], "adaptation": "", "message": ""}
+        asked.append(("plan", messages[-1]["content"]))
+        return {"tool": "finish", "thought": "", "reply": "ok", "steps": [], "direction": "", "question": None}
+    agent_ = client.app.state.agent
+    monkeypatch.setattr(agent_, "chat", answer)
+    monkeypatch.setattr(agent_, "_service_of", lambda name: ({"name": "Test"}, name))
+    client.post("/api/agent/plan", json={"instruction": "@1 @2 /pocket-motion-seedance-v2", "selection": [sound["id"], script["id"]], "run": "pm-1"})
+    asked.clear()
+    plan = client.post("/api/agent/plan", json={"instruction": "Recommended. go", "selection": [], "run": "pm-1"}).json()
+    check = next(text for kind, text in asked if kind == "check")
+    assert "scenetest1 (a sound, 3.0 s long)" in check and "sceneaites-doc (a text of" in check   # still there after "go"
+    assert any("scenetest1" in e["text"] and "sceneaites-doc" in e["text"] for e in plan["activity"] if e["text"].startswith("Read what you attached"))
+    from scene import runs
+    assert runs.kept_attached(client.app.state.db, 1, "pm-1") == [sound["id"], script["id"]]

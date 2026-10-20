@@ -105,3 +105,56 @@ def test_the_agent_names_the_speakers_without_touching_a_time(client, monkeypatc
     assert any('"named": 2' in m["content"] for m in seen[-1] if m["role"] == "user")
     lines = dict(runs.leaves(db, me["id"], "pm-1", "/motion/transcript/lines"))
     assert lines["2"] == {"start": 2.4, "end": 3.1, "speaker": "Maya", "text": "Run!"} and lines["1"]["speaker"] == "narrator"
+
+
+def test_a_step_on_a_workflow_without_a_prompt_is_planned_and_shown(client, monkeypatch):
+    me = register(client)
+    sound = client.app.state.db.run("INSERT INTO generations (user_id, workflow, kind, name, filename, settings, context, created) "
+                                    "VALUES (?, 'upload/file', 'audio', 'Episode', 'episode.mp3', '{}', '{}', 1)", (me["id"],))
+    step = {"tool": "generate", "workflow": "audio/audio_transcribe", "name": "Listen", "prompt": "",
+            "uses": [{"item": sound, "asset": 0, "slot": "1:audio"}], "choices": [{"setting": "12:language", "value": "en"}]}
+    hosted(monkeypatch, client, {"tool": "finish", "reply": "Transcribing.", "steps": [step]})
+    plan = client.post("/api/agent/plan", json={"instruction": "@1 transcribe it", "selection": [sound]}).json()
+    shown = plan["steps"][0]
+    assert shown["name"] == "Listen" and shown["prompt"] == "" and shown["settings"]["values"]["12:language"] == "en"
+
+
+def test_a_sound_step_on_a_workflow_that_takes_a_sound_is_that_workflow(client, monkeypatch):
+    # a model often calls separating a voice "sound": it is the workflow's step, not a sound put on a video
+    me = register(client)
+    sound = client.app.state.db.run("INSERT INTO generations (user_id, workflow, kind, name, filename, settings, context, created) "
+                                    "VALUES (?, 'upload/file', 'audio', 'Episode', 'episode.mp3', '{}', '{}', 1)", (me["id"],))
+    step = {"tool": "sound", "workflow": "audio/audio_separate_voice", "name": "Voice stem", "prompt": "", "audio": sound,
+            "uses": [{"item": sound, "asset": 0, "slot": "1:audio"}]}
+    seen = hosted(monkeypatch, client, {"tool": "finish", "reply": "Separating.", "steps": [step]})
+    plan = client.post("/api/agent/plan", json={"instruction": "@1 separate the voice", "selection": [sound]}).json()
+    assert [s["name"] for s in plan["steps"]] == ["Voice stem"] and plan["steps"][0]["settings"]
+    assert len(seen) == 1   # it could run as it was: no hint went back
+    assert "audio/audio_separate_voice" in agent.takes_sound([agent.offer(schema_of(client, "audio/audio_separate_voice"))])
+    assert not agent.takes_sound([agent.offer(schema_of(client, "video/h3_chunk"), True)])
+
+
+def test_a_plan_that_cannot_be_put_right_goes_back_at_most_twice(client, monkeypatch):
+    register(client)
+    bad = {"tool": "sound", "workflow": "video/h3_master", "name": "Nothing to put together", "prompt": ""}
+    seen = hosted(monkeypatch, client, {"tool": "finish", "reply": "Here.", "steps": [bad]})
+    plan = client.post("/api/agent/plan", json={"instruction": "put music on it"}).json()
+    assert len(seen) == 1 + agent.FIX_ROUNDS and plan["steps"] == []
+    told = [m["content"] for m in seen[-1] if m["role"] == "user"]
+    assert any("generate" in t and "sound tool only puts" in t for t in told)
+
+
+def test_a_long_skill_run_is_reminded_once_to_save_its_work(client, monkeypatch):
+    me = register(client)
+    db = client.app.state.db
+    assert not runs.saved_any(db, me["id"], "pm-2")
+    runs.keep_skill(db, me["id"], "pm-2", "pocket-motion-seedance-v2")
+    assert not runs.saved_any(db, me["id"], "pm-2")   # what the studio keeps for it is not the agent's work
+    seen = hosted(monkeypatch, client, {"tool": "finish", "reply": "Pick the models.", "steps": []})
+    ready = {"ready": True, "missing": [], "unsupported": [], "adaptation": "", "message": ""}
+    monkeypatch.setattr(client.app.state.agent, "preflight", lambda *a, **k: asyncio.sleep(0, ready))
+    plan =client.post("/api/agent/plan", json={"instruction": "go", "run": "pm-2"}).json()
+    assert plan["reply"] == "Pick the models." and len(seen) == 2
+    assert any(agent.SAVE_FIRST in m["content"] for m in seen[-1] if m["role"] == "user")
+    runs.write(db, me["id"], "pm-2", "/motion/models", {"image": "image/image_ref_edit"}, "agent")
+    assert runs.saved_any(db, me["id"], "pm-2")

@@ -24,6 +24,7 @@ CHARS_PER_TOKEN = 3.0    # a careful guess of how many characters one token hold
 SKILL_SHARE = 0.45       # the share of a local model's context a skill may take whole; a longer one is read in parts
 KEEP_RESULTS = 6         # the newest tool results kept whole when a long run must be shortened to fit the context
 LOAD_RETRIES = (2, 5, 10)   # seconds between tries while Ollama loads a model or is busy
+FIX_ROUNDS = 2   # how many times a finished plan with steps that cannot run goes back to the model to be put right
 ORIENTATIONS = ("landscape", "portrait", "square")
 EDIT_TOOLS = ("trim", "split", "join")   # done with ffmpeg on videos the user already has: no GPU, no credits
 MAX_PARTS = 6
@@ -89,7 +90,9 @@ Tools, and which to use:
   has, or draw text on screen; they are instant and free, and they never change what is in a generated picture.
 - "trim", "split", "join" and "sound" edit a selected video the user already has (cut, shorten, halve, join, or put
   music or audio on it). Never use "generate" for that: generating makes a different video. Editing needs a selected
-  video: when none is selected, return no steps and ask the user to select the video on the canvas first.
+  video: when none is selected, return no steps and ask the user to select the video on the canvas first. "sound" only
+  puts an audio file on a video. Work on a sound file itself (separate the voice, transcribe it) is a "generate" step
+  with the workflow made for it: those take an audio file, no video.
 - "motion" makes a video of words and shapes (a title sequence, kinetic text, an intro or outro, an explainer, a list
   or a figure on screen); "overlay" puts words over a selected video. Never use "generate" for readable text: a
   generating model cannot write words.
@@ -882,7 +885,7 @@ class Agent:
         messages = [{"role": "system", "content": system + "\n\n" + TOOL_RULES + ("\n\n" + COMPACT_RULES if compact else "")},
                     {"role": "user", "content": message}]
         shape, used, tokens = compact_tool_format(tools) if compact else tool_format(workflow_ids), [], {}
-        answer = {}
+        answer, fixes = {}, 0
         for round_ in range(1, rounds + 1):
             if compact:
                 self._fit(messages)
@@ -905,9 +908,11 @@ class Agent:
                     add_tokens(tokens, answer.get("_usage"))
                 else:
                     answer = asked
-                hint = None if last or not finishing else await finishing(answer)
+                # A plan it cannot put right after FIX_ROUNDS hints stands as it is: what cannot run is left out
+                hint = None if last or not finishing or fixes >= FIX_ROUNDS else await finishing(answer)
                 if not hint:
                     break
+                fixes += 1
                 result = hint
                 call = {"steps": answer.get("steps") if isinstance(answer.get("steps"), list) else []}
             else:
@@ -1283,6 +1288,18 @@ def wants_sound(instruction, history=()):
         return True
     last = history[-1] if isinstance(history, list) and history and isinstance(history[-1], dict) else {}
     return "ffmpeg" in instruction.lower() and bool(SOUND_WORDS.search(str(last.get("instruction") or "")))
+
+
+SAVE_FIRST = ("Nothing of this run is saved yet, and the next message only knows what the run state holds. Before you "
+              "finish, save what the skill says to keep at this point (the models and cutting the user chose, the inventory of "
+              "what is attached, what you worked out) with state_write, then finish again.")
+NO_SOUND_EDIT = ("the sound tool only puts an audio file on a video, and there was no video and sound to put together; to "
+                 "separate a voice, transcribe or otherwise work on a sound file, make a \"generate\" step with that workflow")
+
+
+def takes_sound(offers):
+    """The ids of the offered workflows that must be given a sound file: they work on a sound (separate, transcribe)."""
+    return {o["id"] for o in offers if any(r.get("required") and r["takes"] == "audio" for r in o.get("references") or [])}
 
 
 def sound_for(step, items):

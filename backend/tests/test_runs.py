@@ -164,7 +164,7 @@ def test_a_runs_budget_is_the_users_and_stops_its_jobs(client, monkeypatch):
     # the agent cannot set or lift it
     seen = hosted(monkeypatch, client, {"tool": "state_write", "path": "/budget", "value": "999999"}, {"tool": "finish", "reply": "ok", "steps": []})
     client.post("/api/agent/plan", json={"instruction": "go", "run": "pm-1"})
-    assert any("only the user sets it" in m["content"] for m in seen[-1] if m["role"] == "user")
+    assert any("the agent cannot set it" in m["content"] for m in seen[-1] if m["role"] == "user")
     assert client.put("/api/runs/pm-1/state", json={"path": "/budget", "value": 5}).status_code == 400
     assert client.put("/api/runs/pm-1/budget", json={"credits": -1}).status_code == 400
     assert client.put("/api/runs/pm-1/budget", json={"credits": 150}).json() == {"credits": 150, "spent": 0}
@@ -182,7 +182,8 @@ def test_a_runs_budget_is_the_users_and_stops_its_jobs(client, monkeypatch):
 
 def test_a_long_skill_goes_first_and_the_tokens_are_counted(client, monkeypatch, tmp_path):
     from scene import skills
-    register(client)
+    me = register(client)
+    runs.write(client.app.state.db, me["id"], "pm-1", "/motion/status", "started", "agent")   # it has saved its work: no reminder
     (tmp_path / "pm.md").write_text("---\nname: pm\ndescription: 'Use when the user says \"pocket motion\".'\n---\n\n# Pocket\n\n"
                                     + "A rule of the run. " * 400, encoding="utf-8")
     shipped = skills.load
