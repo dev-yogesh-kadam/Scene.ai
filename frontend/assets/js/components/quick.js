@@ -197,7 +197,7 @@ promptField, texts, note),
     } else delete form.refs[slot.id];
   }
 
-  // Put the project's cast into the slots this workflow has for it. A slot the user filled is left alone.
+  // Put the project's always-on kit entries into the slots this workflow has for them. A slot the user filled is left alone.
   async function recast() {
     const wf = form.wf;
     if (!wf) return;
@@ -206,7 +206,7 @@ promptField, texts, note),
     if (form.wf !== wf) return;
     for (const [slot, ref] of Object.entries(form.refs)) if (ref.cast) delete form.refs[slot];
     for (const f of fills) {
-      if (!form.refs[f.slot]) form.refs[f.slot] = { itemId: f.id, name: f.name, takes: f.kind, shown: f.item_kind, url: `/api/library/${f.id}/file`, cast: true };
+      if (!form.refs[f.slot]) form.refs[f.slot] = { assetId: f.asset, name: f.name, takes: f.kind, shown: f.item_kind, url: `/api/assets/${f.asset}/file`, cast: true };
     }
     if (page !== 'home' && page !== 'motion') drawSource();
   }

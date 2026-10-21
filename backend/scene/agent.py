@@ -11,7 +11,7 @@ import re
 
 import httpx
 
-from . import camera, cast, gpu, sequence
+from . import camera, gpu, kit, sequence
 
 MAX_STEPS = 12   # a longer film runs in stages (cast, stills, clips), each priced and approved on its own
 SHOT_SECONDS = (4, 15)  # the length the agent may give one video shot; the workflow takes any number of seconds
@@ -67,11 +67,13 @@ The asset book (the project's memory):
   shot shows a character, place or prop the book has, use that asset: put it in "uses" with the slot of the workflow
   that fits its type (a character in a character slot, a location in a background or location slot, an outfit in an
   outfit slot, a voice in a voice slot). For a saved asset write {{"item": 0, "asset": <its id>, "slot": ...}}; for an
-  item of the project write {{"item": <its id>, "asset": 0, "slot": ...}}. An entry marked "in_cast" is attached to every
-  shot already: never put it in "uses".
+  item of the project write {{"item": <its id>, "asset": 0, "slot": ...}}. An entry marked "always" is attached to every
+  shot already, in its slot: never put it in "uses"; a shot it does not belong in (no location in a close-up on white)
+  lists its asset id in "leave_out". An entry marked "unnamed" was attached without a name: before you use it, ask the
+  user once who or what it is (a question), and when they say, save its name and type with kit_save.
 - A step that makes something meant for reuse in later shots (a character, an outfit, a location, a prop, a style
   picture, or a voice sample) fills "keep": {{"as": its type, "name": its short name, "Maya" or "the cafe"}}. Its result
-  is kept in the book under that name, for every agent tab and every project. Every other step writes {{"as": "", "name": ""}}.
+  is kept in the project's kit under that name, for every agent tab. Every other step writes {{"as": "", "name": ""}}.
   Name a kept asset by who or what it is, never "Maya Character Asset". When the user names one ("use Maya"), find it in the
   book by its name and put it in "uses"; a shot with several characters puts each in its own character slot.
 - In the prompt, call a used asset by what it is in plain words ("the girl", "the cafe"), never by its name in the book
@@ -160,9 +162,9 @@ the user to choose a setting.
 - One shot is ONE action in one place: a 5 second clip cannot show more. When the user lists several actions in a row
   ("she runs through the market, jumps over a crate, turns into an alley and hides behind a door"), plan one step for
   each action, in order (four steps for that example), each prompt describing only its own action.
-- When the project has a cast, name its members in the prompt with the words given for them ("the main character",
+- When the kit has always-on entries, name them in the prompt with the words given for them ("the main character",
   "the outfit", "the background") and do not describe their looks: the reference files carry the looks.
-- When there is no cast and nothing is attached, never ask for a picture: plan the shot from words. Describe the person
+- When the kit has nothing for a shot and nothing is attached, never ask for a picture: plan the shot from words. Describe the person
   and the place in a few concrete words (age, hair, clothes; the kind of place), and when a plan has several steps
   with the same person or place, repeat that same description word for word in every step so the shots match.
 - "start_from" is the id of a selected item the shot should start on, or 0. Use it only when the user asks to continue or animate a selected item.
@@ -198,7 +200,7 @@ IMPROVE = """You rewrite prompts for an AI {kind} model inside Scene.ai. You are
 Rules:
 - Keep everything the user asked for: the subject, the action, the setting and any style or detail they named. Never change what the {what} is about.
 - Add what a good prompt needs and the user left out: {needs}
-- When a project cast is listed, name its members with the words given for them and do not describe their looks. When
+- When always-on references are listed, name them with the words given for them and do not describe their looks. When
   none is listed, describe the people and places in the user's own terms; do not call anyone "the main character".
 - Write plain descriptive sentences in the user's language. No lists, no headings, no quotation marks around the whole prompt, no explanations.
 - {length}
@@ -312,8 +314,8 @@ class AgentError(Exception):
     pass
 
 
-TOOLS = ("find_assets", "look", "check_shots", "review", "save_note", "state_read", "state_write", "state_check", "film",
-         "import_url", "transcript", "timing", "read_text", "read_skill", "finish")
+TOOLS = ("find_assets", "look", "check_shots", "review", "save_note", "kit_save", "state_read", "state_write", "state_check",
+         "film", "import_url", "transcript", "timing", "read_text", "read_skill", "finish")
 TOOL_ROUNDS = 6   # a message is answered in at most this many calls to the model
 RUN_ROUNDS = 40   # ...or this many while a long skill runs: it reads and writes its state and cuts its media as it goes
 TOOL_RESULT = 8000   # characters of a tool's result the model is given back
@@ -328,6 +330,10 @@ the tool and tells you the result, and then you answer again. Fill every field; 
   Do this before you finish when a plan is more than one or two steps, and fix what it says.
 - review: "item" is an id of something made; you get the checks of it.
 - save_note: "text" is the whole direction (see "Direction" in the message), kept for the next messages.
+- kit_save: keeps something in the project's kit, or names an entry. "text" is its name ("Violet"), "op" its type
+  (character, location, prop, outfit, voice, style, script); "item" a library id to add (a sheet you made, a file the
+  user attached) or "asset" the kit entry to change; "value" what it shows, when you know better than the kit; and
+  "settings" "always" to attach it to every shot of the project. You get its asset id.
 - state_read: "path" (/motion/chunks/c3) and "offset"; you get the value kept there, or every leaf under a folder, a
   page at a time. state_write: "path" and "value", the JSON text to keep there (it replaces what was there); a path
   ending in /* and a value that is an object of name: value write every leaf of that folder at once. A run's
@@ -383,6 +389,7 @@ TOOL_ARGS = {
     "check_shots": ({"steps": {"type": "array", "items": {"type": "object"}}}, {}),
     "review": ({"item": I}, {}),
     "save_note": ({"text": S}, {}),
+    "kit_save": ({"text": S, "op": S}, {"item": I, "asset": I, "value": S, "settings": S}),
     "state_read": ({"path": S}, {"offset": I}),
     "state_write": ({"path": S, "value": S}, {}),
     "state_check": ({"path": S, "against": S}, {}),
@@ -537,6 +544,7 @@ def reply_format(workflow_ids):
         "look": {"type": "string", "enum": list(sequence.LOOKS)},
         "choices": {"type": "array", "items": {"type": "object", "required": ["setting", "value"],
                                                "properties": {"setting": {"type": "string"}, "value": {"type": "string"}}}},
+        "leave_out": {"type": "array", "items": {"type": "integer"}},
         "keep": {"type": "object", "required": ["as", "name"], "properties": {
             "as": {"type": "string", "enum": ["", "character", "outfit", "location", "prop", "voice", "style"]}, "name": {"type": "string"}}},
         "shot_size": {"type": "string", "enum": camera.choices("shot_size")},
@@ -818,7 +826,7 @@ class Agent:
         system = IMPROVE.format(kind=kind, tips=advice, **IMPROVE_KINDS[kind])
         if structure:   # the studio's prompt structure wins over "plain sentences, no headings"
             system += "\n\n" + STRUCTURE_GUIDE.format(structure=structure)
-        message = "Project cast:\n{}\n\nPrompt:\n{}".format(cast.described(project_cast or {}) or "(none)", prompt)
+        message = "Always-on references:\n{}\n\nPrompt:\n{}".format(kit.described(project_cast or []) or "(none)", prompt)
         answer = await self.chat([{"role": "system", "content": system}, {"role": "user", "content": message}],
                                  {"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}}},
                                  **({"model": self.helper(model)} if self.helper(model) else {}))
@@ -1026,7 +1034,7 @@ def points_at_selection(instruction):
     return bool(POINTS.search(instruction)) or not instruction.isascii()
 
 
-FITS = cast.FITS   # what a reference slot of each kind can be filled with from the library
+FITS = kit.FITS   # what a reference slot of each kind can be filled with from the library
 
 
 def offer(schema, attached=True):
@@ -1297,8 +1305,8 @@ def question(instruction, offers, selection, default="", history=(), project_cas
     if offers[0]["id"] == default:
         offers[0] = dict(offers[0], default=True)
     said = ["{}: {}".format("User" if turn["role"] == "user" else "You", turn["content"]) for turn in history]
-    parts = ["Project cast:\n" + (cast.described(project_cast or {}) or "(none)"),
-             "Asset book, the project's memory:\n" + ("\n".join(json.dumps(entry, ensure_ascii=False) for entry in book)
+    parts = ["Always on:\n" + (kit.described(project_cast or []) or "(none)"),
+             "Asset book, the project's kit (its characters, locations, props, voices, scripts by name) and items:\n" + ("\n".join(json.dumps(entry, ensure_ascii=False) for entry in book)
                                                        or "(empty: nothing is saved for reuse yet)"),
              *([skills_part(guides)] if guides else []),
              "Workflows:\n" + "\n".join(json.dumps(o) for o in offers),

@@ -9,9 +9,10 @@ from test_api import register
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 
 
-def save_asset(client, name, tag, use_note=""):
-    return client.post("/api/assets", files={"file": (name.lower() + ".png", PNG, "image/png")},
-                       data={"name": name, "tag": tag, "use_note": use_note}).json()["id"]
+def save_asset(client, name, tag, use_note="", project=0):
+    """An entry of the kit (of the items in no project, unless a project is given)."""
+    return client.post("/api/kit", files={"file": (name.lower() + ".png", PNG + name.encode(), "image/png")},
+                       data={"name": name, "type": tag, "use_note": use_note, "project_id": str(project or "")}).json()["id"]
 
 
 def library_item(client, user_id, name, kind="image", about=""):
@@ -34,20 +35,20 @@ def looks(monkeypatch, client, seen):
 
 def test_the_book_lists_saved_assets_and_the_projects_pictures_and_describes_each_once(client, monkeypatch):
     me = register(client)
+    seen = []
+    looks(monkeypatch, client, seen)
     meera = save_asset(client, "Meera", "character", "Use her for every shot of the girl.")
     cafe = save_asset(client, "Cafe", "background")
     harbour = library_item(client, me["id"], "Harbour")
     library_item(client, me["id"], "Song", kind="audio")   # a sound is not a picture to reuse
-    seen = []
-    looks(monkeypatch, client, seen)
 
-    shown = client.get("/api/memory").json()   # the Shared memory tab; the model looks at what it has not seen yet
-    assert [a["name"] for a in shown["assets"]] == ["Cafe", "Meera"] and "made" not in shown
+    shown = client.get("/api/memory").json()   # the kit; the model looks at what it has not seen yet
+    assert [a["name"] for a in shown["assets"]] == ["Meera", "Cafe"] and "made" not in shown
     book = memory.book_for_model(memory.book(client.app.state.db, me["id"], 0))
     assert [(e.get("asset"), e.get("item"), e["name"], e["type"]) for e in book] == [
-        (cafe, None, "Cafe", "location"),
-        (meera, None, "Meera", "character"), (None, harbour, "Harbour", "made in this project")]
-    assert book[1]["use"] == "Use her for every shot of the girl."
+        (meera, None, "Meera", "character"), (cafe, None, "Cafe", "location"),
+        (None, harbour, "Harbour", "made in this project")]
+    assert book[0]["use"] == "Use her for every shot of the girl."
     assert all(e["shows"].startswith("A girl of about nine") for e in book[:2])
     # The library item's file is missing, so it has no description: the book says what it was made from instead.
     assert "shows" not in book[2] and book[2]["made_from"] == "a quiet harbour at dawn"
@@ -63,7 +64,6 @@ def test_the_book_lists_saved_assets_and_the_projects_pictures_and_describes_eac
 
 def test_a_failing_look_does_not_stop_the_plan_and_is_not_tried_again(client, monkeypatch):
     register(client)
-    save_asset(client, "Meera", "character")
     tries = []
 
     async def blind(picture, name="", kind="image"):
@@ -74,6 +74,7 @@ def test_a_failing_look_does_not_stop_the_plan_and_is_not_tried_again(client, mo
         return "jpeg"
     monkeypatch.setattr(memory, "_picture", fake_picture)
     monkeypatch.setattr(client.app.state.agent, "describe", blind)
+    save_asset(client, "Meera", "character")   # looked at as it is added: the look fails
     assert client.get("/api/memory").status_code == 200
     client.get("/api/memory")
     assert tries == ["Meera"]
@@ -154,22 +155,19 @@ def test_a_file_dropped_into_a_job_is_kept_once_as_an_upload_of_its_project(clie
     for _ in range(2):   # the same file twice is kept once
         made = client.post("/api/jobs", data={"settings": json.dumps(settings)}, files={"ref:201:image": ("meera_face.png", PNG, "image/png")})
         assert made.status_code == 200
-    shown = client.get("/api/memory?project=%d" % project).json()
-    assert [(u["name"], u["tag"], u["origin"]) for u in shown["uploads"]] == [("meera face", "character", "upload")]
-    assert shown["assets"] == [] and client.get("/api/memory").json()["uploads"] == []   # only in its own project
-    upload_id = shown["uploads"][0]["id"]
+    shown = client.get("/api/kit?project=%d" % project).json()["entries"]
+    assert [(u["name"], u["type"], u["origin"]) for u in shown] == [("meera face", "character", "upload")]   # typed by its slot
+    assert client.get("/api/kit").json()["entries"] == []   # only in its own project
+    upload_id = shown[0]["id"]
     assert client.get("/api/assets/%d/file" % upload_id).content == PNG
     # The agent knows it by name in that project.
     book = memory.book_for_model(memory.book(client.app.state.db, me["id"], project))
-    assert book[0]["asset"] == upload_id and book[0]["uploaded"] is True and book[0]["type"] == "character"
-    # Kept as an asset, it belongs to every project.
-    client.put("/api/assets/%d" % upload_id, json={"origin": "saved"})
-    assert [a["name"] for a in client.get("/api/memory").json()["assets"]] == ["meera face"]
-    # A deleted project's uploads stay, in no project.
+    assert book[0]["asset"] == upload_id and book[0]["type"] == "character"
+    # A deleted project's kit stays, in no project.
     second = client.post("/api/jobs", data={"settings": json.dumps(settings)}, files={"ref:201:image": ("cafe.png", PNG + b"cafe", "image/png")})
     assert second.status_code == 200
     client.delete("/api/projects/%d" % project)
-    assert [u["name"] for u in client.get("/api/memory").json()["uploads"]] == ["cafe"]
+    assert sorted(u["name"] for u in client.get("/api/kit").json()["entries"]) == ["cafe", "meera face"]
 
 
 def test_there_are_no_project_notes(client, monkeypatch):

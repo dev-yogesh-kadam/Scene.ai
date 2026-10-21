@@ -27,7 +27,7 @@ def test_the_names_and_types_are_read_from_the_message():
 def picture(client, user_id, name, about=""):
     folder = client.app.state.outputs.folder(user_id)
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / (name + ".png")).write_bytes(b"\x89PNG not really")
+    (folder / (name + ".png")).write_bytes(b"\x89PNG not really " + name.encode())
     return client.app.state.db.run(
         "INSERT INTO generations (user_id, workflow, kind, name, filename, settings, context, created, about) "
         "VALUES (?, 'upload/file', 'image', ?, ?, '{}', '{}', 1, ?)", (user_id, name, name + ".png", about))
@@ -59,7 +59,7 @@ def test_a_message_that_names_its_pictures_keeps_them_for_every_tab(client, monk
     maya = picture(client, me["id"], "maya", "A woman in a red coat.")
     model(monkeypatch, client, {"thought": "", "reply": "Got it.", "steps": []})
     plan = client.post("/api/agent/plan", json={"instruction": "characters-\nMaya - @1", "selection": [maya]}).json()
-    assert any(e["text"] == "Kept in shared memory: Maya (character)" for e in plan["activity"])
+    assert any(e["text"] == "Kept in the kit: Maya (character)" for e in plan["activity"])
     # a new tab, with nothing attached, finds her in the book by name
     asked = model(monkeypatch, client, {"thought": "", "reply": "Maya it is.", "steps": []})
     client.post("/api/agent/plan", json={"instruction": "a shot of Maya walking", "run": "tab-2"})

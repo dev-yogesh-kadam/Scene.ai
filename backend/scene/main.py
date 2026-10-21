@@ -11,9 +11,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import backup, gpu, media, motion, sequence
+from . import backup, gpu, kit, media, motion, sequence
 from .agent import Agent, AgentError, service
-from .api import admin, assets, auth, film, library, runs, studio, workspace
+from .api import admin, assets, auth, film, kit as kit_api, library, runs, studio, workspace
 from .catalog import Catalog
 from .comfy import workflows
 from .comfy.client import Comfy, ComfyError
@@ -163,6 +163,8 @@ def create_app(settings=None):
     app.state.storage_dir = storage
     app.state.output_dir = settings.path("output_dir") if settings.output_dir else storage / "outputs"
     app.state.outputs = Outputs(app.state.output_dir, db)
+    with as_everyone():   # once: every project's cast becomes the always-on entries of its kit
+        kit.migrate_cast(db, storage / "assets", app.state.outputs)
     app.state.backup_dir = settings.path("backup_dir") if settings.backup_dir else storage / "backups"
     # Whether the render server answered the last time anyone asked, and since when that has been so.
     app.state.server_seen = {"online": None, "since": time.time()}
@@ -221,7 +223,7 @@ def create_app(settings=None):
             headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
 
-    for module in (auth, studio, library, workspace, film, runs, assets, admin):
+    for module in (auth, studio, library, workspace, film, runs, kit_api, assets, admin):
         app.include_router(module.router)
 
     frontend = settings.path("frontend_dir").resolve()

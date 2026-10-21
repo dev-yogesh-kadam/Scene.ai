@@ -10,7 +10,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from .. import agent, camera, cast, credits, edits, gpu, media, memory, motion, review, runs, sequence, skills
+from .. import agent, camera, credits, edits, gpu, kit, media, memory, motion, review, runs, sequence, skills
 from ..comfy import workflows
 from .deps import agent_user, current_user
 from .studio import price
@@ -201,13 +201,13 @@ async def add_sound(body: dict, request: Request, user: dict = Depends(current_u
 
 @router.get("/cast")
 async def get_cast(request: Request, project: int = 0, workflow: str = "", user: dict = Depends(current_user)):
-    """The references pinned to a project (saved with PUT /api/boards/cast as {role: item id}), and, for a workflow,
-    which of its reference slots they fill."""
+    """The always-on entries of a project's kit (what the cast was), and, for a workflow, which of its reference slots
+    they fill: [{"asset", "name", "slot", "label", "kind", "role", "item_kind", "said_as"}]."""
     state = request.app.state
-    pinned = cast.load(state.db, user["id"], _project_id(request, user, project))
-    found = {"roles": cast.roles(), "cast": pinned, "fills": []}
-    if workflow and pinned:
-        found["fills"] = cast.fills(workflows.describe(await state.catalog.load(workflow)), pinned)
+    on = kit.always(state.db, user["id"], _project_id(request, user, project) or None)
+    found = {"always": [memory.kit_row(e) for e in on], "fills": []}
+    if workflow and on:
+        found["fills"] = kit.fills(workflows.describe(await state.catalog.load(workflow)), on)
     return found
 
 
@@ -334,14 +334,13 @@ def _model(body):
 
 @router.get("/memory")
 async def get_memory(request: Request, project: int = 0, user: dict = Depends(current_user)):
-    """Everything kept for a project, as the Shared memory tab shows it: saved assets and uploads. For a user who has
-    the agent, its model first looks at a few pictures it has not described yet."""
+    """A project's kit, as the panel of before read it ({"assets": the kit's entries, "uploads": []}); the kit's own
+    endpoints are /api/kit. For a user who has the agent, its model first looks at a few pictures it has not described."""
     state = request.app.state
     project = _project_id(request, user, project)
-    pinned = cast.load(state.db, user["id"], project)
     if user["agent"]:
-        await memory.describe_missing(state, user["id"], memory.book(state.db, user["id"], project, pinned), limit=6)
-    found = memory.panel(state.db, user["id"], project, pinned)
+        await memory.describe_missing(state, user["id"], memory.book(state.db, user["id"], project or None), limit=6)
+    found = memory.panel(state.db, user["id"], project or None)
     found["skills"] = [{"id": s["id"], "title": s["title"], "version": s["version"]} for s in skills.load()]
     return found
 
@@ -385,11 +384,11 @@ async def _agent_review(body, request, user):
             path = row and state.outputs.folder(user["id"]) / row["filename"]
         if row and row["kind"] in ("image", "video"):
             references.append((row["name"], path))
-    if not references and item["project_id"]:   # checked on its own: the project's cast is what it should look like
-        for pin in cast.load(state.db, user["id"], item["project_id"]).values():
-            row = own(pin["id"]) if pin["kind"] in ("image", "video") and pin["id"] != item["id"] else None
-            if row:
-                references.append((row["name"], state.outputs.folder(user["id"]) / row["filename"]))
+    if not references and item["project_id"]:   # checked on its own: the project's always-on kit is what it should look like
+        for e in kit.always(state.db, user["id"], item["project_id"]):
+            path = state.assets_dir / str(user["id"]) / e["filename"]
+            if e["kind"] in ("image", "video") and e["made_from"] != item["id"] and path.is_file():
+                references.append((e["name"], path))
     before = own(body.get("previous"))
     previous = (state.outputs.folder(user["id"]) / before["filename"], before["kind"]) if before and before["kind"] in ("image", "video") else None
     try:
@@ -447,13 +446,14 @@ async def _agent_improve(body, request, user):
     project = _project_id(request, user, body.get("project_id"))
     state = request.app.state
     # The chosen workflow's own prompting tips, and the cast when that workflow has slots for it.
-    tips, pinned = [], {}
+    tips, pinned = [], []
     if body.get("workflow"):
         try:
             schema = workflows.describe(await state.catalog.load(str(body["workflow"])))
             tips = schema["hints"]
-            full = cast.load(state.db, user["id"], project)
-            pinned = {f["role"]: full[f["role"]] for f in cast.fills(schema, full)}
+            full = kit.always(state.db, user["id"], project or None)
+            filled = {f["asset"] for f in kit.fills(schema, full)}
+            pinned = [e for e in full if e["id"] in filled]
         except (workflows.WorkflowError, HTTPException):
             pass
     return {"prompt": await state.agent.improve(prompt, kind, tips=tips, project_cast=pinned,
@@ -524,7 +524,7 @@ async def agent_storyboard(body: dict, request: Request, user: dict = Depends(ag
     if not still:
         raise HTTPException(400, "No picture workflow is switched on to draw the stills with.")
     schemas = {still: workflows.describe(await state.catalog.load(still))}
-    pinned, menu = cast.load(state.db, user["id"], project), await _menu(state)
+    pinned, menu = kit.always(state.db, user["id"], project or None), await _menu(state)
     steps, dropped = [], []
     for shot_id, proposal, _ in wanted:
         card = {key: proposal.get(key) for key in ("prompt", "orientation", "shot_size", "angle", "end_state")}
@@ -562,7 +562,7 @@ async def agent_animate(body: dict, request: Request, user: dict = Depends(agent
                 schemas[proposal["workflow"]] = workflows.describe(await state.catalog.load(proposal["workflow"]))
             except (workflows.WorkflowError, HTTPException):
                 pass
-    pinned, menu = cast.load(state.db, user["id"], project), await _menu(state)
+    pinned, menu = kit.always(state.db, user["id"], project or None), await _menu(state)
     for shot_id, proposal, item in wanted:
         before = len(steps)
         reason = await _plan_step(state, dict(proposal, start_from=item, after=0, uses=[]), "", steps, {}, schemas, names, kinds, [],
@@ -663,9 +663,10 @@ async def agent_step(body: dict, request: Request, user: dict = Depends(agent_us
         agent.shape_like(schema, settings, step["shape"])   # a shot that starts on a picture keeps that picture's shape
     elif change.get("orientation") and not schema.get("size"):
         agent.shape_like(schema, settings, {"landscape": (16, 9), "portrait": (9, 16), "square": (1, 1)}.get(change["orientation"]))
-    pinned = cast.load(state.db, user["id"], project)
-    uses = uses + [dict(fill, cast=True) for fill in cast.fills(
-        schema, pinned, {u["slot"] for u in uses}, {u["id"] for u in uses if u.get("id")} | ({started} if started else set()))]
+    pinned = kit.always(state.db, user["id"], project or None)
+    uses = uses + [dict(fill, cast=True) for fill in kit.fills(
+        schema, pinned, {u["slot"] for u in uses}, {u["asset"] for u in uses if u.get("asset")}, step.get("leave_out") or (),
+        {u["id"] for u in uses if u.get("id")} | ({started} if started else set()))]
     try:
         return await _shown_step(state, schema, settings, await _menu(state), uses,
                                  dict(start, slot=first_frame) if start else None,
@@ -883,13 +884,21 @@ async def _planning(request, user, body, instruction, project):
                 and listed["title"].lower() not in said and listed["id"].lower() not in said:
             continue
         schemas[listed["id"]] = workflows.describe(await state.catalog.load(listed["id"]))
-    # The pictures the user names in the message ("Maya - @3", "location - Bonfire Clearing - @10") are kept in shared
-    # memory under those names: every agent tab and every project knows them from then on, by name and by id.
-    named = memory.keep_named(state.db, state.assets_dir / str(user["id"]), state.outputs.folder(user["id"]), user["id"],
-                              memory.named_in(instruction, selection[:tagged]))
+    # The pictures the user names in the message ("Maya - @3", "location - Bonfire Clearing - @10") are kept in the
+    # project's kit under those names: every agent tab knows them from then on, by name and by id.
+    folder, outputs = state.assets_dir / str(user["id"]), state.outputs.folder(user["id"])
+    said_names = memory.named_in(instruction, selection[:tagged])
+    named = memory.keep_named(state.db, folder, outputs, user["id"], said_names, project or None)
     if named:
-        yield activity("book", "Kept in shared memory: " + ", ".join("{} ({})".format(n["name"], n["type"]) for n in named))
-    pinned = cast.load(state.db, user["id"], project)
+        yield activity("book", "Kept in the kit: " + ", ".join("{} ({})".format(n["name"], n["type"]) for n in named))
+    # A long run that starts with pictures nobody named keeps them too, without a name: the agent asks who they are.
+    if run_id and long_skill and not carried:
+        said_items = {n["item"] for n in said_names}
+        unnamed = memory.keep_unnamed(state.db, folder, outputs, user["id"], project or None,
+                                      [s["id"] for s in selection[:tagged] if s["kind"] == "image" and s["id"] not in said_items])
+        if unnamed:
+            yield activity("book", "Kept {} picture{} without a name in the kit".format(len(unnamed), "" if len(unnamed) == 1 else "s"))
+    pinned = kit.always(state.db, user["id"], project or None)
     # The asset book: what the agent knows of the project by name. Pictures it has not looked at yet are described now.
     book = memory.book(state.db, user["id"], project, pinned)
     if book:
@@ -1056,6 +1065,30 @@ async def _planning(request, user, body, instruction, project):
             saved_direction[:] = [text]
             noted("book", "Updated the direction")
         return "Saved." if text else "Nothing to save."
+
+    async def kit_save(call):
+        name, said_type = kit.clean_name(call.get("text")), str(call.get("op") or "").strip().lower()
+        if not name:
+            return "Give the entry its name in text."
+        always_on = str(call.get("settings") or "").strip().lower() == "always"
+        about = str(call.get("value") or "").strip()
+        folder = state.assets_dir / str(user["id"])
+        if call.get("asset"):
+            changes = {"name": name, "type": said_type, **({"about": about} if about else {}), **({"always": True} if always_on else {})}
+            found = kit.update(state.db, user["id"], call["asset"], changes)
+            if not found:
+                return "There is no kit entry {}.".format(call["asset"])
+            asset = found["id"]
+        elif call.get("item"):
+            asset = kit.add_item(state.db, folder, state.outputs.folder(user["id"]), user["id"], project or None, call["item"],
+                                 name, kit.tag_of(said_type), always_on, True, about)
+            if not asset:
+                return "There is no library item {}.".format(call["item"])
+            kit.update(state.db, user["id"], asset, {"name": name, "type": said_type, **({"about": about} if about else {})})
+        else:
+            return "Give the library id of what to keep in item, or the kit entry to change in asset."
+        noted("book", "Kept “{}” ({}) in the kit".format(name, kit.TYPES.get(kit.tag_of(said_type), "other")))
+        return json.dumps({"asset": asset, "name": name, "type": kit.TYPES.get(kit.tag_of(said_type), "other"), "always": always_on})
 
     reminded = []   # the run was reminded once to save its work
     stalled = []    # the model was told once that it announced work it did not do
@@ -1268,6 +1301,7 @@ async def _planning(request, user, body, instruction, project):
         return json.dumps({"item": made["id"], "kind": kind, "name": made["name"], **made["context"]}, ensure_ascii=False)
 
     tools = {"find_assets": find_assets, "look": look, "check_shots": check_shots, "review": review_it, "save_note": save_note,
+             "kit_save": kit_save,
              "state_read": state_read, "state_write": state_write, "state_check": state_check, "film": film_op, "import_url": import_url,
              "transcript": read_transcript, "timing": timing, "read_text": read_text, "read_skill": read_skill}
 
@@ -1475,9 +1509,11 @@ async def _plan_step(state, proposed, instruction, steps, made_by, schemas, name
         settings["keep"] = keep
     # A shot takes the shape of the picture it starts on: a portrait picture in a landscape video comes out squashed.
     agent.shape_like(schema, settings, steps[earlier].get("shape") if chained else shapes.get(start))
-    # The project's cast goes into every slot meant for it that the step left empty.
-    uses = uses + [dict(fill, cast=True) for fill in cast.fills(
-        schema, pinned, {use["slot"] for use in uses}, {use["id"] for use in uses if use["id"]} | ({start} if start else set()))]
+    # The project's always-on entries go into every slot meant for them that the step left empty, but those it leaves out.
+    left_out = [i for i in proposed.get("leave_out") or [] if isinstance(i, int)] if isinstance(proposed.get("leave_out"), list) else []
+    uses = uses + [dict(fill, cast=True) for fill in kit.fills(
+        schema, pinned, {use["slot"] for use in uses}, {use["asset"] for use in uses if use.get("asset")}, left_out,
+        {use["id"] for use in uses if use["id"]} | ({start} if start else set()))]
     steps.append(await _shown_step(state, schema, settings, menu or [], uses,
                                    {"id": start, "name": names[start], "slot": first_frame} if start else None,
                                    {"step": earlier, "slot": first_frame} if chained else None, agent.why(proposed)))

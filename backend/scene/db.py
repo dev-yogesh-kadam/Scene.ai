@@ -221,6 +221,11 @@ COLUMNS = [
     ("generations", "run", "TEXT NOT NULL DEFAULT ''"),
     # The run a job was made for: what a long run has spent is counted from it (runs.spent).
     ("jobs", "run", "TEXT NOT NULL DEFAULT ''"),
+    # The kit of a project (kit.py): its assets in order, the ones always attached to its shots (what the cast was),
+    # and the ones attached without a name yet, which the agent asks about.
+    ("assets", "always", "INTEGER NOT NULL DEFAULT 0"),
+    ("assets", "position", "REAL NOT NULL DEFAULT 0"),
+    ("assets", "named", "INTEGER NOT NULL DEFAULT 1"),
 ]
 
 # The studio's two machines, added to an installation that has no servers yet. Every value can be changed in the

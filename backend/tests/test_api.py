@@ -543,35 +543,6 @@ def test_a_shot_takes_the_shape_of_the_picture_it_starts_on(client, monkeypatch)
     assert settings["values"]["9:aspect_ratio"] == "9:16 (Portrait Widescreen)" and agent.shape_of(schema, settings, {})[0] < 1000
 
 
-def test_a_projects_cast_goes_into_every_shot_that_has_slots_for_it(client, monkeypatch):
-    me = register(client)
-    ids = {}
-    for name, kind in (("Mira", "image"), ("Harbour", "image"), ("Narration", "audio"), ("Clip", "video")):
-        ids[name] = client.app.state.db.run(
-            "INSERT INTO generations (user_id, workflow, kind, name, filename, summary, settings, context, seconds, size, created) "
-            "VALUES (?, 'x/y', ?, ?, 'missing', '', '{}', '{}', 1, 1, 1)", (me["id"], kind, name))
-    assert client.get("/api/cast").json()["cast"] == {}
-    client.put("/api/boards/cast", json={"data": {"character_1": ids["Mira"], "background": ids["Harbour"], "voice": ids["Narration"],
-                                                  "outfit": ids["Narration"], "prop": 999}})      # a sound is no outfit; 999 is nobody's
-    found = client.get("/api/cast?workflow=video/h3_master").json()
-    assert sorted(found["cast"]) == ["background", "character_1", "voice"]
-    assert [(f["name"], f["slot"]) for f in found["fills"]] == [("Mira", "201:image"), ("Harbour", "205:image"), ("Narration", "208:audio")]
-    asked = {}
-
-    async def fake_ask(system, message, workflow_ids, history=(), model=None):
-        asked["message"] = message
-        return {"reply": "One shot.", "steps": [{"tool": "generate", "workflow": "video/h3_master", "name": "Walk",
-                                                 "prompt": "The main character walks along the quay.",
-                                                 "uses": [{"item": ids["Clip"], "slot": "205:image"}]}]}
-
-    monkeypatch.setattr(client.app.state.agent, "ask", fake_ask)
-    step = client.post("/api/agent/plan", json={"instruction": "use this as the place: she walks along the quay", "selection": [ids["Clip"]]}).json()["steps"][0]
-    assert 'Main character: "Mira". In prompts call it "the main character".' in asked["message"]
-    # what the user attached keeps its slot; the cast fills the others
-    assert [(u["name"], u["slot"], bool(u.get("cast"))) for u in step["uses"]] == [
-        ("Clip", "205:image", False), ("Mira", "201:image", True), ("Narration", "208:audio", True)]
-
-
 def test_the_agent_uses_the_model_the_user_picked_when_the_server_has_it(client, monkeypatch):
     register(client)
     brain = client.app.state.agent
