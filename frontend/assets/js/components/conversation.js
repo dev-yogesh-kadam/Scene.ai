@@ -60,7 +60,7 @@ function csvRow(line) {
   return cells;
 }
 
-// A cell of a table: a link to one of the user's library items (or saved assets) shows its picture — a video its
+// A cell of a table: a link to one of the user's library items (or kit entries) shows its picture — a video its
 // poster, found when the file itself is not a picture; anything else is text. Only the studio's own links are shown.
 function tableCell(text) {
   const found = LIBRARY_LINK.exec(text);

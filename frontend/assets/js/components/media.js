@@ -3,7 +3,7 @@
 import { api } from '../api.js';
 import { still, el, icon, duration, when } from '../dom.js';
 import { store } from '../store.js';
-import { saveAssetDialog } from './assets.js';
+import { KIT, addToKitDialog } from './kit.js';
 import { go } from '../nav.js';
 
 const title = (text) => String(text).replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
@@ -149,6 +149,6 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
         el('select', { class: 'small', title: 'Project', onchange: move },
           el('option', { value: '' }, 'No project'),
           projects.map((p) => el('option', { value: p.id, selected: p.id === item.project_id }, p.name))),
-        item.kind === 'image' && el('button', { class: 'btn small', onclick: () => saveAssetDialog({ generation: item }) }, 'Save as asset'),
+        item.kind !== 'text' && el('button', { class: 'btn small', onclick: () => addToKitDialog({ project: item.project_id || 0, item }) }, `Add to ${KIT}`),
         el('button', { class: 'btn small quiet danger', onclick: remove }, 'Delete'))));
 }

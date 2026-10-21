@@ -5,7 +5,7 @@ import { creditsText, el, field, segmented } from '../dom.js';
 import { store, subscribe, refreshJobs } from '../store.js';
 import { jobList } from '../components/jobs.js';
 import { mediaCard } from '../components/media.js';
-import { pickAsset, saveAssetDialog } from '../components/assets.js';
+import { KIT, addToKitDialog, pickFromKit, typeForSlot } from '../components/kit.js';
 
 const ACCEPT = { image: 'image/*', video: 'video/*', audio: 'audio/*,video/*' };
 const KIND_LABEL = { video: 'Video', image: 'Image', audio: 'Audio' };
@@ -283,7 +283,7 @@ export function render(view) {
   }
 
   async function chooseSaved(slot) {
-    const asset = await pickAsset(slot.kind);
+    const asset = await pickFromKit(slot.kind, form.projectId);
     if (asset) setRef(slot, { assetId: asset.id, name: asset.name, kind: asset.kind, url: `/api/assets/${asset.id}/file` });
   }
 
@@ -299,7 +299,7 @@ export function render(view) {
     refsBlock.className = 'form-section';
     refsBlock.replaceChildren(
       el('h2', {}, 'References'),
-      el('p', { class: 'muted' }, 'All optional unless marked with *. Drop a file on a box, click it, or pick one of your saved assets.'),
+      el('p', { class: 'muted' }, `All optional unless marked with *. Drop a file on a box, click it, or pick one from this project's ${KIT}.`),
       el('div', { class: 'refs' }, shown.map((slot) => {
         const current = form.refs[slot.id];
         const file = el('input', { type: 'file', accept: ACCEPT[slot.kind], hidden: true,
@@ -327,9 +327,9 @@ export function render(view) {
           el('div', { class: 'ref-body' }, content),
           current && el('div', { class: 'ref-name' }, current.name),
           el('div', { class: 'ref-actions' },
-            !current && el('button', { type: 'button', class: 'btn small quiet', title: 'Pick one of your saved assets', onclick: stop(() => chooseSaved(slot)) }, 'Saved'),
-            current && current.file && el('button', { type: 'button', class: 'btn small quiet', title: 'Keep this file in your assets to reuse it',
-              onclick: stop(() => saveAssetDialog({ file: current.file })) }, 'Save')),
+            !current && el('button', { type: 'button', class: 'btn small quiet', title: `Pick from this project's ${KIT}`, onclick: stop(() => chooseSaved(slot)) }, KIT),
+            current && current.file && el('button', { type: 'button', class: 'btn small quiet', title: `Keep this file in this project's ${KIT} under a name`,
+              onclick: stop(() => addToKitDialog({ project: form.projectId, file: current.file, type: typeForSlot(slot.label) })) }, `Add to ${KIT}`)),
           current && el('button', { type: 'button', class: 'remove', title: 'Remove', onclick: stop(() => setRef(slot, null)) }, '×'),
           file);
       })));

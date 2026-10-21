@@ -9,8 +9,7 @@ import { store, subscribe } from '../store.js';
 import { openViewer } from '../components/media.js';
 import { quickActions } from '../components/quick.js';
 import { agentTabs } from '../components/agent-tabs.js';
-import { memoryPanel } from '../components/memory.js';
-import { castEditor } from '../components/cast.js';
+import { KIT, addToKitDialog, kitPanel } from '../components/kit.js';
 import { go } from '../nav.js';
 
 const FRAME = 240;      // width of every frame, in canvas units
@@ -25,13 +24,14 @@ const PANEL = 380;      // the width the panel starts with; its left edge can be
 const PANEL_MIN = 320;
 const PANEL_MAX = 960;
 const TABS = [{ id: 'quick', label: 'Quick actions', icon: 'bolt' }, { id: 'agent', label: 'Agent', icon: 'chat' },
-  { id: 'memory', label: 'Shared memory', icon: 'memory' }];
+  { id: 'kit', label: KIT, icon: 'memory' }];
 
-// The asset boards: the user's saved assets (and this project's uploads) to the left of the shots, one board per type.
+// The asset boards: the project's kit to the left of the shots, one board per type.
 const ASSET_TYPES = [
   { tag: 'character', label: 'Characters', glyph: 'C' }, { tag: 'background', label: 'Locations', glyph: 'L' },
   { tag: 'prop', label: 'Props', glyph: 'P' }, { tag: 'outfit', label: 'Outfits', glyph: 'O' },
-  { tag: 'style', label: 'Style', glyph: 'S' }, { tag: 'voice', label: 'Voices', glyph: 'V' }, { tag: 'other', label: 'Other', glyph: '·' },
+  { tag: 'style', label: 'Style', glyph: 'S' }, { tag: 'voice', label: 'Voices', glyph: 'V' }, { tag: 'script', label: 'Scripts', glyph: '¶' },
+  { tag: 'other', label: 'Other', glyph: '·' },
 ];
 const BOARD_W = 236;      // width of one asset board, in canvas units
 const BOARD_GAP = 32;
@@ -108,24 +108,22 @@ export function render(view) {
     pickCanvas: (onPick) => pickFromCanvas(onPick),   // "Select from canvas" in the + menu
     onUploaded: () => loadItems().then(draw),   // a file uploaded from the + menu joins the canvas
     onJobs: (ids) => { agentJobs = new Set(ids); for (const [id, frame] of jobFrames) frame.node.classList.toggle('by-agent', agentJobs.has(id)); },
-    onMemory: () => showPanel(true, 'memory'),
+    onMemory: () => showPanel(true, 'kit'),
     onFocus: (id) => focusItem(id),   // a result in the conversation shows that clip on the canvas
     locate: (id) => locate(id),
   });
-  // Shared memory: the saved assets and this project's uploads, which the agent plans with.
-  const shared = memoryPanel({ projectId: () => project });
+  // The kit: everything the project is made from, by name; its always-on entries go into every shot (what the cast was).
+  const shared = kitPanel({
+    projectId: () => project,
+    selected: () => (selected.size === 1 ? items.find((i) => selected.has(i.id)) || null : null),
+    onChange: () => { dock.recast(); if (showAssets) loadAssets().then(() => { drawAssets(); fit(); }); },
+  });
   // The panel is open every time the canvas is entered, and remembers which of its two tabs was showing.
   const savedTab = localStorage.getItem('scene.panel.tab');   // Quick actions unless the agent or the memory was chosen
-  let tab = savedTab === 'agent' && store.user.agent ? 'agent' : savedTab === 'memory' ? 'memory' : 'quick';
+  let tab = savedTab === 'agent' && store.user.agent ? 'agent' : savedTab === 'kit' || savedTab === 'memory' ? 'kit' : 'quick';
   const title = el('b', { class: 'panel-title' });
   const tabs = el('div');
   const quick = el('div', { class: 'panel-quick' }, dock.node);
-  // The project's cast: its button sits in the head of the panel, for both tabs.
-  const cast = castEditor({
-    projectId: () => project,
-    selected: () => (selected.size === 1 ? items.find((i) => selected.has(i.id)) || null : null),
-    onChange: () => dock.recast(),
-  });
   // The left edge of the panel is a grip: drag it to make the panel wider or narrower, double-click for the usual width.
   let panelWidth = PANEL;
   const setWidth = (width) => {
@@ -143,9 +141,9 @@ export function render(view) {
       track((ev) => setWidth(from.width + from.x - ev.clientX), () => { view.classList.remove('resizing'); keepWidth(); });
     } });
   const panel = el('aside', { class: 'side-panel', 'aria-label': 'Make something' }, grip,
-    el('div', { class: 'panel-head' }, title, el('span', { style: 'flex:1' }), cast.button, tabs,
+    el('div', { class: 'panel-head' }, title, el('span', { style: 'flex:1' }), tabs,
       el('button', { class: 'icon-btn', title: 'Close (Ctrl or ⌘ + J)', 'aria-label': 'Close the panel', onclick: () => showPanel(false) }, '×')),
-    cast.box, quick, agent.node, shared.node);
+    quick, agent.node, shared.node);
   const isOpen = () => view.classList.contains('with-panel');
   const panelButton = el('button', { class: 'btn small quiet', title: 'Show or hide Quick action and the Agent (Ctrl or ⌘ + J)', onclick: () => showPanel(!isOpen()) }, 'Panel');
   function showPanel(open, which = tab) {
@@ -158,15 +156,15 @@ export function render(view) {
     tabs.replaceChildren(segmented(TABS.map((t) => ({ id: t.id, label: icon(t.icon), hint: t.label })), tab, (id) => showPanel(true, id)));
     quick.classList.toggle('hidden', tab !== 'quick');
     agent.node.classList.toggle('hidden', tab !== 'agent');
-    shared.node.classList.toggle('hidden', tab !== 'memory');
-    if (open && tab === 'memory') shared.load();   // what the agent has just made or remembered shows at once
-    if (open) (tab === 'agent' ? agent : tab === 'memory' ? shared : dock).focus();
+    shared.node.classList.toggle('hidden', tab !== 'kit');
+    if (open && tab === 'kit') shared.load();   // what the agent has just made or kept shows at once
+    if (open) (tab === 'agent' ? agent : tab === 'kit' ? shared : dock).focus();
     if (ready) fit();
   }
 
   // ------------------------------------------------------------ asset boards
 
-  const assetsButton = el('button', { class: 'btn small quiet', title: 'Show or hide the saved assets beside the shots',
+  const assetsButton = el('button', { class: 'btn small quiet', title: `Show or hide the project's ${KIT} beside the shots`,
     'aria-pressed': String(showAssets), onclick: async () => {
       showAssets = !showAssets;
       localStorage.setItem('scene.canvas.assets', showAssets ? 'on' : 'off');
@@ -178,8 +176,7 @@ export function render(view) {
 
   async function loadAssets() {
     try {
-      // Saved assets belong to every project; an upload belongs to the project it was dropped into.
-      assets = (await api('/api/assets')).assets.filter((a) => a.origin === 'saved' || (project && a.project_id === project));
+      assets = (await api('/api/kit?project=' + (project || 0))).entries;   // the project's kit
     } catch { assets = []; }
   }
 
@@ -208,7 +205,7 @@ export function render(view) {
             assetLayer.querySelectorAll('.asset-card.on').forEach((c) => c !== e.currentTarget && c.classList.remove('on'));
             e.currentTarget.classList.toggle('on');
           } },
-          el('span', { class: 'asset-name' }, asset.name, asset.origin !== 'saved' && el('i', { class: 'asset-tag' }, 'upload')),
+          el('span', { class: 'asset-name' }, asset.name, asset.always && el('i', { class: 'asset-tag' }, 'always on')),
           el('span', { class: 'asset-picture' }, asset.kind === 'audio'
             ? el('span', { class: 'asset-sound' }, icon('audio'), 'Sound')
             : still(`/api/assets/${asset.id}/file`, asset.kind, asset.name)))));
@@ -724,7 +721,6 @@ export function render(view) {
     agent.selectionChanged();   // the message box offers what is selected, without adding it
     for (const box of boxes.values()) box.node.classList.toggle('selected', selected.has(box.key));
     dock.refresh();
-    cast.refresh();
     drawOverlay();
   }
 
@@ -765,6 +761,8 @@ export function render(view) {
       videos.length > 0 && el('button', { class: 'btn small quiet', onclick: (e) => addToTimeline(videos, e.currentTarget) },
         one ? 'Add to timeline' : `Add ${videos.length} to timeline`),
       el('button', { class: 'btn small quiet', title: 'Download (D)', onclick: () => chosen.forEach(download) }, one ? 'Download' : `Download ${chosen.length}`),
+      one && el('button', { class: 'btn small quiet', title: `Keep it in this project's ${KIT} under a name`,
+        onclick: async () => { if (await addToKitDialog({ project, item: one })) { shared.load(); dock.recast(); } } }, `Add to ${KIT}`),
     ].filter(Boolean));
     const area = bounds(chosen.map((i) => boxes.get(i.id)));
     context.style.left = Math.max(8, cam.x + area.x * cam.k) + 'px';
@@ -841,7 +839,6 @@ export function render(view) {
 
   applyCamera();
   load();
-  cast.reload();
   setWidth(Number(localStorage.getItem('scene.panel.width')));
   showPanel(true);
   return () => {

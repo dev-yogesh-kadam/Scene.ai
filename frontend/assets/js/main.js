@@ -13,7 +13,6 @@ import * as timeline from './pages/timeline.js';
 import * as projects from './pages/projects.js';
 import * as library from './pages/library.js';
 import * as skills from './pages/skills.js';
-import * as assets from './pages/assets.js';
 import * as settings from './pages/settings.js';
 import * as admin from './pages/admin.js';
 
@@ -29,7 +28,6 @@ const PAGES = [
   { path: '/create', page: create, under: '/home' },
   { path: '/canvas', page: canvas, under: '/projects' },
   { path: '/timeline', page: timeline, under: '/projects' },
-  { path: '/assets', page: assets, under: '/library' },
   { path: '/settings', label: 'Settings', icon: 'sliders', page: settings, menu: true },
   { path: '/admin', label: 'Admin console', icon: 'shield', page: admin, menu: true, adminOnly: true },
 ];

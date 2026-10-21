@@ -4,7 +4,7 @@
 import { api } from '../api.js';
 import { el, icon, segmented } from '../dom.js';
 import { store, subscribe, refreshJobs } from '../store.js';
-import { pickAsset } from './assets.js';
+import { KIT, pickFromKit } from './kit.js';
 import { addMenu } from './agent.js';
 import { motionForm, sequenceForm } from './motion.js';
 
@@ -28,7 +28,7 @@ const KIND_WORD = { image: 'Image', video: 'Video', audio: 'Audio' };
 
 export function quickActions({ startFrom = () => null, projectId = () => null, pick = null } = {}) {
   const form = { catalog: [], wf: null, values: {}, options: {}, resolution: null, orientation: null,
-    kind: 'video', refs: {}, allRefs: false };   // refs: slot id -> {file}, {assetId} or {itemId} (a library item, as the cast is), plus {name, url}
+    kind: 'video', refs: {}, allRefs: false };   // refs: slot id -> {file}, {assetId} (a kit entry) or {itemId} (a library item), plus {name, url}
   let page = 'home';
   const node = el('div', { class: 'quick' });
 
@@ -290,7 +290,7 @@ promptField, texts, note),
   }
 
   async function chooseSaved(slot) {
-    const asset = await pickAsset(slot.kind);
+    const asset = await pickFromKit(slot.kind, projectId());
     if (asset) setRef(slot, { assetId: asset.id, name: asset.name, url: `/api/assets/${asset.id}/file` });
   }
 
@@ -307,11 +307,11 @@ promptField, texts, note),
       el('div', { class: 'slot-label', title: slot.label }, short(slot.label) + (slot.optional ? '' : ' *')),
       el('div', { class: 'slot-frame' },
       el('button', { type: 'button', class: 'slot-box' + (current ? ' filled' : '') + (current && current.cast ? ' cast' : ''), 'data-slot': slot.id,
-        title: current ? current.name + (current.cast ? ', from the project\'s cast' : '') : 'Add a file: upload, from your saved assets or from the canvas', 'aria-haspopup': 'menu',
-        // Where the file comes from: the computer, the saved assets, or what is selected on the canvas.
+        title: current ? current.name + (current.cast ? `, always on in this project's ${KIT}` : '') : `Add a file: upload, from the ${KIT} or from the canvas`, 'aria-haspopup': 'menu',
+        // Where the file comes from: the computer, the project's kit, or what is selected on the canvas.
         onclick: (e) => addMenu(e.currentTarget, [
           { icon: 'upload', label: 'Upload', hint: KIND_WORD[slot.kind] || 'File', run: () => file.click() },
-          { icon: 'image', label: 'From library', hint: 'Saved assets', run: () => chooseSaved(slot) },
+          { icon: 'memory', label: `From the ${KIT}`, hint: 'By name', run: () => chooseSaved(slot) },
           ...(pick ? [{ icon: 'target', label: 'From canvas', hint: 'Selected item', run: () => pick((list) => {
             if (!dropItem(slot.id, list[0])) showError(new Error(`${list[0].name} can't go in "${short(slot.label)}": it takes another kind of file.`));
           }) }] : []),
@@ -388,7 +388,7 @@ promptField, texts, note),
     label.textContent = 'Sending…';
     try {
       const extra = {};
-      for (const [slot, r] of Object.entries(form.refs)) {   // library items, such as the cast, are sent to the render server now
+      for (const [slot, r] of Object.entries(form.refs)) {   // library items are sent to the render server now
         if (!r.itemId || !used().has(slot)) continue;
         const ref = await api(`/api/library/${r.itemId}/reference?kind=${r.takes}`, { method: 'POST' });
         extra[slot] = { comfy_name: ref.comfy_name, name: ref.name };

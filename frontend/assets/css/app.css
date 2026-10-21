@@ -1055,6 +1055,38 @@ a.brand { color: inherit; text-decoration: none; }
 .memory-thumb { flex: none; width: 44px; height: 44px; border-radius: 6px; overflow: hidden; background: var(--field); display: grid; place-items: center; }
 .memory-thumb img, .memory-thumb video { width: 100%; height: 100%; object-fit: cover; }
 .memory-thumb .sound span, .memory-thumb .note { display: none; }
+/* the kit of a project: everything it is made from, by name; always on goes into every shot */
+.kit-tools { display: flex; gap: 8px; padding: 10px 14px 0; }
+.kit-search { flex: 1; min-width: 0; height: 34px; padding: 0 10px; background: var(--field); border: 1px solid var(--line); border-radius: var(--radius-s); color: var(--text); }
+.kit-filter { flex: none; width: auto; max-width: 140px; height: 34px; padding: 0 10px; }
+.kit-body { flex: 1; min-height: 0; overflow-y: auto; padding: 10px; display: grid; gap: 14px; align-content: start; }
+.kit-group { display: grid; gap: 6px; }
+.kit-group h3 { margin: 0 4px 2px; font-size: 12px; font-weight: 600; letter-spacing: .02em; color: var(--muted); }
+.kit-row { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-radius: var(--radius-s); background: var(--raised);
+  box-shadow: 0 0 0 1px var(--line); transition: box-shadow .15s var(--ease), opacity .15s var(--ease); }
+.kit-row.always { box-shadow: 0 0 0 1px var(--line-strong); }
+.kit-row.unnamed { box-shadow: 0 0 0 1px var(--accent); }
+.kit-row.dragging { opacity: .45; }
+.kit-row.drop-before { box-shadow: 0 -2px 0 0 var(--focus), 0 0 0 1px var(--line); }
+.kit-grip { flex: none; width: 12px; color: var(--faint); cursor: grab; font-size: 11px; line-height: 44px; user-select: none; }
+.kit-thumb { width: 52px; height: 52px; }
+.kit-glyph { display: grid; place-items: center; color: var(--muted); }
+.kit-main { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.kit-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.kit-name { flex: 1; min-width: 0; height: 28px; padding: 0 6px; font-weight: 600; border: 1px solid transparent; background: transparent; color: var(--text); border-radius: 6px; }
+.kit-name:hover, .kit-name:focus { border-color: var(--line); background: var(--field); }
+.kit-type { width: auto; max-width: 130px; height: 28px; padding: 0 8px; font-size: 12px; }
+.kit-always { white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.kit-flag { flex: none; font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.kit-about { text-align: left; border: 0; background: none; padding: 0 6px; color: var(--muted); cursor: pointer; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.kit-about:hover { color: var(--text); }
+.kit-remove { flex: none; opacity: .5; }
+.kit-row:hover .kit-remove { opacity: 1; }
+.kit-empty { padding: 18px 8px; text-align: center; }
+.kit-empty p { margin: 4px 0; }
+.kit-import { display: grid; gap: 4px; max-height: 50vh; overflow-y: auto; }
+.kit-import .check { margin-top: 4px; }
 .memory-item-text { min-width: 0; display: grid; gap: 1px; }
 .memory-item-text b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .memory-about { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

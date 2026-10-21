@@ -7,6 +7,7 @@ import { creditMark, el, icon, phaseOf, reel, still } from '../dom.js';
 import { store, subscribe, refreshJobs } from '../store.js';
 import { openViewer } from './media.js';
 import { pickLibraryItem } from './assets.js';
+import { KIT } from './kit.js';
 import { chip, clock, fold, markdown, span, workRows } from './conversation.js';
 import { go } from '../nav.js';
 
@@ -126,7 +127,7 @@ export function spendCard(anchor, spent, { above = false } = {}) {
   anchor.addEventListener('blur', gone, { once: true });
 }
 
-// projectId(): the current project or 0. onJobs(ids): jobs the agent started. onMemory(): show the Shared memory tab.
+// projectId(): the current project or 0. onJobs(ids): jobs the agent started. onMemory(): show the project's kit.
 // session: the agent tab this panel holds (its conversation is kept on its own). onSaved({spent, updated}): the
 // conversation was saved, with what it has spent so far. onFocus(itemId): show that item on the canvas.
 // locate(itemId): where the canvas has it, {shot, take}, or null.
@@ -802,9 +803,9 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     preview = { node, check };
   }
 
-  // A step whose result is kept in shared memory under a name, for every agent tab and project to use.
+  // A step whose result is kept in the project's kit under a name, for every agent tab to use.
   const keepOf = (step) => step.keep && el('div', { class: 'step-keep' }, icon('memory'),
-    `Kept in shared memory as ${step.keep.tag === 'background' ? 'location' : step.keep.tag} “${step.keep.name}”`);
+    `Kept in the ${KIT} as ${step.keep.tag === 'background' ? 'location' : step.keep.tag} “${step.keep.name}”`);
 
   // An amount of credits on an approval card: the Scene token and the number, in place of "cr".
   const tokens = (n) => el('span', { class: 'token-amount', title: `${n} credits` },
