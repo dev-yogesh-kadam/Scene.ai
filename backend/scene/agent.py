@@ -351,7 +351,8 @@ the tool and tells you the result, and then you answer again. Fill every field; 
   "query" the name to file it under; you get its library id. Only public web links are fetched.
 - read_skill: "op" is a skill's id and "query" one of its parts (its number or heading), "offset" where to start; you get
   that part, a page at a time. A skill too long to give you whole lists its parts: read each before you act on it.
-- read_text: "item" is a text in the library (a script or a document the user attached, a transcript) and "offset"
+- read_text: "item" is a text in the library (a script or a document the user attached, a transcript), or "asset" a
+  script in the kit, and "offset"
   where to start; you get its words, a page at a time. With "path" as well, the whole text is kept in the run's state
   there (the script: /motion/inputs/script), word for word, so you need not copy it.
 - transcript: "item" is a transcript in the library (a transcription's JSON, or an .srt) and "path" a folder; every
@@ -397,7 +398,7 @@ TOOL_ARGS = {
     "import_url": ({"text": S}, {"query": S}),
     "transcript": ({"path": S}, {"item": I, "value": S}),
     "timing": ({"settings": S}, {}),
-    "read_text": ({"item": I}, {"offset": I, "path": S}),
+    "read_text": ({}, {"item": I, "asset": I, "offset": I, "path": S}),
     "read_skill": ({"op": S, "query": S}, {"offset": I}),
     "finish": ({}, {}),
 }

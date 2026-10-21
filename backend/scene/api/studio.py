@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 
 import httpx
 
-from .. import media, memory, runs
+from .. import kit, media, memory, runs
 from ..catalog import KINDS
 from ..comfy import workflows
 from ..agent import AgentError
@@ -206,6 +206,15 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     async def measure(slot, data, filename):
         if slot in videos:
             settings["source_seconds"] = await _video_seconds(state, data, filename) or settings.get("source_seconds")
+
+    # @names of the project's kit in the prompt ("@Violet at @Bonfire Clearing") go into the free slots that fit them,
+    # and the prompt calls them by the words the model ties to those slots.
+    prompt_id = next((c["id"] for c in schema["controls"] if c["role"] == "prompt"), None)
+    values = settings.get("values") if isinstance(settings.get("values"), dict) else {}
+    if prompt_id and "@" in str(values.get(prompt_id) or ""):
+        given = {s for s, r in (settings.get("refs") or {}).items() if r} | {k[4:] for k in form.keys() if k.startswith("ref:")}
+        values[prompt_id], placed = kit.mentions(schema, values[prompt_id], kit.entries(state.db, user["id"], project_id), given, slots)
+        settings["refs"] = {**(settings.get("refs") or {}), **{slot: {"asset_id": asset} for slot, asset in placed.items()}}
 
     refs = {}
     for slot, ref in (settings.get("refs") or {}).items():

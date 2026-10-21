@@ -96,6 +96,20 @@ if (slot) {
 const menu = await page.evaluate(() => [...document.querySelectorAll('.pop .add-menu-item')].map((b) => b.textContent.trim()));
 check('a reference slot offers "From the Kit"', menu.some((t) => t.startsWith('From the Kit')), menu.join(' | '));
 await page.keyboard.press('Escape');
+const keepOnVideo = await page.evaluate(() => { const k = document.querySelector('.panel-quick .keep-field'); return !!k && !k.classList.contains('hidden'); });
+check('a video is not offered to be kept (only pictures and voices are)', !keepOnVideo);
+await page.evaluate(() => document.querySelector('.panel-quick .quick-head .icon-btn')?.click());   // back to the tiles
+await wait(500);
+await page.evaluate(() => [...document.querySelectorAll('.panel-quick button')].find((b) => b.textContent.trim().startsWith('Generate image'))?.click());
+await wait(1500);
+const keepOnImage = await page.evaluate(() => {
+  const k = document.querySelector('.panel-quick .keep-field');
+  if (!k || k.classList.contains('hidden')) return null;
+  k.querySelector('input[type=checkbox]').click();
+  return [...k.querySelectorAll('.keep-type option')].map((o) => o.textContent);
+});
+check('a picture can be kept in the Kit under a name, as a character, location, prop, outfit or style', Array.isArray(keepOnImage)
+  && keepOnImage.join(',') === 'Character,Location,Prop,Outfit,Style', String(keepOnImage));
 
 // take one out
 await page.evaluate(() => [...document.querySelectorAll('.panel-head [role="radio"], .panel-head button')].find((b) => /Kit/.test(b.title || b.getAttribute('aria-label') || b.textContent))?.click());

@@ -84,6 +84,31 @@ export function addToKitDialog({ project = 0, file = null, item = null, script =
   });
 }
 
+// "Keep the result in the Kit as …": a name and a type given before Generate, so what is made goes into the project's
+// kit under that name when it is done (a character sheet made by hand, a location plate). A picture can be kept as any
+// type but a voice; a sound only as a voice. show(kind): shown for the kind the workflow makes, hidden for the rest.
+export function keepField() {
+  const on = el('input', { type: 'checkbox', onchange: () => draw() });
+  const name = el('input', { type: 'text', class: 'keep-name', maxlength: 60, placeholder: 'Name, e.g. Maya', 'aria-label': `Name in the ${KIT}` });
+  const kind = el('select', { class: 'keep-type', 'aria-label': 'Type' });
+  const row = el('div', { class: 'keep-row hidden' }, name, kind);
+  const node = el('div', { class: 'keep-field hidden' }, el('label', { class: 'check keep-check' }, on, el('span', {}, `Keep the result in the ${KIT}`)), row);
+  let makes = '';
+  function draw() { row.classList.toggle('hidden', !on.checked); if (on.checked) name.focus(); }
+  return {
+    node,
+    show(kindMade) {
+      makes = kindMade;
+      const types = kindMade === 'audio' ? ['voice'] : kindMade === 'image' ? ['character', 'location', 'prop', 'outfit', 'style'] : [];
+      node.classList.toggle('hidden', !types.length);
+      kind.replaceChildren(...types.map((t) => el('option', { value: t }, KIT_TYPES.find((x) => x.id === t).label)));
+    },
+    // what the job keeps ({"as", "name"}), or undefined when it keeps nothing
+    value: () => (on.checked && name.value.trim() && makes ? { as: kind.value, name: name.value.trim() } : undefined),
+    reset() { on.checked = false; name.value = ''; draw(); },
+  };
+}
+
 // Pick an entry of the project's kit for a reference slot that takes `kind` (image, video or audio). Resolves with
 // the entry, or null.
 export function pickFromKit(kind, project = 0) {

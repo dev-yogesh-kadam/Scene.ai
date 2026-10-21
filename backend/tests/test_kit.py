@@ -165,3 +165,58 @@ def test_assets_saved_before_kits_can_be_brought_into_a_project(client):
     assert memory.book(client.app.state.db, me["id"], project) == []   # the agent does not see them until imported
     assert client.post("/api/kit/import", json={"project_id": project, "ids": [old]}).json()["imported"] == 1
     assert [(e["name"], e["type"]) for e in client.get("/api/kit?project=%d" % project).json()["entries"]] == [("Meera", "character")]
+
+
+def test_at_names_in_a_prompt_go_into_the_slots_that_fit_them(client, monkeypatch):
+    me = register(client)
+    project = client.post("/api/projects", json={"name": "Film"}).json()["id"]
+    violet = add(client, picture(client, me["id"], "v", project=project, about="A woman with wavy purple hair."), "Violet", "character", False, project)
+    clearing = add(client, picture(client, me["id"], "c", project=project), "Bonfire Clearing", "location", False, project)
+    schema = schema_of(client, "video/h3_master")
+    on = kit.entries(client.app.state.db, me["id"], project)
+    said, placed = kit.mentions(schema, "@Violet walks into @bonfire clearing at night. @Violet smiles. @Nobody waves.", on)
+    assert said == "the main character walks into the background at night. the main character smiles. @Nobody waves."
+    assert placed == {"201:image": violet["id"], "205:image": clearing["id"]}
+    # a slot the user filled already is left alone: the next one that fits is used
+    said, placed = kit.mentions(schema, "@Violet", on, taken={"201:image"})
+    assert (said, placed) == ("the second person", {"203:image": violet["id"]})   # 202 is the main character's other angle
+    # with no slot for her, she is said by what she shows
+    plain = dict(schema, refs=[])
+    assert kit.mentions(plain, "@Violet dances.", on) == ("A woman with wavy purple hair dances.", {})
+
+    # through the Create page: the job gets her as its reference, and the prompt the words for her slot
+    sent = []
+
+    async def upload(name, data, content_type=None):
+        sent.append(name)
+        return name
+    monkeypatch.setattr(client.app.state.comfy, "upload", upload)
+    settings = {"workflow": "video/h3_master", "values": {"100:value": "@Violet waves at the camera."}, "options": {"engine": "reference"},
+                "project_id": project}
+    made = client.post("/api/jobs", data={"settings": json.dumps(settings)})
+    assert made.status_code == 200, made.text
+    job = client.app.state.db.one("SELECT settings FROM jobs WHERE id = ?", (made.json()["id"],))
+    kept = json.loads(job["settings"])
+    assert kept["values"]["100:value"] == "the main character waves at the camera." and "201:image" in kept["refs"]
+
+
+def test_a_model_that_takes_no_pictures_is_told_what_the_always_on_entries_show():
+    on = [{"id": 1, "name": "Violet", "tag": "character", "about": "A woman with wavy purple hair, black lace top."},
+          {"id": 2, "name": "Violet", "tag": "character", "about": "Violet from the side."},
+          {"id": 3, "name": "Alice", "tag": "character", "about": "Curly red hair, pink satin dress."},
+          {"id": 4, "name": "Hazel", "tag": "character", "about": "Blonde, maroon jumpsuit."},
+          {"id": 5, "name": "Clearing", "tag": "background", "about": "A forest clearing at night with bonfires."},
+          {"id": 6, "name": "Song", "tag": "voice", "about": "A sung line."}]
+    words = kit.in_words(on)
+    assert words == ("The main character: A woman with wavy purple hair, black lace top. The second person: Curly red hair, pink satin dress. "
+                     "The background: A forest clearing at night with bonfires.")
+    assert "bonfires" not in kit.in_words(on, left_out={5})
+
+
+def test_the_agent_reads_a_script_kept_in_the_kit(client, monkeypatch):
+    register(client)
+    script = client.post("/api/kit", json={"text": "VIOLET: Do I know you?", "name": "Ep 135"}).json()
+    seen = hosted(monkeypatch, client, {"tool": "read_text", "asset": script["id"]}, {"tool": "finish", "reply": "Read it.", "steps": []})
+    client.post("/api/agent/plan", json={"instruction": "read the script"})
+    told = [m["content"] for m in seen[-1] if m["role"] == "user"]
+    assert any("VIOLET: Do I know you?" in t for t in told)

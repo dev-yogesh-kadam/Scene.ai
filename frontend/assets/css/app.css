@@ -1087,6 +1087,11 @@ a.brand { color: inherit; text-decoration: none; }
 .kit-empty p { margin: 4px 0; }
 .kit-import { display: grid; gap: 4px; max-height: 50vh; overflow-y: auto; }
 .kit-import .check { margin-top: 4px; }
+.keep-field { margin: 10px 0 4px; }
+.keep-check { margin-top: 0; font-size: 13px; }
+.keep-row { display: flex; gap: 8px; margin-top: 8px; }
+.keep-name { flex: 1; min-width: 0; }
+.keep-type { width: auto; flex: none; max-width: 140px; }
 .memory-item-text { min-width: 0; display: grid; gap: 1px; }
 .memory-item-text b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .memory-about { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

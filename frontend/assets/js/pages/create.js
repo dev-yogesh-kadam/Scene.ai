@@ -5,7 +5,7 @@ import { creditsText, el, field, segmented } from '../dom.js';
 import { store, subscribe, refreshJobs } from '../store.js';
 import { jobList } from '../components/jobs.js';
 import { mediaCard } from '../components/media.js';
-import { KIT, addToKitDialog, pickFromKit, typeForSlot } from '../components/kit.js';
+import { KIT, addToKitDialog, keepField, pickFromKit, typeForSlot } from '../components/kit.js';
 
 const ACCEPT = { image: 'image/*', video: 'video/*', audio: 'audio/*,video/*' };
 const KIND_LABEL = { video: 'Video', image: 'Image', audio: 'Audio' };
@@ -34,7 +34,8 @@ export function render(view) {
   const generateLabel = el('span', {}, 'Generate');
   const cost = el('span', { class: 'cost' });
   const generateButton = el('button', { class: 'btn generate', onclick: () => generate(false) }, generateLabel, cost);
-  const body = el('div', {}, fields, refsBlock, tips, error, el('div', { class: 'generate-bar' }, estimate, generateButton));
+  const keep = keepField();   // what is made can go into the project's kit under a name
+  const body = el('div', {}, fields, refsBlock, tips, keep.node, error, el('div', { class: 'generate-bar' }, estimate, generateButton));
   const queue = el('div');
   const recent = el('div', { class: 'media-grid compact' });
 
@@ -99,6 +100,7 @@ export function render(view) {
   async function selectWorkflow(id, saved) {
     const wf = await api('/api/workflows/' + id);
     form.wf = wf;
+    keep.show(wf.id.split('/')[0]);
     localStorage.setItem('scene.workflow.' + form.kind, id);
     form.values = Object.fromEntries(wf.controls.map((c) => [c.id, c.default]));
     form.options = Object.fromEntries(wf.options.map((o) => [o.id, o.default]));
@@ -345,7 +347,7 @@ export function render(view) {
     }
     return { workflow: form.wf.id, name: form.name, values: form.values, options: form.options,
       resolution: form.resolution, orientation: form.orientation, seed_mode: form.seedMode,
-      clips: form.wf.chain ? form.clips : 1, project_id: form.projectId, parent: form.parent, refs };
+      clips: form.wf.chain ? form.clips : 1, project_id: form.projectId, parent: form.parent, refs, keep: keep.value() };
   }
 
   let estimateTimer;
@@ -409,6 +411,7 @@ export function render(view) {
     generateLabel.textContent = 'Uploading…';
     try {
       await api('/api/jobs', { method: 'POST', body: data });
+      keep.reset();   // kept once: the next one is not kept unless asked again
       refreshJobs();
     } catch (e) { showError(e); }
     generateButton.disabled = false;

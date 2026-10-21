@@ -264,6 +264,72 @@ def described(on):
             "\"leave_out\".\n" + "\n".join(lines))
 
 
+IN_WORDS = ("character", "background", "outfit", "prop")   # the entries a prompt describes when a model takes no pictures
+IN_WORDS_CHARS = 220
+
+
+def in_words(on, left_out=()):
+    """The always-on entries in words, for a workflow that takes no reference pictures (text to image, text to video):
+    what each shows, so the model keeps them the same from the words alone. "" when there is nothing to say."""
+    left_out, seen, people, parts = set(left_out), set(), 0, []
+    for e in on:
+        if e["tag"] not in IN_WORDS or e["id"] in left_out or not e.get("about"):
+            continue
+        if e["tag"] == "character":
+            if e["name"].lower() in seen or people >= 2:
+                continue   # one description a person, and no more than two people: a prompt is not a cast list
+            seen.add(e["name"].lower())
+            said = PEOPLE[people]
+            people += 1
+        else:
+            said = SAID_AS[e["tag"]]
+        parts.append("{}: {}".format(said[0].upper() + said[1:], e["about"][:IN_WORDS_CHARS].rstrip(".")))
+    return ". ".join(parts) + "." if parts else ""
+
+
+def mentions(schema, text, all_entries, taken=(), usable=None):
+    """@names in a prompt the user wrote ("@Violet walks into @Bonfire Clearing"): each entry of the kit named so goes
+    into a free reference slot that fits it, and its name in the prompt becomes the words the model ties to that slot
+    ("the main character", "the background"). An entry with no slot for it (a model that takes no pictures) is said by
+    what it shows. Returns (the prompt, {slot id: asset id}). taken: slots that have a file; usable: the slots the
+    chosen mode reads (all when None)."""
+    named = sorted((e for e in all_entries if e["name"]), key=lambda e: -len(e["name"]))
+    if "@" not in str(text or "") or not named:
+        return text, {}
+    special = set((schema.get("slots") or {}).values())
+    taken = set(taken)
+    slots = [r for r in schema["refs"] if r["id"] not in special and (usable is None or r["id"] in usable)]
+    people = [r for r in slots if r["kind"] == "image" and re.search(SLOT_WORDS[0][1], r["label"], re.IGNORECASE) and not OTHER_ANGLE.search(r["label"])]
+    placed, words = {}, {}
+
+    def slot_for(e):
+        fits = [r for r in slots if r["id"] not in taken and e["kind"] in FITS.get(r["kind"], ())]
+        if e["tag"] == "character":
+            return next((r for r in people if r in fits), None)
+        words_for_type = dict(SLOT_WORDS).get(e["tag"])
+        return next((r for r in fits if words_for_type and re.search(words_for_type, r["label"], re.IGNORECASE)), None)
+
+    def said(e):
+        if e["id"] in words:
+            return words[e["id"]]
+        slot = slot_for(e)
+        if slot is None:   # nowhere to put it: the model is told what it shows instead
+            words[e["id"]] = (e.get("about") or e["name"])[:IN_WORDS_CHARS].rstrip(".")
+            return words[e["id"]]
+        taken.add(slot["id"])
+        placed[slot["id"]] = e["id"]
+        if e["tag"] == "character":
+            words[e["id"]] = PEOPLE[min(people.index(slot), len(PEOPLE) - 1)]
+        else:
+            words[e["id"]] = SAID_AS.get(e["tag"], "the " + TYPES.get(e["tag"], "reference"))
+        return words[e["id"]]
+
+    pattern = re.compile(r"@(" + "|".join(re.escape(e["name"]) for e in named) + r")(?![\w])", re.IGNORECASE)
+    by_name = {e["name"].lower(): e for e in named}
+    out = pattern.sub(lambda m: said(by_name[m.group(1).lower()]), str(text))
+    return out, placed
+
+
 # ---------------------------------------------------------------- the cast boards of before
 
 CAST_ROLES = (("character_1", "character"), ("character_2", "character"), ("character_3", "character"), ("outfit", "outfit"),

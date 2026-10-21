@@ -1166,11 +1166,15 @@ async def _planning(request, user, body, instruction, project):
         return text
 
     async def read_text(call):
-        row = state.db.one("SELECT name, filename FROM generations WHERE id = ? AND user_id = ? AND kind = 'text'", (call.get("item"), user["id"])) \
-            if isinstance(call.get("item"), int) else None
-        path = state.outputs.folder(user["id"]) / row["filename"] if row else None
+        if isinstance(call.get("asset"), int) and call["asset"]:   # a script kept in the project's kit
+            row = state.db.one("SELECT name, filename FROM assets WHERE id = ? AND user_id = ? AND kind = 'text'", (call["asset"], user["id"]))
+            path = state.assets_dir / str(user["id"]) / row["filename"] if row else None
+        else:
+            row = state.db.one("SELECT name, filename FROM generations WHERE id = ? AND user_id = ? AND kind = 'text'",
+                               (call.get("item"), user["id"])) if isinstance(call.get("item"), int) else None
+            path = state.outputs.folder(user["id"]) / row["filename"] if row else None
         if not path or not path.is_file():
-            return "That item is not a text in the library."
+            return "That is not a text in the library or the kit."
         words = path.read_text(encoding="utf-8-sig", errors="replace")
         if call.get("path"):
             if not run:
@@ -1487,6 +1491,14 @@ async def _plan_step(state, proposed, instruction, steps, made_by, schemas, name
     if not agent.offer(schema):
         return "{} needs reference files, and none were attached".format(schema["title"])
     uses = agent.uses_for(schema, proposed, kinds, assets)
+    left_out = [i for i in proposed.get("leave_out") or [] if isinstance(i, int)] if isinstance(proposed.get("leave_out"), list) else []
+    # A model that takes no reference pictures keeps the always-on people and places the same from words: what they show.
+    special = set((schema.get("slots") or {}).values())
+    if pinned and proposed.get("prompt") and schema["id"].split("/", 1)[0] in ("image", "video") \
+            and not any(r["kind"] in ("image", "video") for r in schema["refs"] if r["id"] not in special):
+        words = kit.in_words(pinned, left_out)
+        if words:
+            proposed = dict(proposed, prompt=proposed["prompt"].rstrip() + "\n" + words)
     # A step can start on what an earlier step of this plan makes, if that is a picture or a video
     # and this workflow has a first frame to put it in.
     earlier = made_by.get(proposed.get("after"))
@@ -1510,7 +1522,6 @@ async def _plan_step(state, proposed, instruction, steps, made_by, schemas, name
     # A shot takes the shape of the picture it starts on: a portrait picture in a landscape video comes out squashed.
     agent.shape_like(schema, settings, steps[earlier].get("shape") if chained else shapes.get(start))
     # The project's always-on entries go into every slot meant for them that the step left empty, but those it leaves out.
-    left_out = [i for i in proposed.get("leave_out") or [] if isinstance(i, int)] if isinstance(proposed.get("leave_out"), list) else []
     uses = uses + [dict(fill, cast=True) for fill in kit.fills(
         schema, pinned, {use["slot"] for use in uses}, {use["asset"] for use in uses if use.get("asset")}, left_out,
         {use["id"] for use in uses if use["id"]} | ({start} if start else set()))]

@@ -4,7 +4,7 @@
 import { api } from '../api.js';
 import { el, icon, segmented } from '../dom.js';
 import { store, subscribe, refreshJobs } from '../store.js';
-import { KIT, pickFromKit } from './kit.js';
+import { KIT, keepField, pickFromKit } from './kit.js';
 import { addMenu } from './agent.js';
 import { motionForm, sequenceForm } from './motion.js';
 
@@ -94,7 +94,7 @@ export function quickActions({ startFrom = () => null, projectId = () => null, p
         el('button', { class: 'icon-btn', title: 'Back to quick actions', 'aria-label': 'Back to quick actions', onclick: () => show('home') }, icon('back')),
         title),
       el('div', { class: 'quick-body' }, model, about, modes, source,
-promptField, texts, note),
+promptField, texts, keep.node, note),
       el('div', { class: 'quick-foot' }, pills, button));
     if (form.wf && !changed) draw(); else loadCatalog().catch(showError);
   }
@@ -146,6 +146,7 @@ promptField, texts, note),
   const cost = el('span', { class: 'cost' });
   const time = el('span', { class: 'slate-text' });
   const button = el('button', { class: 'btn generate', title: 'Generate (Ctrl or ⌘ + Enter)', onclick: () => generate() }, label, cost);
+  const keep = keepField();   // what is made can go into the project's kit under a name
 
   const byRole = (role) => form.wf && form.wf.controls.find((c) => c.role === role);
   // Whether the workflow reads this slot with the choices made: some belong to one mode only. A file left in a slot
@@ -226,6 +227,7 @@ promptField, texts, note),
       segmented(o.choices, form.options[o.id], (id) => { form.options[o.id] = id; draw(); }),
       el('div', { class: 'hint' }, (o.choices.find((c) => c.id === form.options[o.id]) || {}).hint || ''))));
     promptField.classList.toggle('hidden', !byRole('prompt'));
+    keep.show(wf.id.split('/')[0]);
     drawSource();
     texts.replaceChildren(...wf.controls.filter((c) => c.primary && c.type === 'text' && !c.role).map((c) =>
       el('div', { class: 'field' }, el('div', { class: 'label' }, short(c.label)),
@@ -348,7 +350,7 @@ promptField, texts, note),
     for (const [id, r] of Object.entries(form.refs)) if (r.assetId && used().has(id)) refs[id] = { asset_id: r.assetId };
     return { workflow: form.wf.id, name: source ? `${source.name} upscaled` : form.wf.id.split('/')[1], values: form.values, options: form.options,
       resolution: form.resolution, orientation: form.orientation, seed_mode: 'random', clips: 1, project_id: projectId(), parent, refs,
-      source_seconds: (source && source.seconds) || undefined };
+      source_seconds: (source && source.seconds) || undefined, keep: keep.value() };
   }
 
   let estimateTimer;
@@ -398,6 +400,7 @@ promptField, texts, note),
       data.append('settings', JSON.stringify(settings(extra, made && made.itemId ? made.itemId : null)));
       for (const [id, r] of Object.entries(form.refs)) if (r.file && used().has(id)) data.append('ref:' + id, r.file, r.name);
       await api('/api/jobs', { method: 'POST', body: data });
+      keep.reset();   // kept once: the next one is not kept unless asked again
       refreshJobs();
       refreshEstimate();   // the balance changed. After a failure it is left alone: it would clear the message
     } catch (e) { showError(e); }
