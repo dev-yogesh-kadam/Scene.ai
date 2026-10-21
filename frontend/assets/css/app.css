@@ -566,7 +566,6 @@ svg.run rect { fill: none; rx: 12px; stroke: var(--accent); stroke-width: 2; str
 .canvas.picking .frame, .picking .frame { cursor: copy; }
 .picking .frame:hover .shot { outline: 2px solid var(--agent); outline-offset: 2px; }
 /* The list of frames for "@name" in the agent's message, built like the skill menu. */
-.mention-item .mention-thumb { width: 28px; height: 28px; border-radius: 6px; }
 .frame:hover .frame-attach, .frame-attach:focus-visible { opacity: 1; transform: none; }
 .frame-attach:hover { background: var(--agent); color: #0b1a2b; border-color: transparent; }
 @media (hover: none) { .frame-attach { opacity: 1; transform: none; } }

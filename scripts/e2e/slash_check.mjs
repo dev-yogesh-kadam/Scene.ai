@@ -49,6 +49,12 @@ await wait(1500);
 const box = '.agent-input, [contenteditable="true"]';
 await page.click(box);
 
+// "@" is only a character: nothing opens (files are attached with + or from the canvas)
+await page.keyboard.type('@do');
+await wait(500);
+check('typing @ opens no list of frames', !(await page.$('.agent-mentionmenu')) && !(await page.$('.agent-skillmenu')));
+for (let i = 0; i < 3; i += 1) await page.keyboard.press('Backspace');
+
 // mid-sentence
 await page.keyboard.type('a short film about a dog /' + target.slice(0, 4));
 await wait(500);

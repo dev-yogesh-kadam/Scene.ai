@@ -351,71 +351,6 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     rememberCaret();
   }
 
-  // ------------------------------------------------------------ @name: attach a frame of the project by its name
-
-  let mention = null;   // while "@name" is being typed: {menu, rows, at, node, start, end, query}
-  // The "@words" just before the cursor, or null.
-  function mentionQuery() {
-    const sel = window.getSelection();
-    if (!sel.rangeCount || !sel.isCollapsed) return null;
-    const { startContainer: node, startOffset: offset } = sel.getRangeAt(0);
-    if (node.nodeType !== Node.TEXT_NODE || !input.contains(node)) return null;
-    const m = /(?:^|\s)@([^\s@]{0,40})$/.exec(node.textContent.slice(0, offset));
-    return m ? { node, start: offset - m[1].length - 1, end: offset, query: m[1].toLowerCase() } : null;
-  }
-  // The project's frames that fit what was typed, newest first, leaving out what is attached already.
-  function mentionRows(query) {
-    const taken = new Set(chipsIn().map((c) => Number(c.dataset.id)));
-    return [...(items() || [])].reverse().filter((i) => !taken.has(i.id) && (!query || i.name.toLowerCase().includes(query))).slice(0, 8);
-  }
-  function drawMention() {
-    const list = mention.rows.length ? mention.rows.map((item, idx) => el('button', { type: 'button', role: 'option',
-      class: 'skillmenu-item mention-item' + (idx === mention.at ? ' on' : ''), 'aria-selected': String(idx === mention.at),
-      onmouseenter: () => { mention.at = idx; drawMention(); },
-      onmousedown: (e) => { e.preventDefault(); pickMention(item); } },
-      el('span', { class: 'attach-thumb mention-thumb' }, still(`/api/library/${item.id}/file`, item.kind)),
-      el('span', { class: 'skillmenu-text' }, el('b', {}, item.name), el('span', { class: 'skillmenu-desc' }, item.kind))))
-      : [el('div', { class: 'skillmenu-empty muted small' }, 'No frame by that name in this project.')];
-    mention.menu.replaceChildren(el('div', { class: 'skillmenu-label' }, 'Attach a frame'), ...list);
-  }
-  const mentionOutside = (e) => { if (mention && !mention.menu.contains(e.target) && !input.contains(e.target)) hideMention(); };
-  function onMention() {
-    const found = mentionQuery();
-    if (!found) { hideMention(); return; }
-    if (!mention) {
-      mention = { menu: el('div', { class: 'agent-skillmenu agent-mentionmenu', role: 'listbox' }), at: 0 };
-      composer.prepend(mention.menu);
-      document.addEventListener('pointerdown', mentionOutside, true);
-    }
-    const rows = mentionRows(found.query);
-    Object.assign(mention, found, { rows, at: Math.min(mention.at, Math.max(0, rows.length - 1)) });
-    drawMention();
-  }
-  function hideMention() {
-    if (!mention) return;
-    mention.menu.remove();
-    mention = null;
-    document.removeEventListener('pointerdown', mentionOutside, true);
-  }
-  // The "@words" give way to the frame's chip, at the same place.
-  function pickMention(item) {
-    const range = document.createRange();
-    range.setStart(mention.node, mention.start);
-    range.setEnd(mention.node, mention.end);
-    range.deleteContents();
-    caret = range;
-    hideMention();
-    attach(item);
-    drawSuggest();
-  }
-  function mentionKey(e) {   // arrows, Enter/Tab, Escape while the list is open; true when it handled the key
-    if (e.key === 'ArrowDown') { e.preventDefault(); mention.at = Math.min(mention.rows.length - 1, mention.at + 1); drawMention(); return true; }
-    if (e.key === 'ArrowUp') { e.preventDefault(); mention.at = Math.max(0, mention.at - 1); drawMention(); return true; }
-    if ((e.key === 'Enter' || e.key === 'Tab') && mention.rows[mention.at]) { e.preventDefault(); pickMention(mention.rows[mention.at]); return true; }
-    if (e.key === 'Escape') { e.preventDefault(); hideMention(); return true; }
-    return false;
-  }
-
   const log = el('div', { class: 'agent-log' });
   // A button to the newest message, while the conversation is scrolled up.
   const toEnd = el('button', { type: 'button', class: 'agent-to-end hidden', title: 'Go to the newest', 'aria-label': 'Go to the newest message',
@@ -427,15 +362,14 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
 
   // The message is typed text with chips in it, one per attached item, so the words around a chip say what it is for.
   const input = el('div', { class: 'agent-input', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Message',
-    'data-placeholder': 'Ask the agent, or tell it what to make. Use + or type @ to attach a file.',
+    'data-placeholder': 'Ask the agent, or tell it what to make. Use + to attach a file.',
     onkeydown: (e) => {
-      if (mention && mentionKey(e)) return;   // while typing @name, the keys drive the list of frames
       if (skillMode === 'slash' && skillKey(e)) return;   // while typing /name, the keys drive the inline menu
       if (e.key !== 'Enter') return;
       e.preventDefault();
       if (e.shiftKey) document.execCommand('insertLineBreak'); else send();
     },
-    oninput: () => { onInputChanged(); onMention(); },
+    oninput: () => onInputChanged(),
     onpaste: (e) => {   // only the words of what is pasted, never its markup
       e.preventDefault();
       document.execCommand('insertText', false, (e.clipboardData || window.clipboardData).getData('text/plain'));
@@ -457,7 +391,7 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
     sendButton.removeAttribute('title');
     sendButton.ariaLabel = tip;
     sendButton.classList.toggle('stopping', stopping);
-    input.dataset.placeholder = stopping ? 'Waiting for response…' : 'Ask the agent, or tell it what to make. Use + or type @ to attach a file.';
+    input.dataset.placeholder = stopping ? 'Waiting for response…' : 'Ask the agent, or tell it what to make. Use + to attach a file.';
     if (!pending) input.contentEditable = stopping ? 'false' : 'true';
     if (input.parentNode) input.parentNode.classList.toggle('waiting', stopping);   // the box cannot be used: clicks in it select nothing
   };
@@ -1888,5 +1822,5 @@ export function agentPanel({ projectId = () => 0, onJobs = () => {}, onMemory = 
   // attach(item): put a library item into the message. reload(): the project changed. redraw(): the canvas moved
   // things, so where each result is ("Shot 3 › Take 2") is drawn again.
   return { node, attach: (item) => { attach(item); drawSuggest(); }, selectionChanged: drawSuggest, reload: load, redraw: () => drawLog(), focus: () => input.focus(),
-    destroy: () => { unsubscribe(); clearInterval(ticker); stopWhimsy(); hideSkillMenu(); hideMention(); document.removeEventListener('selectionchange', rememberCaret); } };
+    destroy: () => { unsubscribe(); clearInterval(ticker); stopWhimsy(); hideSkillMenu(); document.removeEventListener('selectionchange', rememberCaret); } };
 }
