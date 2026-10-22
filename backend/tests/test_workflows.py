@@ -163,12 +163,33 @@ def master(**settings):
 
 def test_every_video_workflow_has_a_presets_file_and_only_drafts_stay_archived():
     flows = sorted(p.stem for p in VIDEO.glob("*.json") if not p.name.endswith(".studio.json"))
-    assert len(flows) == 11 and "h3_master" in flows and "h3_chunk" in flows
+    assert len(flows) == 20 and {"h3_master", "h3_chunk", "h3_all_in_one", "model_router", "video_wan_animate2"} <= set(flows)
     for name in flows:
         profile = json.loads((VIDEO / (name + ".studio.json")).read_text(encoding="utf-8"))
         assert profile["title"] and not profile.get("replaces"), name
-    assert sorted(p.name for p in ARCHIVE.glob("*.json")) == [
-        "ai_influencer_seedvr2_backup.json", "h3_director_draft_api.json", "h3_director_draft_backup.json"]
+    assert sorted(p.name for p in ARCHIVE.glob("*.json")) == [   # kept, not offered: drafts, and two the render PC cannot run yet
+        "FreeVideo-All-in-One.json", "ai_influencer_seedvr2_backup.json", "h3_director_draft_api.json", "h3_director_draft_backup.json",
+        "llm_qwen3vl_text_gen.json"]
+
+
+def test_every_picture_workflow_has_a_presets_file_and_the_new_family_its_shape_and_upscale():
+    image = VIDEO.parent / "image"
+    flows = sorted(p.stem for p in image.glob("*.json") if not p.name.endswith(".studio.json"))
+    assert len(flows) == 24
+    for name in flows:
+        profile = json.loads((image / (name + ".studio.json")).read_text(encoding="utf-8"))
+        assert profile["title"], name
+        if name.startswith("image_t2i_"):   # one shape: an aspect ratio, and a final upscale to switch on
+            assert {(c["node"], c["input"]) for c in profile["controls"]} >= {("37", "aspect_ratio"), ("45", "switch")}, name
+            assert profile["defaults"]["100:value"] == "", name   # the sample prompt is not left in the box
+
+
+def test_a_workflow_of_a_fixed_length_is_billed_for_it():
+    import asyncio
+    from scene.api import studio
+    wf = {"id": "video/h3_15s_720p", "profile": {"pricing": {"fixed_seconds": 15}}}
+    schema = {"options": [], "controls": [], "size": None}
+    assert asyncio.run(studio.billed_seconds(None, wf, schema, {})) == 15.0
 
 
 def influencer(name, **settings):

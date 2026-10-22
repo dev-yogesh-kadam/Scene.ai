@@ -124,7 +124,7 @@ def test_a_local_model_runs_a_long_skill_with_its_tools(client, monkeypatch, tmp
     shipped = skills.load
     monkeypatch.setattr(skills, "load", lambda folder=None: shipped(tmp_path))
     brain = client.app.state.agent
-    brain.tools, brain.context = True, 16384   # a small context: the skill (51k characters) is read in parts
+    brain.tools, brain.context = True, 32768   # a small context: the skill (51k characters) is read in parts
     monkeypatch.setattr(brain, "preflight", lambda *a, **k: asyncio.sleep(0, {"ready": True, "missing": [], "unsupported": [], "adaptation": "", "message": ""}))
     sent = ollama(monkeypatch, brain, [
         {"tool": "read_skill", "args": {"op": "pm", "query": "1"}},

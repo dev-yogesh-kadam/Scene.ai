@@ -1057,7 +1057,10 @@ def test_every_workflow_is_listed_in_the_section_of_its_kind(client):
     assert {w for w in listed if w.startswith("video/")} == {
         "video/h3_master", "video/h3_director", "video/video_minimax_h3_i2v", "video/video_minimax_h3_r2v", "video/ai_influencer",
         "video/MiniMax_H3_AI_Influencer", "video/MiniMax_H3_AI_Influencer_v2", "video/ref2va_vsa_4step_rtx4090_v2", "video/comfy_plus_codex",
-        "video/h3_chunk", "video/video_lipsync"}
+        "video/h3_chunk", "video/video_lipsync",
+        # the render PC's workflows of 22 October
+        "video/character_video_master", "video/h3_15s_720p", "video/h3_all_in_one", "video/model_router", "video/product_ad_studio",
+        "video/talking_head_narration", "video/video_ltx2_5_t2v", "video/video_wan_animate2", "video/video_wan_animate2_distilled"}
     assert {w["kind"] for w in listed.values()} == {"video", "image", "audio", "upscaler"}
     assert client.get("/api/workflows/video/h3_director").json()["id"] == "video/h3_director"
 

@@ -1,0 +1,209 @@
+{
+  "title": "Talking Head / Narration",
+  "description": "A portrait and a voice make a lip-synced talking video: MiniMax H3 (best quality, up to 15 s) or Wan 2.2 S2V (long form, up to about 29 s).",
+  "output_name": "92.filename_prefix",
+  "labels": {
+    "4:value": "Describe the delivery, motion and camera (not the words). Call the portrait <Picture 1>.",
+    "2:image": "Portrait (the face large and sharp)",
+    "3:audio": "Voice (an audio file, or a video's sound)",
+    "5:value": "Start offset in the voice file (seconds)",
+    "14:value": "Upscale: short edge"
+  },
+  "defaults": {
+    "4:value": ""
+  },
+  "required_refs": [
+    "2:image",
+    "3:audio"
+  ],
+  "hide": [
+    "7",
+    "8",
+    "10",
+    "12",
+    "13",
+    "35",
+    "53",
+    "58",
+    "60",
+    "63",
+    "66",
+    "69",
+    "72",
+    "89"
+  ],
+  "options": [
+    {
+      "id": "engine",
+      "label": "Engine",
+      "default": "h3",
+      "top": true,
+      "choices": [
+        {
+          "id": "h3",
+          "label": "MiniMax H3",
+          "hint": "best quality lip sync, up to 15 s"
+        },
+        {
+          "id": "wan",
+          "label": "Wan 2.2 S2V",
+          "hint": "long form, up to about 29 s, 16 fps, several minutes a part"
+        }
+      ]
+    },
+    {
+      "id": "shape",
+      "label": "Shape",
+      "default": "portrait",
+      "choices": [
+        {
+          "id": "portrait",
+          "label": "9:16",
+          "hint": "vertical"
+        },
+        {
+          "id": "landscape",
+          "label": "16:9",
+          "hint": "landscape"
+        }
+      ]
+    },
+    {
+      "id": "quality",
+      "label": "H3 quality",
+      "default": "draft",
+      "choices": [
+        {
+          "id": "draft",
+          "label": "Draft",
+          "hint": "8-step turbo"
+        },
+        {
+          "id": "final",
+          "label": "Final",
+          "hint": "the full model"
+        }
+      ]
+    },
+    {
+      "id": "voice",
+      "label": "Saved sound",
+      "default": "mine",
+      "choices": [
+        {
+          "id": "mine",
+          "label": "My voice file",
+          "hint": "your exact audio in the saved video"
+        },
+        {
+          "id": "model",
+          "label": "H3's sound",
+          "hint": "H3's re-rendered audio, with room tone"
+        }
+      ]
+    },
+    {
+      "id": "upscale",
+      "label": "Upscale",
+      "default": "off",
+      "choices": [
+        {
+          "id": "off",
+          "label": "Off",
+          "hint": "the native size"
+        },
+        {
+          "id": "on",
+          "label": "On",
+          "hint": "SeedVR2 7B sharp"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "engine": "h3"
+      },
+      "set": {
+        "7.value": true
+      }
+    },
+    {
+      "when": {
+        "engine": "wan"
+      },
+      "set": {
+        "7.value": false
+      }
+    },
+    {
+      "when": {
+        "shape": "portrait"
+      },
+      "set": {
+        "8.value": true
+      }
+    },
+    {
+      "when": {
+        "shape": "landscape"
+      },
+      "set": {
+        "8.value": false
+      }
+    },
+    {
+      "when": {
+        "quality": "draft"
+      },
+      "set": {
+        "10.value": false
+      }
+    },
+    {
+      "when": {
+        "quality": "final"
+      },
+      "set": {
+        "10.value": true
+      }
+    },
+    {
+      "when": {
+        "voice": "mine"
+      },
+      "set": {
+        "12.value": true
+      }
+    },
+    {
+      "when": {
+        "voice": "model"
+      },
+      "set": {
+        "12.value": false
+      }
+    },
+    {
+      "when": {
+        "upscale": "off"
+      },
+      "set": {
+        "13.value": false
+      }
+    },
+    {
+      "when": {
+        "upscale": "on"
+      },
+      "set": {
+        "13.value": true
+      }
+    }
+  ],
+  "hints": [
+    "Describe the delivery, not the words: \"speaks warmly to camera, small natural nods\".",
+    "For more than 15 s with H3, split the voice into 10-15 s pieces with the start offset and cut between them."
+  ]
+}

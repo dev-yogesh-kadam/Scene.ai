@@ -1,0 +1,44 @@
+{
+  "title": "MOSS Image",
+  "description": "Text to image with MOSS Image. A built-in prompt engineer rewrites the prompt first.",
+  "output_name": "9.filename_prefix",
+  "labels": {
+    "100:value": "Describe the image: subject, setting, light and style.",
+    "106:value": "Seed",
+    "101:value": "Negative prompt (what to keep out of the picture)"
+  },
+  "defaults": {
+    "100:value": ""
+  },
+  "hide": [
+    "510"
+  ],
+  "controls": [
+    {
+      "node": "37",
+      "input": "aspect_ratio",
+      "type": "choice",
+      "primary": true,
+      "choices": [
+        "1:1",
+        "16:9",
+        "9:16",
+        "4:3"
+      ],
+      "label": "Aspect ratio"
+    },
+    {
+      "node": "45",
+      "input": "switch",
+      "type": "bool",
+      "primary": true,
+      "label": "Final quality: upscale with SeedVR2 7B (slower; off = quick draft upscale)"
+    }
+  ],
+  "hints": [
+    "Describe the picture in full: who or what, where, the light, the camera and the style.",
+    "Aspect ratio sets the shape. Final quality upscales with SeedVR2 7B: sharper, and slower than the draft upscale.",
+    "Put the exact words you want written in the picture in quotes.",
+    "The negative prompt lists what to keep out of the picture."
+  ]
+}

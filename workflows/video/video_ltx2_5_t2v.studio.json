@@ -1,0 +1,22 @@
+{
+  "title": "LTX-2.5",
+  "description": "Text to video with LTX-2.5 (Lightricks), with sound: cinematic motion and camera moves, fast.",
+  "output_name": "75.filename_prefix",
+  "labels": {
+    "405:376:value": "Describe the shot: who, where, the action, the camera and the sound.",
+    "405:362:value": "Length (seconds)",
+    "405:383:value": "Prompt enhance (expands a short prompt first)"
+  },
+  "defaults": {
+    "405:376:value": ""
+  },
+  "hide": [
+    "405:361",
+    "405:339",
+    "405:373"
+  ],
+  "hints": [
+    "Describe the camera move in words: \"slow push in\", \"handheld\", \"orbit\".",
+    "Prompt enhance helps a short prompt; a detailed prompt does not need it."
+  ]
+}

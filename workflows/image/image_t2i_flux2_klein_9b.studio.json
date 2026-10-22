@@ -1,0 +1,41 @@
+{
+  "title": "FLUX.2 klein 9B",
+  "description": "Text to image with FLUX.2 klein 9B: quick, with more detail than the 4B.",
+  "output_name": "9.filename_prefix",
+  "labels": {
+    "100:value": "Describe the image: subject, setting, light and style.",
+    "106:value": "Seed"
+  },
+  "defaults": {
+    "100:value": ""
+  },
+  "hide": [],
+  "controls": [
+    {
+      "node": "37",
+      "input": "aspect_ratio",
+      "type": "choice",
+      "primary": true,
+      "choices": [
+        "1:1",
+        "16:9",
+        "9:16",
+        "4:3"
+      ],
+      "label": "Aspect ratio"
+    },
+    {
+      "node": "45",
+      "input": "switch",
+      "type": "bool",
+      "primary": true,
+      "label": "Final quality: upscale with SeedVR2 7B (slower; off = quick draft upscale)"
+    }
+  ],
+  "hints": [
+    "Describe the picture in full: who or what, where, the light, the camera and the style.",
+    "Aspect ratio sets the shape. Final quality upscales with SeedVR2 7B: sharper, and slower than the draft upscale.",
+    "Put the exact words you want written in the picture in quotes.",
+    "This model has no negative prompt: say what you want to see, not what to avoid."
+  ]
+}

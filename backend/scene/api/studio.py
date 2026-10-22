@@ -45,6 +45,10 @@ async def billed_seconds(state, wf, schema, settings, user_id=None):
     ctx = workflows.context(schema, settings)
     if ctx.get("duration"):
         return ctx["duration"] * ctx.get("clips", 1)
+    # A workflow that always makes the same length says so in its presets file ({"pricing": {"fixed_seconds": 15}}).
+    fixed = (wf["profile"].get("pricing") or {}).get("fixed_seconds")
+    if isinstance(fixed, (int, float)) and not isinstance(fixed, bool) and fixed > 0:
+        return float(fixed)
     # A workflow whose length is not a duration control names the control in its presets file.
     named = (wf["profile"].get("pricing") or {}).get("seconds")
     control = next((c for c in schema["controls"] if c["id"] == named), None)
