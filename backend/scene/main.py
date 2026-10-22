@@ -132,6 +132,7 @@ def create_app(settings=None):
         app.state.jobs = JobManager(db, comfy, catalog, credits, app.state.outputs, notify, storage / "tmp", settings.node_path,
                                     storage / "assets")
         app.state.jobs.gpu = turns
+        app.state.jobs.agent = agent   # writes the captions some image models need, just before they render
         workers = [asyncio.create_task(app.state.jobs.run_forever()), asyncio.create_task(app.state.jobs.run_forever(local=True))]
         if settings.backup_keep > 0:
             copies = (db, app.state.backup_dir, settings.config_file, settings.backup_keep)

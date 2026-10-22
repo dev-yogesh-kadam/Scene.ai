@@ -359,7 +359,11 @@ export function render(view) {
     const before = JSON.stringify(layout);
     const jobs = store.jobs.filter((j) => ACTIVE.includes(j.status) && (!project || j.project_id === project));
     const known = new Set(items.map((i) => i.id));
-    const live = new Set(jobs.map((j) => 'job:' + j.id));
+    // A job that has just finished keeps its place until what it made comes in (a moment later), so the result lands
+    // where the job was and the shots never trade places. Two minutes at most: a job may make nothing to show here.
+    const landing = store.jobs.filter((j) => j.status === 'done' && (!project || j.project_id === project) && j.finished
+      && Date.now() / 1000 - j.finished < 120 && !items.some((i) => i.job_id === j.id));
+    const live = new Set([...jobs, ...landing].map((j) => 'job:' + j.id));
     for (const item of [...items].reverse()) {   // oldest first, so shots are numbered in the order they were made
       if (rowOf(item.id)) continue;
       const held = item.job_id && rowOf('job:' + item.job_id);   // finished work takes the place its job was holding
@@ -444,7 +448,8 @@ export function render(view) {
       frame.node.classList.toggle('waiting', waiting);
       frame.clock.textContent = waiting ? 'queued' : elapsed(job);   // how long it has been at it; no percentage
       frame.film.set(done);   // a reel that fills, and what the job is at in words, in place of a step count
-      frame.fact.textContent = waiting ? `position ${job.position}` : job.steps ? phaseOf(done) : 'Setting up the shot';
+      // before its steps start, what the worker says it is at ("Writing the caption…", "Waiting for the GPU…")
+      frame.fact.textContent = waiting ? `position ${job.position}` : job.steps ? phaseOf(done) : job.node || 'Setting up the shot';
     }
     hint.classList.toggle('hidden', boxes.size > 0);
   }

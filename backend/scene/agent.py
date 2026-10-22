@@ -618,6 +618,15 @@ class Agent:
         """How many characters of a skill a model is given whole; a longer skill is read in parts (read_skill)."""
         return None if not self.is_local(model) else int(self.reads(model) * CHARS_PER_TOKEN * SKILL_SHARE)
 
+    async def smallest(self):
+        """The smallest local model Ollama has, for a small job no one chose a model for (a caption): it loads fastest.
+        None when Ollama has none, or cannot be reached."""
+        try:
+            local = await self._local_models()
+        except AgentError:
+            return None
+        return min(local, key=lambda n: self.sizes.get(n) or 0) if local else None
+
     def helper(self, model):
         """The model for the small jobs (a better prompt, a caption, the notes, the check of a skill): the fast local model
         when one is set and a local model is in use, else the one in use."""
@@ -882,9 +891,10 @@ class Agent:
         """
         system, _, user = template.partition("[USER]")
         user = user.strip() or "TARGET IMAGE ASPECT RATIO: {{ratio}} (width:height).\nUser idea: {{original_prompt}}"
+        model = self.helper(None) or await self.smallest()
         answer = await self.chat([{"role": "system", "content": system.strip()},
                                   {"role": "user", "content": user.replace("{{ratio}}", ratio).replace("{{original_prompt}}", idea)}],
-                                 "json", context=CAPTION_CONTEXT, **({"model": self.helper(None)} if self.helper(None) else {}))
+                                 "json", context=CAPTION_CONTEXT, **({"model": model} if model else {}))
         answer.pop("_stood_in", None)   # a note of ours, not part of the caption
         if not answer:
             raise AgentError("The agent's model gave no caption back. Try again.")

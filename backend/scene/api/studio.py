@@ -131,10 +131,12 @@ async def list_jobs(request: Request, user: dict = Depends(current_user)):
     return {"jobs": request.app.state.jobs.snapshot(user["id"])}
 
 
-async def _write_caption(state, wf, settings, prompt_id):
-    """Some image models only work well with a structured JSON caption (a presets file says so with "caption").
-    A prompt in plain words is turned into one by the agent's model, with the instructions the workflow carries.
-    The plain prompt stays in settings["prompt"], which is what the library shows."""
+def _needs_caption(wf, settings, prompt_id):
+    """Some image models only work well with a structured JSON caption (a presets file says so with "caption"). A
+    prompt in plain words is turned into one by the agent's model, with the instructions the workflow carries, when
+    the job is about to render (see JobManager._captions): Generate does not wait for it, and the captions of the jobs
+    waiting are written together, so the image model stays loaded between them. The plain prompt stays in
+    settings["prompt"], which is what the library shows."""
     rule = wf["profile"].get("caption")
     plain = settings["prompt"].strip()
     if not rule or not plain:
@@ -151,11 +153,7 @@ async def _write_caption(state, wf, settings, prompt_id):
     values = settings.setdefault("values", {})
     ratio = str(values.get(rule.get("ratio")) or wf["nodes"].get(str(rule.get("ratio", "")).rpartition(":")[0], {})
                 .get("inputs", {}).get(str(rule.get("ratio", "")).rpartition(":")[2]) or "auto").split(" ")[0]
-    try:
-        values[prompt_id] = await state.agent.caption(template, plain, ratio)
-    except AgentError as error:
-        raise HTTPException(400, "This model needs a structured caption, which the agent writes from your prompt. {} "
-                                 "Nothing was charged.".format(error))
+    settings["caption"] = {"prompt": prompt_id, "template": template, "ratio": ratio}
 
 
 async def _video_seconds(state, data, filename):
@@ -265,7 +263,7 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     values = settings.get("values") or {}
     if "prompt" in roles:
         settings["prompt"] = str(values.get(roles["prompt"]["id"], roles["prompt"]["default"]) or "")
-        await _write_caption(state, wf, settings, roles["prompt"]["id"])
+        _needs_caption(wf, settings, roles["prompt"]["id"])
     settings["details"] = [[c["label"].split(" (")[0], values.get(c["id"], c["default"])] for c in schema["controls"] if not c["role"]]
     settings["workflow_title"] = schema["title"]
     quote = await price(state, wf, settings, user["id"])

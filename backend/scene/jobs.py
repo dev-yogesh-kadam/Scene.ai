@@ -20,6 +20,7 @@ import websockets
 
 from . import edits, gpu, media, memory, motion, sequence
 from .comfy import workflows
+from .agent import AgentError
 from .comfy.client import ComfyError
 from .db import as_everyone
 
@@ -47,6 +48,7 @@ class JobManager:
         self.notify = notify      # notify(user_id, library_changed=False)
         self.live = {}            # job id -> progress of the running job (not stored)
         self.gpu = gpu.Gate(lambda: False)   # the GPU it may share with the agent's model (main.py sets the real one)
+        self.agent = None         # the agent's model, which writes the captions some image models need (main.py sets it)
         self.wake = asyncio.Event()
         # A job that was running when the app stopped can't be picked up again. Waiting jobs stay queued.
         for job in db.all("SELECT id, user_id, cost FROM jobs WHERE status = 'running'"):
@@ -137,6 +139,8 @@ class JobManager:
             self._notify_all_waiting(job["user_id"])
             status, error = "done", None
             try:
+                if not local and isinstance(job["settings"].get("caption"), dict):
+                    await self._captions(job)
                 await self._run(job)
             except Cancelled:
                 status = "cancelled"
@@ -195,6 +199,39 @@ class JobManager:
             self.db.run("UPDATE jobs SET summary = ? WHERE id = ?", (job["summary"], job["id"]))
         for target, kind, ctx in made:
             self._record(job, kind, target, ctx)
+
+    async def _captions(self, job):
+        """Write the structured caption this job needs (an image model such as Ideogram is trained on them), and those of
+        every render waiting with one, in one go: the agent's model is loaded once for them all, and the renders after
+        it run one after another with the image model loaded. A caption that cannot be written fails its own job only."""
+        live = self.live[job["id"]]
+        with as_everyone():
+            rows = self.db.all("SELECT id, user_id, settings FROM jobs WHERE status = 'queued' AND settings LIKE ?", ('%"caption": {%',))
+        todo = [(job["id"], job["settings"])] + [(r["id"], json.loads(r["settings"])) for r in rows if r["id"] != job["id"]]
+
+        def waiting():
+            live["node"] = "Waiting for the GPU…"
+            self.notify(job["user_id"])
+        live["node"] = "Writing the caption…"
+        self.notify(job["user_id"])
+        if self.agent is None:
+            raise ComfyError("This model needs a structured caption, which the agent writes, and there is no agent here.")
+        async with self.gpu.use("llm", waiting, stop=lambda: live.get("cancel")):
+            for job_id, settings in todo:
+                rule = settings.get("caption")
+                if not isinstance(rule, dict):
+                    continue
+                try:
+                    caption = await self.agent.caption(rule["template"], str(settings.get("prompt") or ""), str(rule.get("ratio") or "auto"))
+                except AgentError as error:
+                    if job_id == job["id"]:
+                        raise ComfyError("This model needs a structured caption, which the agent writes from your prompt. {}".format(error))
+                    continue   # that job tries again when its turn comes
+                settings.setdefault("values", {})[rule["prompt"]] = caption
+                settings.pop("caption", None)
+                with as_everyone():
+                    self.db.run("UPDATE jobs SET settings = ? WHERE id = ?", (json.dumps(settings), job_id))
+        live["node"] = ""
 
     async def _run(self, job):
         if edits.is_edit(job["workflow"]):

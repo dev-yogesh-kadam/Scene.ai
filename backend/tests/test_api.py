@@ -372,9 +372,12 @@ def test_agent_plans_are_checked_and_priced_and_nothing_is_queued(client, monkey
     assert client.get("/api/jobs").json()["jobs"] == [] and client.get("/api/auth/me").json()["credits"] == 500
 
 
-def test_a_plain_prompt_becomes_a_caption_for_a_model_that_needs_one(tmp_path, monkeypatch):
+def test_a_plain_prompt_becomes_a_caption_just_before_it_renders_with_the_others_waiting(tmp_path, monkeypatch):
+    import asyncio
     import json
     from fastapi.testclient import TestClient
+    from scene.agent import AgentError
+    from scene.comfy.client import ComfyError
     from scene.config import Settings
     from scene.main import create_app
     folder = tmp_path / "workflows" / "image"
@@ -385,30 +388,56 @@ def test_a_plain_prompt_becomes_a_caption_for_a_model_that_needs_one(tmp_path, m
         "9": {"class_type": "SaveImage", "inputs": {"images": ["1", 0], "filename_prefix": "t"}}}))
     (folder / "captioned.studio.json").write_text(json.dumps({"caption": {"template": "5:value", "ratio": "3:shape"}, "hide": ["5:value"]}))
     app = create_app(Settings(comfy_url="http://127.0.0.1:9", first_account_local=False, ollama_url="http://127.0.0.1:9", storage_dir=str(tmp_path / "storage"),
-                              workflows_dir=str(tmp_path / "workflows")))
-    asked = {}
+                              workflows_dir=str(tmp_path / "workflows"), gpu_shared="off"))
+    asked = []
 
-    async def fake_chat(messages, answer_format, context=None):
-        asked.update(system=messages[0]["content"], user=messages[1]["content"], context=context)
-        return {"aspect_ratio": "3:4", "high_level_description": "A fox."}
+    async def fake_chat(messages, answer_format, context=None, model=None):
+        asked.append(messages[1]["content"])
+        idea = messages[1]["content"].rsplit(": ", 1)[1]
+        return {"aspect_ratio": "3:4", "high_level_description": idea.capitalize() + "."}
 
     with TestClient(app) as client:
         register(client)
+        app.state.jobs.pause(True)   # nothing renders while the test looks
         monkeypatch.setattr(app.state.agent, "chat", fake_chat)
         job = {"workflow": "image/captioned", "values": {"1:text": "a fox", "3:shape": "3:4 (Portrait Standard)"}}
-        assert client.post("/api/jobs", data={"settings": json.dumps(job)}).status_code == 200
-        queued = client.get("/api/jobs").json()["jobs"][0]["settings"]
-        assert json.loads(queued["values"]["1:text"])["high_level_description"] == "A fox." and queued["prompt"] == "a fox"
-        assert asked == {"system": "How to write a caption.", "user": "RATIO: 3:4.\nUser idea: a fox", "context": 16384}
-        asked.clear()
-        job["values"]["1:text"] = '{"aspect_ratio": "1:1", "high_level_description": "Ready."}'     # already a caption: used as it is
-        assert client.post("/api/jobs", data={"settings": json.dumps(job)}).status_code == 200 and not asked
-        monkeypatch.undo()                                                                            # the model server is down
-        job["values"]["1:text"] = "a fox"
-        waiting = len(client.get("/api/jobs").json()["jobs"])
-        refused = client.post("/api/jobs", data={"settings": json.dumps(job)})
-        assert refused.status_code == 400 and "Nothing was charged" in refused.json()["detail"]
-        assert len(client.get("/api/jobs").json()["jobs"]) == waiting
+        # Generate queues the job at once: the caption is not written yet, and the model is not asked
+        first = client.post("/api/jobs", data={"settings": json.dumps(job)}).json()["id"]
+        job["values"]["1:text"] = "an owl"
+        second = client.post("/api/jobs", data={"settings": json.dumps(job)}).json()["id"]
+        assert asked == []
+        queued = {j["id"]: j["settings"] for j in client.get("/api/jobs").json()["jobs"]}
+        assert queued[first]["values"]["1:text"] == "a fox" and queued[first]["caption"]["ratio"] == "3:4" and queued[first]["prompt"] == "a fox"
+        # already a caption: used as it is
+        job["values"]["1:text"] = '{"aspect_ratio": "1:1", "high_level_description": "Ready."}'
+        ready = client.post("/api/jobs", data={"settings": json.dumps(job)}).json()["id"]
+        assert "caption" not in {j["id"]: j["settings"] for j in client.get("/api/jobs").json()["jobs"]}[ready]
+
+        # when the first comes to render, its caption and the second's are written together
+        row = app.state.db.one("SELECT * FROM jobs WHERE id = ?", (first,))
+        row["settings"] = json.loads(row["settings"])
+        app.state.jobs.live[first] = {}
+        asyncio.run(app.state.jobs._captions(row))
+        assert asked == ["RATIO: 3:4.\nUser idea: a fox", "RATIO: 3:4.\nUser idea: an owl"]
+        assert json.loads(row["settings"]["values"]["1:text"])["high_level_description"] == "A fox." and "caption" not in row["settings"]
+        later = json.loads(app.state.db.one("SELECT settings FROM jobs WHERE id = ?", (second,))["settings"])
+        assert json.loads(later["values"]["1:text"])["high_level_description"] == "An owl." and "caption" not in later
+
+        # a caption that cannot be written fails its own job, with the reason
+        job["values"]["1:text"] = "a bear"
+        third = client.post("/api/jobs", data={"settings": json.dumps(job)}).json()["id"]
+
+        async def down(*args, **kwargs):
+            raise AgentError("The agent's model server (Ollama) can't be reached.")
+        monkeypatch.setattr(app.state.agent, "chat", down)
+        row = app.state.db.one("SELECT * FROM jobs WHERE id = ?", (third,))
+        row["settings"] = json.loads(row["settings"])
+        app.state.jobs.live[third] = {}
+        try:
+            asyncio.run(app.state.jobs._captions(row))
+            raise AssertionError("a caption that cannot be written must fail the job")
+        except ComfyError as error:
+            assert "structured caption" in str(error) and "can't be reached" in str(error)
 
 
 def test_agent_edits_selected_videos_instead_of_generating(client, monkeypatch):
