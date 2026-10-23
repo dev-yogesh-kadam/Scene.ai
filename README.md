@@ -27,8 +27,13 @@ and, when Node.js is there, installs HyperFrames into `motion/`. Then:
 1. Open http://localhost:8080.
 2. Press "Create an account" under the sign-in form. The first account becomes the admin. Signing in
    lands on All projects.
-3. Open the menu on your name, then **Admin console** and its Settings tab, and check the ComfyUI
-   address. The dot in the sidebar turns green when it answers.
+3. Open the admin console at http://localhost:8090 (or **Admin console** in the studio's menu) and
+   sign in with the same email and password. In its Settings section, check the ComfyUI address. The
+   dot in the studio's sidebar turns green when it answers.
+
+The admin console is a site of its own: its own port, its own sign-in (admins only, with their
+second step when it is on), and it is the only place the admin routes are. By default it listens on
+this computer alone; see `console_host` below.
 
 Stop the app with `Ctrl+C`.
 
@@ -81,6 +86,9 @@ Stop the app with `Ctrl+C`.
 | `api_url`, `api_key`, `api_models` | none | A hosted model service for the agent beside the local ones, for example Kimi. See [docs/servers.md](docs/servers.md). |
 | `gemini_key`, `gemini_models` | none | Google Gemini models for the agent. |
 | `host`, `port` | `0.0.0.0`, `8080` | Where the app listens. Use `127.0.0.1` to keep it to this computer. |
+| `console_host`, `console_port` | `127.0.0.1`, `8090` | Where the admin console listens. `127.0.0.1` is this computer alone; a Tailscale address (`100.x.y.z`) lets your other machines in. Never point a public tunnel at it. `console_port` `0` turns it off. |
+| `console_url` | `""` | The console's address as an admin's browser reaches it, for the studio's link. Empty means the studio's host on `console_port`. |
+| `console_hours` | `12` | How long a sign-in to the admin console lasts. |
 | `default_workflow` | none | Workflow selected for new users, for example `video/h3_master`. |
 | `allow_signup` | `true` | Whether visitors can create accounts. The first account can always be created. |
 | `database_url` | `""` | The PostgreSQL database, as `postgresql://scene_app:<password>@localhost:5432/scene`. Empty means SQLite in `storage_dir`. See [docs/database.md](docs/database.md). |

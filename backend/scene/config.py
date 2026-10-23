@@ -37,6 +37,13 @@ class Settings:
     gemini_models: str = ""       # for example "gemini-3.8-flash"; empty = ask Google and offer its Pro and Flash models
     host: str = "0.0.0.0"
     port: int = 8080
+    # The admin console is a site of its own, on its own port, with its own sign-in. It listens only where console_host
+    # says: 127.0.0.1 is this machine alone; a Tailscale address (100.x.y.z) lets your other machines in. Never point a
+    # public tunnel at it. console_port 0 turns it off.
+    console_host: str = "127.0.0.1"
+    console_port: int = 8090
+    console_url: str = ""         # the console's address as an admin's browser reaches it, for the studio's link; empty = this host, console_port
+    console_hours: int = 12       # how long a sign-in to the console lasts
     workflows_dir: str = "workflows"
     storage_dir: str = "storage"
     # PostgreSQL, as postgresql://<account>:<password>@localhost:5432/scene; empty = SQLite in storage_dir. The owner
@@ -53,6 +60,10 @@ class Settings:
     allow_signup: bool = True
     first_account_local: bool = True   # the first account (the admin) can only be made from the machine the app runs on
     session_days: int = 30
+    # While the render server does not answer, renders wait in the queue instead of failing one after another, and a
+    # render cut off by it going away goes back to the front of the queue (at most RESUMES times). Off only where there
+    # is no render server at all (the tests).
+    hold_queue_offline: bool = True
     secure_cookies: bool = False  # set true when the app is served over https
     signup_credits: int = 1000    # credits a new account starts with
     signups_per_day: int = 3      # new accounts one visitor address may make in a day; 0 = no limit

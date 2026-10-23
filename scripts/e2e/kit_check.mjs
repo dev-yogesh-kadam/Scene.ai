@@ -61,7 +61,7 @@ const rows = () => page.evaluate(() => [...document.querySelectorAll('.kit-row')
 let shown = await rows();
 check('the Kit tab lists the project\'s entries, always on first', shown.length === 2 && shown[0].name === 'Violet' && shown[0].always
   && /Always on/.test(shown[0].group) && shown[1].name === 'Clearing', JSON.stringify(shown));
-check('the panel is titled with the kit\'s name', await page.evaluate(() => document.querySelector('.panel-title').textContent) === 'Kit');
+check('the panel is titled with the kit\'s name', await page.evaluate(() => document.querySelector('.panel-title').textContent) === 'NeuralCore');
 await page.$('.side-panel').then((p) => p && p.screenshot({ path: `${OUT}/kit_1.png` }));
 
 // rename the location and switch it on
@@ -94,7 +94,7 @@ if (slot) {
   await wait(400);
 }
 const menu = await page.evaluate(() => [...document.querySelectorAll('.pop .add-menu-item')].map((b) => b.textContent.trim()));
-check('a reference slot offers "From the Kit"', menu.some((t) => t.startsWith('From the Kit')), menu.join(' | '));
+check('a reference slot offers "From the NeuralCore"', menu.some((t) => t.startsWith('From the NeuralCore')), menu.join(' | '));
 await page.keyboard.press('Escape');
 const keepOnVideo = await page.evaluate(() => { const k = document.querySelector('.panel-quick .keep-field'); return !!k && !k.classList.contains('hidden'); });
 check('a video is not offered to be kept (only pictures and voices are)', !keepOnVideo);

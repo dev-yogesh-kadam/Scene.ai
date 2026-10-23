@@ -97,10 +97,9 @@ def test_pictures_go_to_a_local_model_that_can_see(monkeypatch):
 def test_small_jobs_go_to_the_quick_model(monkeypatch):
     gemini = agent_module.service("gemini", "Gemini", "https://g.example.com", "g-key", "gemini-3.6-flash")
     brain = Agent("http://ollama", "qwen3.6:35b", services=[gemini], options={"fast": "qwen3.5:9b"})
-    sent = ollama(monkeypatch, brain, [{"direction": "A dog film."}, {"prompt": "A dog runs."}])
+    sent = ollama(monkeypatch, brain, [{"direction": "A dog film."}])
     run(brain.compact([{"role": "user", "content": "a dog film"}], model="qwen3.6:35b"))
-    run(brain.improve("dog", model="qwen3.6:35b"))
-    assert [s["model"] for s in sent] == ["qwen3.5:9b", "qwen3.5:9b"]
+    assert [s["model"] for s in sent] == ["qwen3.5:9b"]
     assert brain.helper("gemini/gemini-3.6-flash") == "gemini/gemini-3.6-flash"   # a hosted model does its own small jobs
 
 

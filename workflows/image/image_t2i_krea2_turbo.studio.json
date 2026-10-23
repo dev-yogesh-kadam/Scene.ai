@@ -1,49 +1,103 @@
 {
-  "title": "Krea 2 Turbo",
-  "description": "Text to image with Krea 2 Turbo: fast. Can refine the prompt first.",
+  "title": "Text to Image: Krea 2 Turbo",
+  "description": "Krea 2 Turbo text-to-image (Krea 2 Community License). 8-step turbo with prompt enhancer.",
   "output_name": "9.filename_prefix",
   "labels": {
-    "100:value": "Describe the image: subject, setting, light and style.",
-    "106:value": "Seed"
+    "200:image": "REFERENCE 1 (style)"
   },
-  "defaults": {
-    "100:value": ""
-  },
-  "hide": [
-    "510"
+  "required_refs": [],
+  "optional_refs": [
+    "200:image"
   ],
   "controls": [
     {
       "node": "37",
       "input": "aspect_ratio",
       "type": "choice",
-      "primary": true,
       "choices": [
         "1:1",
         "16:9",
         "9:16",
         "4:3"
       ],
-      "label": "Aspect ratio"
-    },
-    {
-      "node": "45",
-      "input": "switch",
-      "type": "bool",
-      "primary": true,
-      "label": "Final quality: upscale with SeedVR2 7B (slower; off = quick draft upscale)"
-    },
-    {
-      "node": "513",
-      "input": "value",
-      "type": "bool",
-      "label": "Refine the prompt first (an LLM rewrites it before drawing)"
+      "label": "Aspect ratio",
+      "primary": true
     }
   ],
+  "options": [
+    {
+      "id": "quality",
+      "label": "Quality",
+      "default": "draft",
+      "choices": [
+        {
+          "id": "draft",
+          "label": "Draft",
+          "hint": "fewer steps, fast upscale"
+        },
+        {
+          "id": "final",
+          "label": "Final",
+          "hint": "full steps + SeedVR2 upscale"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "quality": "draft"
+      },
+      "set": {
+        "500.steps": 8,
+        "45.switch": false
+      }
+    },
+    {
+      "when": {
+        "quality": "final"
+      },
+      "set": {
+        "500.steps": 10,
+        "45.switch": true
+      }
+    }
+  ],
+  "hide": [
+    "220",
+    "221",
+    "222",
+    "223",
+    "224",
+    "225",
+    "38",
+    "39",
+    "40",
+    "41",
+    "42",
+    "43",
+    "44",
+    "45",
+    "47",
+    "500",
+    "501",
+    "502",
+    "503",
+    "504",
+    "505",
+    "506",
+    "507",
+    "508",
+    "509",
+    "510",
+    "511",
+    "512",
+    "513"
+  ],
+  "pricing": {},
   "hints": [
-    "Describe the picture in full: who or what, where, the light, the camera and the style.",
-    "Aspect ratio sets the shape. Final quality upscales with SeedVR2 7B: sharper, and slower than the draft upscale.",
-    "Put the exact words you want written in the picture in quotes.",
-    "This model has no negative prompt: say what you want to see, not what to avoid."
+    "8-step turbo with prompt enhancer.",
+    "Optional reference 1 is a style image: the picture takes its look (colours, medium, mood), not its content.",
+    "Sizes: 1:1 1536x1536, 16:9 2752x1536, 9:16 1536x2752, 4:3 2048x1536 (rendered at the model's native size, then upscaled)."
   ]
 }

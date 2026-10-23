@@ -9,16 +9,23 @@ from test_api import register
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 
 
+def film(client):
+    """The test's project: a NeuralCore belongs to a project, and there is none outside one."""
+    if not getattr(client, "film", None):
+        client.film = client.post("/api/projects", json={"name": "Film"}).json()["id"]
+    return client.film
+
+
 def save_asset(client, name, tag, use_note="", project=0):
-    """An entry of the kit (of the items in no project, unless a project is given)."""
+    """An entry of the NeuralCore of the test's project (or of the project given)."""
     return client.post("/api/kit", files={"file": (name.lower() + ".png", PNG + name.encode(), "image/png")},
-                       data={"name": name, "type": tag, "use_note": use_note, "project_id": str(project or "")}).json()["id"]
+                       data={"name": name, "type": tag, "use_note": use_note, "project_id": str(project or film(client))}).json()["id"]
 
 
-def library_item(client, user_id, name, kind="image", about=""):
+def library_item(client, user_id, name, kind="image", about="", project=None):
     return client.app.state.db.run(
-        "INSERT INTO generations (user_id, workflow, kind, name, filename, summary, settings, context, seconds, size, created, about) "
-        "VALUES (?, 'x/y', ?, ?, 'missing', '', '{\"prompt\": \"a quiet harbour at dawn\"}', '{}', 1, 1, 1, ?)", (user_id, kind, name, about))
+        "INSERT INTO generations (user_id, workflow, kind, name, filename, summary, settings, context, seconds, size, created, about, project_id) "
+        "VALUES (?, 'x/y', ?, ?, 'missing', '', '{\"prompt\": \"a quiet harbour at dawn\"}', '{}', 1, 1, 1, ?, ?)", (user_id, kind, name, about, project))
 
 
 def looks(monkeypatch, client, seen):
@@ -39,12 +46,12 @@ def test_the_book_lists_saved_assets_and_the_projects_pictures_and_describes_eac
     looks(monkeypatch, client, seen)
     meera = save_asset(client, "Meera", "character", "Use her for every shot of the girl.")
     cafe = save_asset(client, "Cafe", "background")
-    harbour = library_item(client, me["id"], "Harbour")
-    library_item(client, me["id"], "Song", kind="audio")   # a sound is not a picture to reuse
+    harbour = library_item(client, me["id"], "Harbour", project=film(client))
+    library_item(client, me["id"], "Song", kind="audio", project=film(client))   # a sound is not a picture to reuse
 
-    shown = client.get("/api/memory").json()   # the kit; the model looks at what it has not seen yet
+    shown = client.get("/api/memory?project=%d" % film(client)).json()   # the NeuralCore; the model looks at what it has not seen yet
     assert [a["name"] for a in shown["assets"]] == ["Meera", "Cafe"] and "made" not in shown
-    book = memory.book_for_model(memory.book(client.app.state.db, me["id"], 0))
+    book = memory.book_for_model(memory.book(client.app.state.db, me["id"], film(client)))
     assert [(e.get("asset"), e.get("item"), e["name"], e["type"]) for e in book] == [
         (meera, None, "Meera", "character"), (cafe, None, "Cafe", "location"),
         (None, harbour, "Harbour", "made in this project")]
@@ -56,9 +63,9 @@ def test_the_book_lists_saved_assets_and_the_projects_pictures_and_describes_eac
 
     # The descriptions are kept: the next look at the book asks the model nothing.
     seen.clear()
-    client.get("/api/memory")
+    client.get("/api/memory?project=%d" % film(client))
     assert seen == []
-    listed = {a["name"]: a for a in client.get("/api/assets").json()["assets"]}
+    listed = {a["name"]: a for a in client.get("/api/kit?project=%d" % film(client)).json()["entries"]}
     assert listed["Meera"]["about"].startswith("A girl of about nine") and listed["Meera"]["use_note"].startswith("Use her")
 
 
@@ -75,8 +82,8 @@ def test_a_failing_look_does_not_stop_the_plan_and_is_not_tried_again(client, mo
     monkeypatch.setattr(memory, "_picture", fake_picture)
     monkeypatch.setattr(client.app.state.agent, "describe", blind)
     save_asset(client, "Meera", "character")   # looked at as it is added: the look fails
-    assert client.get("/api/memory").status_code == 200
-    client.get("/api/memory")
+    assert client.get("/api/memory?project=%d" % film(client)).status_code == 200
+    client.get("/api/memory?project=%d" % film(client))
     assert tries == ["Meera"]
 
 
@@ -84,7 +91,7 @@ def test_the_agent_puts_a_saved_asset_it_knows_by_name_into_a_slot(client, monke
     me = register(client)
     meera = save_asset(client, "Meera", "character", "Use her for every shot of the girl.")
     cafe = save_asset(client, "Cafe", "background")
-    harbour = library_item(client, me["id"], "Harbour", about="A harbour at dawn.")
+    harbour = library_item(client, me["id"], "Harbour", about="A harbour at dawn.", project=film(client))
     looks(monkeypatch, client, [])
     asked = {}
 
@@ -97,7 +104,7 @@ def test_the_agent_puts_a_saved_asset_it_knows_by_name_into_a_slot(client, monke
                      {"item": harbour, "asset": 0, "slot": "205:image"}]}]}   # a picture of the project, not attached
 
     monkeypatch.setattr(client.app.state.agent, "ask", fake_ask)
-    plan = client.post("/api/agent/plan", json={"instruction": "a short film: Meera walks home in the rain"}).json()
+    plan = client.post("/api/agent/plan", json={"instruction": "a short film: Meera walks home in the rain", "project_id": film(client)}).json()
     step = plan["steps"][0]
     assert [(u.get("asset"), u["id"], u["name"], u["slot"]) for u in step["uses"]] == [
         (meera, 0, "Meera", "201:image"), (None, harbour, "Harbour", "205:image")]
@@ -113,16 +120,17 @@ def test_the_agent_puts_a_saved_asset_it_knows_by_name_into_a_slot(client, monke
 
 def test_an_asset_saved_from_the_library_keeps_what_the_model_saw_and_notes_can_be_changed(client):
     me = register(client)
-    item = library_item(client, me["id"], "Harbour", about="A harbour at dawn.")
+    item = library_item(client, me["id"], "Harbour", about="A harbour at dawn.", project=film(client))
     client.app.state.db.run("UPDATE generations SET filename = 'harbour.png' WHERE id = ?", (item,))
     folder = client.app.state.outputs.folder(me["id"])
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "harbour.png").write_bytes(PNG)
-    asset = client.post("/api/assets", json={"generation_id": item, "name": "Harbour", "tag": "background", "use_note": "For the opening."}).json()["id"]
-    saved = client.get("/api/assets").json()["assets"][0]
+    asset = client.post("/api/kit", json={"item": item, "name": "Harbour", "type": "location", "project_id": film(client)}).json()["id"]
+    client.put("/api/kit/%d" % asset, json={"use_note": "For the opening."})
+    saved = client.get("/api/kit?project=%d" % film(client)).json()["entries"][0]
     assert (saved["about"], saved["use_note"]) == ("A harbour at dawn.", "For the opening.")
-    client.put("/api/assets/%d" % asset, json={"about": "  A small harbour,\n at dawn. ", "use_note": "x" * 900})
-    saved = client.get("/api/assets").json()["assets"][0]
+    client.put("/api/kit/%d" % asset, json={"about": "  A small harbour,\n at dawn. ", "use_note": "x" * 900})
+    saved = client.get("/api/kit?project=%d" % film(client)).json()["entries"][0]
     assert saved["about"] == "A small harbour, at dawn." and len(saved["use_note"]) == 600
 
 
@@ -163,11 +171,12 @@ def test_a_file_dropped_into_a_job_is_kept_once_as_an_upload_of_its_project(clie
     # The agent knows it by name in that project.
     book = memory.book_for_model(memory.book(client.app.state.db, me["id"], project))
     assert book[0]["asset"] == upload_id and book[0]["type"] == "character"
-    # A deleted project's kit stays, in no project.
+    # A deleted project takes its NeuralCore with it: nothing is left outside a project.
     second = client.post("/api/jobs", data={"settings": json.dumps(settings)}, files={"ref:201:image": ("cafe.png", PNG + b"cafe", "image/png")})
     assert second.status_code == 200
     client.delete("/api/projects/%d" % project)
-    assert sorted(u["name"] for u in client.get("/api/kit").json()["entries"]) == ["cafe", "meera face"]
+    assert client.get("/api/kit").json()["entries"] == [] and not client.app.state.db.one("SELECT 1 FROM assets")
+    assert client.get("/api/assets/%d/file" % upload_id).status_code == 404
 
 
 def test_there_are_no_project_notes(client, monkeypatch):
@@ -210,12 +219,12 @@ def test_what_a_step_makes_for_reuse_is_kept_in_shared_memory_under_its_name(cli
         target = tmp_path / (name + ".png")
         target.write_bytes(PNG)
         job = {"id": name, "user_id": me["id"], "workflow": "image/z", "name": name, "summary": "", "started": 0,
-               "settings": {"prompt": "a woman", "keep": keep}}
+               "project_id": film(client), "settings": {"prompt": "a woman", "keep": keep}}
         jobs._record(job, "image", target, {})
 
     made("maya1", {"tag": "character", "name": "Maya"})
     made("plain", None)   # an ordinary picture is only in the library
-    shown = client.get("/api/memory").json()["assets"]
+    shown = client.get("/api/memory?project=%d" % film(client)).json()["assets"]
     assert [(a["name"], a["type"]) for a in shown] == [("Maya", "character")]
     first = db.one("SELECT id, filename, made_from FROM assets WHERE name = 'Maya'")
     assert first["made_from"] and (client.app.state.assets_dir / str(me["id"]) / first["filename"]).is_file()
@@ -228,5 +237,5 @@ def test_what_a_step_makes_for_reuse_is_kept_in_shared_memory_under_its_name(cli
     saved = save_asset(client, "Liam", "character")   # saved by the user: a step named Liam adds its own, never replaces it
     made("liam", {"tag": "character", "name": "Liam"})
     assert len(db.all("SELECT id FROM assets WHERE name = 'Liam'")) == 2 and db.one("SELECT 1 FROM assets WHERE id = ?", (saved,))
-    book = memory.book_for_model(memory.book(db, me["id"], 0))
+    book = memory.book_for_model(memory.book(db, me["id"], film(client)))
     assert {e["name"] for e in book if e.get("type") == "character"} == {"Maya", "Liam"}

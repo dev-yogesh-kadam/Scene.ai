@@ -1,8 +1,9 @@
-"""A throwaway copy of the studio for the browser check (check.mjs), on port 8099: empty SQLite storage, the real workflows and frontend, and a
-fake agent model that answers after a moment, so the live progress can be seen."""
+"""A throwaway copy of the studio for the browser check (check.mjs), on port 8099, and its admin console on 8098: empty SQLite storage, the
+real workflows and frontend, and a fake agent model that answers after a moment, so the live progress can be seen."""
 import asyncio
 import os
 import shutil
+import socket
 import sys
 import tempfile
 from pathlib import Path
@@ -14,7 +15,7 @@ os.chdir(ROOT / "backend")
 
 from scene import media  # noqa: E402
 from scene.config import Settings  # noqa: E402
-from scene.main import create_app  # noqa: E402
+from scene.main import Doors, create_app  # noqa: E402
 import uvicorn  # noqa: E402
 
 storage = HERE / "storage"
@@ -30,7 +31,7 @@ asyncio.run(media._ffmpeg("-y", "-loglevel", "error", "-f", "lavfi", "-i", "mand
 
 settings = Settings(comfy_url="http://127.0.0.1:9", ollama_url="http://127.0.0.1:9", storage_dir=str(storage), signup_credits=500,
                     first_account_local=False, workflows_dir=str(ROOT / "workflows"), frontend_dir=str(ROOT / "frontend"),
-                    default_workflow="video/h3_master", backup_keep=0)
+                    default_workflow="video/h3_master", backup_keep=0, port=8099, console_port=8098, hold_queue_offline=False)
 app = create_app(settings)
 
 
@@ -60,4 +61,5 @@ app.state.agent.pick_model = fake_pick
 app.state.agent.hosted = lambda: [{"id": "gemini", "name": "Gemini"}]
 app.state.credits.set_llm_price("gemini/gemini-3.6-flash", 2)
 app.state.agent.describe = fake_describe
-uvicorn.run(app, host="127.0.0.1", port=8099, log_level="warning")
+listen = [socket.create_server(("127.0.0.1", port)) for port in (8099, 8098)]
+uvicorn.Server(uvicorn.Config(Doors(app), log_level="warning")).run(sockets=listen)

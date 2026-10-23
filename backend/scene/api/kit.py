@@ -1,12 +1,13 @@
 """The kit of a project (see kit.py): what it is made from, by name, and what is always on in its shots.
 
-GET    /api/kit?project=          the entries, in order, and the assets saved before kits existed (to import)
+GET    /api/kit?project=          the entries, in order (none outside a project)
 POST   /api/kit                   add: a file (multipart "file", "name", "type", "project_id", "always"), a library item
                                   (JSON {"item", "name", "type", "project_id", "always"}) or a script (JSON {"text", "name"})
 PUT    /api/kit/{id}              change: name, type, about, use_note, always
 POST   /api/kit/order             {"project_id", "ids"}: the entries in this order
 DELETE /api/kit/{id}
-POST   /api/kit/import            {"project_id", "ids"}: copy assets saved before kits existed into the project
+
+What the user reads calls it the NeuralCore. Each project has its own; its modules share it; there is none outside a project.
 """
 
 import asyncio
@@ -47,8 +48,7 @@ async def get_kit(request: Request, project: int = 0, user: dict = Depends(curre
     state = request.app.state
     project = _project_id(request, user, project) or None
     describe_soon(request, user, project)
-    return {"entries": [memory.kit_row(e) for e in kit.entries(state.db, user["id"], project)],
-            "earlier": [dict(e, type=kit.TYPES.get(e["tag"], "other")) for e in kit.earlier(state.db, user["id"])],
+    return {"entries": [memory.kit_row(e) for e in kit.entries(state.db, user["id"], project)], "project": bool(project),
             "types": [{"id": tag, "label": said} for tag, said in kit.TYPES.items()]}
 
 
@@ -59,6 +59,8 @@ async def add_entry(request: Request, user: dict = Depends(current_user)):
     if request.headers.get("content-type", "").startswith("application/json"):
         body = await request.json()
         project = _project_id(request, user, body.get("project_id")) or None
+        if not project:
+            raise HTTPException(400, "The NeuralCore belongs to a project. Open a project first.")
         name, tag, always = kit.clean_name(body.get("name")), kit.tag_of(body.get("type")), bool(body.get("always"))
         if body.get("item"):
             asset = kit.add_item(state.db, folder, state.outputs.folder(user["id"]), user["id"], project, body["item"],
@@ -80,6 +82,8 @@ async def add_entry(request: Request, user: dict = Depends(current_user)):
         if not hasattr(upload, "filename"):
             raise HTTPException(400, "Choose a file.")
         project = _project_id(request, user, form.get("project_id")) or None
+        if not project:
+            raise HTTPException(400, "The NeuralCore belongs to a project. Open a project first.")
         if text_kind(upload.filename):
             data, filename = await read_text_upload(upload)
             kind = "text"
@@ -117,12 +121,3 @@ async def delete_entry(asset_id: int, request: Request, user: dict = Depends(cur
     if not kit.remove(request.app.state.db, _folder(request, user), user["id"], asset_id):
         raise HTTPException(404, "No such kit entry.")
     return {"ok": True}
-
-
-@router.post("/import")
-async def import_entries(body: dict, request: Request, user: dict = Depends(current_user)):
-    project = _project_id(request, user, body.get("project_id")) or None
-    made = kit.import_earlier(request.app.state.db, _folder(request, user), user["id"], project,
-                              [i for i in body.get("ids") or [] if isinstance(i, int)])
-    describe_soon(request, user, project)
-    return {"imported": len(made)}

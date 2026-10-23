@@ -2,7 +2,7 @@
 // Images, videos and audio each open the same form, built from the workflows of that kind.
 
 import { api } from '../api.js';
-import { el, icon, segmented } from '../dom.js';
+import { ask, el, icon, segmented } from '../dom.js';
 import { store, subscribe, refreshJobs } from '../store.js';
 import { KIT, keepField, pickFromKit } from './kit.js';
 import { addMenu } from './agent.js';
@@ -108,39 +108,13 @@ promptField, texts, keep.node, note),
   const modes = el('div');   // the choices a presets file puts first, such as which of a workflow's two modes to use
   const source = el('div', { class: 'field' });
   const prompt = el('textarea', { rows: 5, 'aria-label': 'Prompt', placeholder: 'Describe the shot',
-    oninput: (e) => { setPrompt(e.target.value); original = null; drawImprove(); },
+    oninput: (e) => setPrompt(e.target.value),
     onkeydown: (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) generate(); } });
   const texts = el('div');   // further text boxes a presets file keeps in view, such as the lyrics of a song
   const note = el('p', { class: 'error notice' });
-  // The agent rewrites the prompt into a fuller one; Undo brings back what was typed, until the prompt is edited again.
-  let original = null;
-  const improveButton = el('button', { type: 'button', class: 'btn small agent', onclick: () => (original === null ? improve() : undo()) });
-  const drawImprove = () => {
-    improveButton.replaceChildren(original === null ? 'Improve prompt' : 'Undo');
-    improveButton.title = original === null ? 'Have the agent rewrite this prompt with more detail. Costs nothing.' : 'Bring back the prompt you wrote';
-  };
   const setPrompt = (text) => { const c = byRole('prompt'); if (c) form.values[c.id] = text; };
-  const undo = () => { prompt.value = original; setPrompt(original); original = null; drawImprove(); };
-  async function improve() {
-    note.textContent = '';
-    const typed = prompt.value.trim();
-    if (!typed) return showError(new Error('Write a prompt first, then improve it.'));
-    improveButton.disabled = true;
-    improveButton.replaceChildren(el('i', { class: 'cell-mark stepping' }), 'Improving');
-    try {
-      const better = await api('/api/agent/improve', { method: 'POST', json: { prompt: typed, kind: form.kind, project_id: projectId(), workflow: form.wf ? form.wf.id : null,
-          model: localStorage.getItem('scene.agent.model') || null } });
-      if (prompt.value.trim() === typed) {   // left alone if the prompt was edited while the agent worked
-        original = prompt.value;
-        prompt.value = better.prompt;
-        setPrompt(better.prompt);
-      }
-    } catch (e) { showError(e); }
-    improveButton.disabled = false;
-    drawImprove();
-  }
-  drawImprove();
-  const promptField = el('div', { class: 'field' }, el('div', { class: 'label' }, 'Prompt', el('span', { style: 'flex:1' }), improveButton), prompt);
+  const refHint = el('div', { class: 'ref-hint hidden' });   // how this model's prompt names the references, and chips that type it
+  const promptField = el('div', { class: 'field' }, el('div', { class: 'label' }, 'Prompt'), prompt, refHint);
   const pills = el('div', { class: 'quick-pills' });
   const label = el('span');
   const cost = el('span', { class: 'cost' });
@@ -171,9 +145,19 @@ promptField, texts, keep.node, note),
   async function selectWorkflow(id) {
     const wf = await api('/api/workflows/' + id);
     const text = prompt.value;
-    for (const ref of Object.values(form.refs)) if (ref.file) URL.revokeObjectURL(ref.url);
+    // The picture references the user gave, in order, go with them to the new model, as many as it takes.
+    const carried = form.wf && form.kind === 'image' ? refSlots().map((s) => form.refs[s.id]).filter((r) => r && !r.cast) : [];
+    const before = form.refs;
     form.wf = wf;
     form.refs = {};
+    const room = refSlots();
+    carried.slice(0, room.length).forEach((ref, i) => { form.refs[room[i].id] = ref; });
+    const kept = new Set(Object.values(form.refs));
+    for (const ref of Object.values(before)) if (ref.file && !kept.has(ref)) URL.revokeObjectURL(ref.url);
+    const dropped = carried.length - Math.min(carried.length, room.length);
+    form.refNote = !dropped ? '' : room.length
+      ? `This model takes ${room.length} reference${room.length === 1 ? '' : 's'}; ${dropped} removed.`
+      : `This model makes pictures from words only; ${dropped} reference${dropped === 1 ? '' : 's'} removed.`;
     form.allRefs = false;
     form.values = Object.fromEntries(wf.controls.map((c) => [c.id, c.default]));
     form.options = Object.fromEntries(wf.options.map((o) => [o.id, o.default]));
@@ -212,22 +196,34 @@ promptField, texts, keep.node, note),
     if (page !== 'home' && page !== 'motion') drawSource();
   }
 
-  const pill = (name, choices, current, onPick) => el('select', { class: 'opt', title: name, 'aria-label': name,
+  // `priced`: "resolution" or "quality", for a choice that changes the price: each option then says what it costs.
+  const pill = (name, choices, current, onPick, priced) => el('select', { class: 'opt', title: name, 'aria-label': name, 'data-priced': priced || null,
     onchange: (e) => { onPick(e.target.value); refreshEstimate(); } },
-    choices.map((c) => el('option', { value: c.id, selected: String(c.id) === String(current) }, c.label)));
+    choices.map((c) => el('option', { value: c.id, selected: String(c.id) === String(current), 'data-label': c.label }, c.label)));
+  // "1080p · 200 cr", from what the estimate says each choice would cost.
+  const priceChoices = (choices) => {
+    for (const select of pills.querySelectorAll('select[data-priced]')) {
+      const prices = (choices || {})[select.dataset.priced] || {};
+      for (const option of select.options) {
+        const price = prices[option.value];
+        option.textContent = option.dataset.label + (price != null ? ` · ${price} cr` : '');
+      }
+    }
+  };
 
   function draw() {
     const wf = form.wf;
     takeSelection();
     model.replaceChildren(el('div', { class: 'label' }, 'Model', el('span', { style: 'flex:1' }), time),
       el('select', { 'aria-label': 'Model', onchange: (e) => selectWorkflow(e.target.value).catch(showError) },
-        form.catalog.map((w) => el('option', { value: w.id, selected: w.id === wf.id }, w.title))));
+        form.catalog.map((w) => el('option', { value: w.id, selected: w.id === wf.id }, w.title.replace(/^Text to Image:\s*/i, '')))),
+      wf.ref_naming && wf.ref_naming.license && el('div', { class: 'ref-license' }, wf.ref_naming.license));
     about.textContent = wf.description;
     modes.replaceChildren(...wf.options.filter((o) => o.top).map((o) => el('div', { class: 'field' }, el('div', { class: 'label' }, o.label),
       segmented(o.choices, form.options[o.id], (id) => { form.options[o.id] = id; draw(); }),
       el('div', { class: 'hint' }, (o.choices.find((c) => c.id === form.options[o.id]) || {}).hint || ''))));
     promptField.classList.toggle('hidden', !byRole('prompt'));
-    keep.show(wf.id.split('/')[0]);
+    keep.show(wf.id.split('/')[0], !!projectId());
     drawSource();
     texts.replaceChildren(...wf.controls.filter((c) => c.primary && c.type === 'text' && !c.role).map((c) =>
       el('div', { class: 'field' }, el('div', { class: 'label' }, short(c.label)),
@@ -241,18 +237,19 @@ promptField, texts, keep.node, note),
       set.push(pill('Length', lengths.map((d) => ({ id: d, label: d + ' s' })), form.values[dur.id], (d) => { form.values[dur.id] = Number(d); }));
     }
     if (wf.size) {
-      set.push(pill('Resolution', sizes, form.resolution, (r) => { form.resolution = Number(r); }));
+      set.push(pill('Resolution', sizes, form.resolution, (r) => { form.resolution = Number(r); }, 'resolution'));
       set.push(pill('Orientation', ORIENTATIONS.map((o) => ({ id: o, label: capital(o) })), form.orientation, (o) => { form.orientation = o; }));
     }
     const res = byRole('resolution');
-    if (res) set.push(pill('Resolution', sizes, form.values[res.id], (r) => { form.values[res.id] = Number(r); }));
+    if (res) set.push(pill('Resolution', sizes, form.values[res.id], (r) => { form.values[res.id] = Number(r); }, 'resolution'));
     // Choices a presets file keeps in view, such as the aspect ratio of a workflow that has no orientation.
     for (const c of wf.controls.filter((x) => x.primary && x.choices && !x.role)) {
       set.push(pill(c.label, c.choices.map((x) => ({ id: x, label: c.choices.every((y) => typeof y === 'string') ? x : `${short(c.label)}: ${x}` })),
         form.values[c.id], (x) => { form.values[c.id] = typeof c.default === 'number' ? Number(x) : x; }));
     }
     for (const o of wf.options.filter((x) => !x.top)) {
-      set.push(pill(o.label, o.choices.map((c) => ({ id: c.id, label: `${o.label}: ${c.label}` })), form.options[o.id], (id) => { form.options[o.id] = id; }));
+      set.push(pill(o.label, o.choices.map((c) => ({ id: c.id, label: `${o.label}: ${c.label}` })), form.options[o.id], (id) => { form.options[o.id] = id; },
+        o.id === 'quality' ? 'quality' : null));
     }
     if (form.kind !== 'upscaler') set.push(el('a', { class: 'opt', href: '/create', title: 'Open the full form on the Create page', onclick: () => { store.from = '/canvas'; } }, 'All settings'));
     pills.replaceChildren(...set);
@@ -328,8 +325,142 @@ promptField, texts, keep.node, note),
       file);
   }
 
+  // ------------------------------------------------------------ picture references (Generate image)
+
+  // The picture reference slots of the model, in order (REF 1 first), when the action makes pictures; else [].
+  function refSlots() {
+    if (form.kind !== 'image' || !form.wf) return [];
+    return form.wf.refs.filter((r) => r.kind === 'image' && inUse(r))
+      .sort((a, b) => (Number.parseFloat(a.node) || 0) - (Number.parseFloat(b.node) || 0));
+  }
+  const filledRefs = () => refSlots().filter((s) => form.refs[s.id]);
+  // "REF 1 (the base image)" when a required reference is missing, else ''.
+  function missingRef() {
+    const slots = refSlots();
+    const at = slots.findIndex((s) => s.required && !form.refs[s.id]);
+    return at < 0 ? '' : `REF ${at + 1}`;
+  }
+  const tokenOf = (n) => ((form.wf.ref_naming || {}).tokens || [])[n] || '';
+  const REMOVED = '[removed]';
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const tokenRe = (token) => new RegExp(escapeRe(token) + '(?![\\w>])', 'g');
+
+  // Put a picture into the next free reference: REF n is always the n-th slot.
+  function addRef(value) {
+    const slot = refSlots()[filledRefs().length];
+    if (!slot) return;
+    form.refNote = '';
+    setRef(slot, value);
+  }
+
+  // Take REF n out: the ones after it move up one, and so do their names in the prompt ("image 3" becomes "image 2").
+  // Where the prompt named the one taken out, it now says [removed], so no name points at the wrong picture.
+  function removeRef(index) {
+    const slots = refSlots();
+    const refs = slots.map((s) => form.refs[s.id]).filter(Boolean);
+    const [gone] = refs.splice(index, 1);
+    if (gone && gone.file) URL.revokeObjectURL(gone.url);
+    for (const s of slots) delete form.refs[s.id];
+    refs.forEach((ref, i) => { form.refs[slots[i].id] = ref; });
+    const naming = form.wf.ref_naming || {};
+    const said = tokenOf(index) && tokenRe(tokenOf(index)).test(prompt.value);
+    if (naming.unique && naming.tokens.length) {
+      let text = prompt.value.replace(tokenRe(naming.tokens[index]), REMOVED);
+      for (let n = index + 1; n < naming.tokens.length; n += 1) text = text.replace(tokenRe(naming.tokens[n]), naming.tokens[n - 1]);
+      if (text !== prompt.value) { prompt.value = text; setPrompt(text); }
+    }
+    form.refNote = !said ? '' : naming.unique
+      ? `REF ${index + 1} was removed and the others moved up. The prompt says ${REMOVED} where it named it.`
+      : `REF ${index + 1} was removed and the others moved up: check where the prompt said "${tokenOf(index)}".`;
+    drawSource();
+    refreshEstimate();
+  }
+
+  // Type a reference's name into the prompt where the cursor is.
+  function insertToken(token) {
+    const at = prompt.selectionStart ?? prompt.value.length;
+    const end = prompt.selectionEnd ?? at;
+    const before = prompt.value.slice(0, at);
+    const pad = before && !/\s$/.test(before) ? ' ' : '';
+    prompt.value = before + pad + token + prompt.value.slice(end);
+    setPrompt(prompt.value);
+    prompt.focus();
+    prompt.selectionStart = prompt.selectionEnd = at + pad.length + token.length;
+  }
+
+  // A model that makes pictures from words only: offer every one that takes references, the two best known first.
+  const SUGGESTED = { 'image/image_t2i_flux2_klein_4b': 'fast', 'image/image_ref_edit': 'best face consistency' };
+  function offerRefModels(anchor) {
+    const shownName = (w) => w.title.replace(/^Text to Image:\s*/i, '');
+    const rank = (w) => { const at = Object.keys(SUGGESTED).indexOf(w.id); return at < 0 ? 99 : at; };
+    const takers = form.catalog.filter((w) => w.picture_refs > 0)
+      .sort((a, b) => rank(a) - rank(b) || shownName(a).localeCompare(shownName(b)));
+    if (!takers.length) return showError(new Error('No picture model here takes references.'));
+    addMenu(anchor, takers.map((w) => ({ icon: 'image', label: `Switch to ${shownName(w)}`,
+      hint: [SUGGESTED[w.id], `up to ${w.picture_refs} reference${w.picture_refs === 1 ? '' : 's'}`].filter(Boolean).join(', '),
+      run: () => selectWorkflow(w.id).catch(showError) })));
+  }
+
+  function refBox(slot, index) {
+    const current = form.refs[slot.id];
+    const file = el('input', { type: 'file', accept: ACCEPT.image, hidden: true,
+      onchange: (e) => { if (e.target.files[0]) (current ? setRef(slot, e.target.files[0]) : addRef(e.target.files[0])); } });
+    const shown = current && (current.shown || 'image');
+    const preview = !current ? icon('plus')
+      : shown === 'video' ? el('video', { src: current.url + '#t=0.1', muted: true, preload: 'metadata' })
+      : el('img', { src: current.url, alt: '' });
+    const label = current ? `REF ${index + 1}` : 'REFERENCE';
+    return el('div', { class: 'slot ref-slot' },
+      el('div', { class: 'slot-label', title: slot.label }, label + (slot.required ? ' *' : '')),
+      el('div', { class: 'slot-frame' },
+        el('button', { type: 'button', class: 'slot-box' + (current ? ' filled' : ' ref-empty') + (current && current.cast ? ' cast' : ''), 'data-slot': slot.id,
+          title: current ? current.name : `Add a reference picture: upload, from the ${KIT} or from the canvas`, 'aria-haspopup': 'menu',
+          onclick: (e) => addMenu(e.currentTarget, [
+            { icon: 'upload', label: 'Upload', hint: 'Image', run: () => file.click() },
+            { icon: 'memory', label: `From the ${KIT}`, hint: 'By name', run: () => chooseSaved(slot) },
+            ...(pick ? [{ icon: 'target', label: 'From canvas', hint: 'Selected item', run: () => pick((list) => {
+              if (!dropItem(slot.id, list[0])) showError(new Error(`${list[0].name} can't be a reference: it is not a picture or a video.`));
+            }) }] : []),
+          ]),
+          ondragover: (e) => { e.preventDefault(); e.currentTarget.classList.add('over'); },
+          ondragleave: (e) => e.currentTarget.classList.remove('over'),
+          ondrop: (e) => { e.preventDefault(); e.currentTarget.classList.remove('over'); if (e.dataTransfer.files[0]) (current ? setRef(slot, e.dataTransfer.files[0]) : addRef(e.dataTransfer.files[0])); },
+        }, preview),
+        current && el('button', { type: 'button', class: 'slot-clear', title: 'Remove', 'aria-label': `Remove REF ${index + 1}`,
+          onclick: () => removeRef(index) }, '×')),
+      file);
+  }
+
+  function drawRefs() {
+    const slots = refSlots();
+    const filled = filledRefs().length;
+    if (missingRef()) {
+      button.disabled = true;
+      note.textContent = `Add ${missingRef()} to generate.`;
+    }
+    const naming = form.wf.ref_naming || {};
+    source.classList.remove('hidden');
+    const said = form.refNote && el('p', { class: 'small muted ref-note' }, form.refNote);
+    if (!slots.length) {   // words only: no boxes, but a way to a model that takes references
+      source.replaceChildren(...[said, el('button', { type: 'button', class: 'btn small quiet ref-offer', onclick: (e) => offerRefModels(e.currentTarget) },
+        icon('plus'), 'Add a reference image…')].filter(Boolean));
+      refHint.classList.add('hidden');
+      return;
+    }
+    const boxes = slots.slice(0, filled).map((s, i) => refBox(s, i));
+    if (filled < slots.length) boxes.push(refBox(slots[filled], filled));   // one empty box, until the model's maximum
+    source.replaceChildren(...[el('div', { class: 'label' }, 'References', el('span', { class: 'slate-text' }, ` · up to ${slots.length}`)),
+      el('div', { class: 'slots ref-strip' }, boxes), said].filter(Boolean));
+    // how the prompt names them, and a chip per reference that types its name
+    const chips = naming.tokens && naming.tokens.length ? slots.slice(0, filled).map((s, i) => el('button', { type: 'button', class: 'ref-chip',
+      title: `Type ${tokenOf(i)} into the prompt`, onclick: () => insertToken(tokenOf(i)) }, `+ REF ${i + 1}: ${tokenOf(i)}`)) : [];
+    refHint.replaceChildren(...[naming.hint && el('span', { class: 'small muted' }, naming.hint), ...chips].filter(Boolean));
+    refHint.classList.toggle('hidden', !naming.hint && !chips.length);
+  }
+
   function drawSource() {
     const wf = form.wf;
+    if (form.kind === 'image') { drawRefs(); refreshEstimate(); return; }
     const refs = wf.refs.filter(inUse);
     source.classList.toggle('hidden', !refs.length);
     prompt.placeholder = { image: 'Describe the image', audio: 'Describe the music' }[form.kind] || 'Describe the shot';
@@ -363,11 +494,16 @@ promptField, texts, keep.node, note),
         const made = upscaled() && form.refs[upscaled().id];
         const quote = await api('/api/estimate', { method: 'POST', json: settings({}, made && made.itemId ? made.itemId : null) });
         const lacking = quote.credits > quote.balance;
+        const needed = missingRef();
         cost.textContent = quote.credits + ' cr';
+        priceChoices(quote.choices);
         time.textContent = quote.text;
-        button.disabled = lacking;
-        note.textContent = lacking ? `You have ${quote.balance} cr. This needs ${quote.credits} cr.` : '';
-      } catch (e) { showError(e); }
+        button.disabled = lacking || !!needed;
+        note.textContent = lacking ? `You have ${quote.balance} cr. This needs ${quote.credits} cr.` : needed ? `Add ${needed} to generate.` : '';
+      } catch (e) {
+        showError(e);
+        button.disabled = !!missingRef();   // a price that could not be fetched does not stop Generate; a missing reference does
+      }
     }, 150);
   }
 
@@ -385,7 +521,8 @@ promptField, texts, keep.node, note),
     const missing = form.wf.refs.filter(inUse).find((r) => !r.optional && !form.refs[r.id]);
     if (missing) return showError(new Error(`Add a file for "${short(missing.label)}".`));
     const hits = warnings();
-    if (hits.length && !confirm(hits.map((h) => h.message).join('\n') + `\n\nEstimated time: ${time.textContent || 'unknown'}\n\nGenerate anyway?`)) return;
+    if (hits.length && !await ask({ title: 'Generate anyway?', confirm: 'Generate',
+      message: hits.map((h) => h.message).join('\n') + `\n\nEstimated time: ${time.textContent || 'unknown'}` })) return;
     button.disabled = true;
     label.textContent = 'Sending…';
     try {

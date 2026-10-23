@@ -1,42 +1,97 @@
 {
-  "title": "Qwen Image 2.1",
-  "description": "Text to image with Qwen Image 2.1. Strong at words in the picture. Takes a negative prompt.",
+  "title": "Text to Image: Qwen Image 2.1",
+  "description": "Qwen Image 2.1 text-to-image (Qwen Research License (no monetized use)). Native 2K. Research license: not for monetized content.",
   "output_name": "9.filename_prefix",
   "labels": {
-    "100:value": "Describe the image: subject, setting, light and style.",
-    "106:value": "Seed",
-    "101:value": "Negative prompt (what to keep out of the picture)"
+    "200:image": "REFERENCE 1 (character, product or style)",
+    "201:image": "REFERENCE 2 (character, product or style)",
+    "202:image": "REFERENCE 3 (character, product or style)",
+    "203:image": "REFERENCE 4 (character, product or style)"
   },
-  "defaults": {
-    "100:value": ""
-  },
-  "hide": [],
+  "required_refs": [],
+  "optional_refs": [
+    "200:image",
+    "201:image",
+    "202:image",
+    "203:image"
+  ],
   "controls": [
     {
       "node": "37",
       "input": "aspect_ratio",
       "type": "choice",
-      "primary": true,
       "choices": [
         "1:1",
         "16:9",
         "9:16",
         "4:3"
       ],
-      "label": "Aspect ratio"
-    },
-    {
-      "node": "45",
-      "input": "switch",
-      "type": "bool",
-      "primary": true,
-      "label": "Final quality: upscale with SeedVR2 7B (slower; off = quick draft upscale)"
+      "label": "Aspect ratio",
+      "primary": true
     }
   ],
+  "options": [
+    {
+      "id": "quality",
+      "label": "Quality",
+      "default": "draft",
+      "choices": [
+        {
+          "id": "draft",
+          "label": "Draft",
+          "hint": "fewer steps, fast upscale"
+        },
+        {
+          "id": "final",
+          "label": "Final",
+          "hint": "full steps + SeedVR2 upscale"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "quality": "draft"
+      },
+      "set": {
+        "506.steps": 25,
+        "45.switch": false
+      }
+    },
+    {
+      "when": {
+        "quality": "final"
+      },
+      "set": {
+        "506.steps": 40,
+        "45.switch": true
+      }
+    }
+  ],
+  "hide": [
+    "38",
+    "39",
+    "40",
+    "41",
+    "42",
+    "43",
+    "44",
+    "45",
+    "47",
+    "500",
+    "501",
+    "502",
+    "503",
+    "504",
+    "505",
+    "506",
+    "507"
+  ],
+  "pricing": {},
   "hints": [
-    "Describe the picture in full: who or what, where, the light, the camera and the style.",
-    "Aspect ratio sets the shape. Final quality upscales with SeedVR2 7B: sharper, and slower than the draft upscale.",
-    "Put the exact words you want written in the picture in quotes.",
-    "The negative prompt lists what to keep out of the picture."
+    "Native 2K. Research license: not for monetized content.",
+    "Optional references 1-4: call them <image1>, <image2> ... in the prompt and say what to keep.",
+    "Sizes: 1:1 1536x1536, 16:9 2752x1536, 9:16 1536x2752, 4:3 2048x1536 (rendered at the model's native size, then upscaled)."
   ]
 }

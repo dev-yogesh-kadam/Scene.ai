@@ -1,8 +1,8 @@
 // The admin console's Pricing section: what credits are worth, the rate of each kind of work, each workflow's own
 // pricing, the credit packages, and the servers with what they draw.
 
-import { api } from '../../api.js';
-import { el, field } from '../../dom.js';
+import { api } from '../api.js';
+import { el, field } from '../dom.js';
 import { number, table } from './shared.js';
 
 const KINDS = [
@@ -72,7 +72,8 @@ const SERVER = [
 export async function pricing(ctx) {
   // The agent models' prices come from a call of their own: when it fails (a server not restarted since it was added),
   // the rest of the section still shows.
-  const [data, llm] = await Promise.all([api('/api/admin/pricing'), api('/api/admin/pricing/llm').catch((e) => ({ models: [], error: e.message }))]);
+  const [data, llm, factors] = await Promise.all([api('/api/admin/pricing'), api('/api/admin/pricing/llm').catch((e) => ({ models: [], error: e.message })),
+    api('/api/admin/pricing/factors')]);
   const perJob = (kind) => data.per_job.includes(kind);
   const worth = (credits) => rupees((credits * data.inr_per_1000_credits) / 1000);
   const price = (credits) => `${number(credits)} credits · ${worth(credits)}`;
@@ -103,6 +104,52 @@ export async function pricing(ctx) {
     notice,
     el('button', { class: 'btn primary', style: 'margin-top:12px', onclick: saveRates }, 'Save'));
 
+  // ---- what the chosen resolution and quality multiply a price by
+  const GROUPS = [
+    { id: 'resolution', label: 'Resolution', keys: ['480', '720', '1080'], name: (k) => k + 'p', about: '768p counts as 720p. Pictures are not priced by size.' },
+    { id: 'quality', label: 'Quality', keys: ['draft', 'final', 'low', 'medium', 'high'], name: (k) => k[0].toUpperCase() + k.slice(1), about: 'Draft and Final for most workflows; Low, Medium and High for some video ones.' },
+  ];
+  const factorBoxes = {};
+  const preview = el('div');
+  const drawPreview = () => {
+    const f = (g, k) => Number(factorBoxes[g][k].value || 0);
+    const video = (r, q) => Math.ceil(data.rates.video * 5 * f('resolution', r) * f('quality', q));
+    preview.replaceChildren(table(['5 s of video', 'Draft', 'Final'], GROUPS[0].keys.map((r) => [r + 'p', number(video(r, 'draft')) + ' cr', number(video(r, 'final')) + ' cr'])),
+      el('p', { class: 'muted small', style: 'margin-top:6px' },
+        `A picture: ${number(Math.ceil(data.rates.image * f('quality', 'draft')))} cr on Draft, ${number(Math.ceil(data.rates.image * f('quality', 'final')))} cr on Final.`));
+  };
+  const factorNote = el('p', { class: 'notice' });
+  const factorsCard = el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('h2', {}, 'Quality and size')),
+    el('p', { class: 'muted small' }, 'What the resolution and quality a person picks multiply the price by. 1 is the rate itself. Each choice in the studio shows its price before anything runs.'),
+    el('div', { class: 'grid2' }, GROUPS.map((g) => el('div', {},
+      el('h3', {}, g.label), el('p', { class: 'muted small' }, g.about),
+      table(['', 'Factor', 'From render times'], g.keys.map((k) => {
+        factorBoxes[g.id] = factorBoxes[g.id] || {};
+        factorBoxes[g.id][k] = el('input', { type: 'number', min: 0, max: 20, step: 0.05, value: factors.factors[g.id][k], style: 'width:90px', oninput: drawPreview, 'aria-label': `${g.label} ${g.name(k)} factor` });
+        const suggested = (factors.suggested[g.id] || {})[k];
+        const jobs = (factors.samples[g.id] || {})[k];
+        return [g.name(k), factorBoxes[g.id][k], suggested != null ? `× ${suggested} (${jobs} job${jobs === 1 ? '' : 's'})` : el('span', { class: 'muted' }, 'No renders yet')];
+      }))))),
+    el('h3', {}, 'What that comes to'), preview,
+    factorNote,
+    el('div', { class: 'row', style: 'margin-top:12px' },
+      el('button', { class: 'btn primary', onclick: async () => {
+        try {
+          await api('/api/admin/pricing/factors', { method: 'PUT', json: Object.fromEntries(GROUPS.map((g) => [g.id, Object.fromEntries(g.keys.map((k) => [k, factorBoxes[g.id][k].value]))])) });
+          ctx.draw();
+        } catch (e) { factorNote.className = 'notice error'; factorNote.textContent = e.message; }
+      } }, 'Save'),
+      el('button', { class: 'btn', disabled: !Object.keys(factors.suggested).length, title: 'Put in the factors worked out from how long each kind of render took', onclick: () => {
+        for (const g of GROUPS) for (const k of g.keys) if ((factors.suggested[g.id] || {})[k] != null) factorBoxes[g.id][k].value = factors.suggested[g.id][k];
+        drawPreview();
+      } }, 'Use suggested'),
+      el('button', { class: 'btn quiet', onclick: () => {
+        for (const g of GROUPS) for (const k of g.keys) factorBoxes[g.id][k].value = factors.defaults[g.id][k];
+        drawPreview();
+      } }, 'Start values')));
+  drawPreview();
+
   // ---- each workflow's own pricing
   const servers = [{ id: '', label: 'Any' }, ...data.servers.map((s) => ({ id: s.name, label: s.name }))];
   const rateText = (w) => [w.base ? `${trim(w.base)} credits` : null, w.per_second ? `${trim(w.per_second)} credits/s` : null].filter(Boolean).join(' + ') || 'Free';
@@ -115,15 +162,24 @@ export async function pricing(ctx) {
     { id: 'preferred_server', label: 'Preferred server', type: 'choice', choices: servers },
     { id: 'fallback_servers', label: 'Fallback servers', type: 'text', hint: 'Names, separated by commas' },
     { id: 'enabled', label: 'Offered to users', type: 'check' },
-  ], w, { save: (values) => api('/api/admin/pricing/workflow', { method: 'PUT', json: { workflow: w.id, ...values } }).then(ctx.draw) });
+    ...GROUPS.flatMap((g) => g.keys.map((k) => ({ id: `factor:${g.id}:${k}`, label: `${g.name(k)} factor (its own)`, type: 'number', hint: `${factors.factors[g.id][k]} (the studio's)` }))),
+  ], { ...w, ...Object.fromEntries(GROUPS.flatMap((g) => g.keys.map((k) => [`factor:${g.id}:${k}`, ((w.own_factors || {})[g.id] || {})[k]])))}, {
+    save: async (values) => {
+      const own = Object.fromEntries(GROUPS.map((g) => [g.id, Object.fromEntries(g.keys.map((k) => [k, values[`factor:${g.id}:${k}`]]).filter(([, v]) => v != null))]));
+      const plain = Object.fromEntries(Object.entries(values).filter(([k]) => !k.startsWith('factor:')));
+      await api('/api/admin/pricing/workflow', { method: 'PUT', json: { workflow: w.id, ...plain } });
+      if (!w.id.startsWith('edit/')) await api('/api/admin/pricing/workflow/factors', { method: 'PUT', json: { workflow: w.id, ...own } });
+      ctx.draw();
+    } });
   const workflowsCard = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', {}, 'Workflows')),
-    table(['Workflow', 'Type', 'Rate', 'Multiplier', 'One image, or 5 seconds', 'Preferred server', 'Status'],
+    table(['Workflow', 'Type', 'Rate', 'Multiplier', 'One image, or 5 seconds at 720p Final', 'Preferred server', 'Status'],
       data.workflows.map((w) => [
         el('div', {}, w.title, el('div', { class: 'muted small' }, w.id)), w.kind,
         el('div', {}, rateText(w), el('div', { class: 'muted small' }, own(w) ? 'Its own rate' : 'The rate of its type')),
-        w.multiplier === 1 ? '' : '× ' + trim(w.multiplier), price(w.example), w.preferred_server || el('span', { class: 'muted' }, 'Any'),
-        el('span', { class: 'pill ' + (w.enabled ? 'done' : 'cancelled') }, w.enabled ? 'Offered' : 'Switched off')]),
+        el('div', {}, w.multiplier === 1 ? '' : '× ' + trim(w.multiplier),
+          Object.values(w.own_factors || {}).some((g) => Object.keys(g).length) && el('div', { class: 'muted small' }, 'Its own factors')), price(w.example), w.preferred_server || el('span', { class: 'muted' }, 'Any'),
+        el('span', { class: 'pill ' + (!w.enabled ? 'cancelled' : w.admins_only ? 'running' : 'done') }, !w.enabled ? 'Switched off' : w.admins_only ? 'Admins only' : 'Offered')]),
       { onRow: (i) => editWorkflow(data.workflows[i]) }),
     el('p', { class: 'muted small', style: 'margin-top:10px' },
       'Select a workflow to give it its own rate or multipliers, or to switch it off. The server is recorded for the scheduler; jobs are not routed by it yet.'));
@@ -177,5 +233,5 @@ export async function pricing(ctx) {
     el('p', { class: 'muted small', style: 'margin-top:10px' },
       'Electricity only: cooling, depreciation, storage and failed runs are not counted here. Replace an assumed power with one measured at the wall.'));
 
-  return [ratesCard, workflowsCard, llmCard, packagesCard, serversCard];
+  return [ratesCard, factorsCard, workflowsCard, llmCard, packagesCard, serversCard];
 }

@@ -1,16 +1,16 @@
 // Admin overview: what needs attention, the headline numbers with trends, who is online, new accounts, the live queue
 // and its controls, earnings against electricity, charts and rankings.
 
-import { api } from '../../api.js';
-import { el, segmented } from '../../dom.js';
-import { chartCard, sparkline, barList } from '../../components/charts.js';
+import { api } from '../api.js';
+import { el, segmented } from '../dom.js';
+import { chartCard, sparkline, barList } from '../components/charts.js';
 import { number, span, ago, table } from './shared.js';
 
 const LEVEL = { critical: 'Critical', serious: 'Problem', warning: 'Check' };
 const DOT = { done: 'good', failed: 'critical', cancelled: 'warning', audit: 'neutral' };
 // The studio's pages, as a tab reports them, in the words of the menu.
 const PAGE = { '/home': 'Home', '/projects': 'All projects', '/library': 'Library', '/create': 'Create', '/canvas': 'Canvas',
-  '/timeline': 'Timeline', '/assets': 'Assets', '/settings': 'Settings', '/admin': 'Admin console' };
+  '/timeline': 'Timeline', '/settings': 'Settings', '/admin': 'Admin console' };
 const rupees = (value) => '₹' + Math.round(value || 0).toLocaleString();
 const clock = (timestamp) => new Date(timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -29,6 +29,23 @@ function kpi(label, value, delta, trend, note) {
   return el('div', { class: 'tile kpi' },
     el('div', { class: 'tile-label' }, label), el('div', { class: 'tile-value' }, value), note && el('div', { class: 'tile-note' }, note),
     delta, trend && sparkline(trend));
+}
+
+// The studio at a glance, at the top: each part of it as a dot and a word, each leading to the section about it.
+function healthStrip(h, queue, ctx) {
+  const days = (t) => (Date.now() / 1000 - t) / 86400;
+  const chip = (state, label, value, tab) => el('button', { class: 'health-chip ' + state, onclick: () => ctx.go(tab) },
+    el('span', { class: 'health-dot' }), el('span', { class: 'muted small' }, label), el('b', {}, value));
+  const gbFree = h.disk_free / 1024 ** 3;
+  return el('div', { class: 'health-strip' },
+    chip(h.render ? 'good' : 'bad', 'Render server', h.render ? 'Online' : 'Offline', 'system'),
+    h.model !== null && chip(h.model ? 'good' : 'bad', 'Model server', h.model ? 'Online' : 'Offline', 'system'),
+    chip(queue.paused ? 'warn' : 'good', 'Queue', queue.paused ? 'Paused' : `${queue.running ? 1 : 0} running · ${queue.waiting_total} waiting`, 'jobs'),
+    chip(h.alerts ? 'bad' : 'good', 'Alerts', h.alerts ? `${h.alerts} open` : 'None', 'system'),
+    h.maintenance && chip('warn', 'Maintenance', 'On', 'system'),
+    chip(gbFree < 10 ? 'bad' : gbFree < 50 ? 'warn' : 'good', 'Disk', `${gbFree.toFixed(0)} GB free`, 'system'),
+    chip(!h.backups_on ? 'warn' : !h.last_backup || days(h.last_backup) > 2 ? 'bad' : 'good', 'Backup', !h.backups_on ? 'Off' : h.last_backup ? ago(h.last_backup) : 'None yet', 'system'),
+    chip(!h.node_list || days(h.node_list) > 3 ? 'warn' : 'good', 'Node list', h.node_list ? ago(h.node_list) : 'None', 'workflows'));
 }
 
 export async function overview(ctx) {
@@ -191,7 +208,7 @@ export async function overview(ctx) {
     el('div', { class: 'toolbar' }, el('span', { class: 'muted' }, 'Period'), picker,
       o.announcement.text && el('button', { class: 'btn small quiet', title: 'Change it in Settings', onclick: () => ctx.go('settings') }, 'Announcement showing'),
       el('span', { class: 'muted small', style: 'margin-left:auto' }, 'Updated ' + new Date().toLocaleTimeString())),
-    attention, kpis, secondary, el('div', { class: 'grid-2' }, online, signups), el('div', { class: 'grid-2' }, queue, activity),
+    healthStrip(o.health, o.queue, ctx), attention, kpis, secondary, el('div', { class: 'grid-2' }, online, signups), el('div', { class: 'grid-2' }, queue, activity),
     earnings, charts, rankings,
   ];
 }

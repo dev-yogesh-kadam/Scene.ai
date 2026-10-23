@@ -5,6 +5,8 @@ or from the system if that package is missing.
 """
 
 import asyncio
+import glob
+import weakref
 import re
 import shutil
 from pathlib import Path
@@ -68,11 +70,48 @@ def poster_path(video):
     return video.parent / ".posters" / (video.name + ".jpg")
 
 
+# Posters made at once, at most: a canvas of new pictures asks for all of theirs together. One limit per event loop.
+POSTERS_AT_ONCE = 3
+_poster_gates = weakref.WeakKeyDictionary()
+
+
+def _poster_gate():
+    loop = asyncio.get_running_loop()
+    if loop not in _poster_gates:
+        _poster_gates[loop] = asyncio.Semaphore(POSTERS_AT_ONCE)
+    return _poster_gates[loop]
+
+
 async def poster(video):
-    """A small still from the start of a video, for its thumbnail. It is made once and kept."""
+    """A small still from the start of a video, or a small copy of a picture, for its thumbnail. Made once and kept."""
     target = poster_path(video)
     if target.is_file() and target.stat().st_mtime >= video.stat().st_mtime:
         return target
+    async with _poster_gate():
+        if target.is_file() and target.stat().st_mtime >= video.stat().st_mtime:   # made while this one waited
+            return target
+        return await _make_poster(video, target)
+
+
+def remove_result(path):
+    """Delete a finished file and what was made from it for its thumbnail: its poster and a video's keyframes."""
+    path = Path(path)
+    path.unlink(missing_ok=True)
+    posters = path.parent / ".posters"
+    if posters.is_dir():
+        for made in posters.glob(glob.escape(path.name) + "*.jpg"):   # <name>.jpg and <name>.<tenth>.jpg
+            made.unlink(missing_ok=True)
+
+
+async def make_poster_soon(path):
+    """Make a new result's poster now, so its thumbnail is ready when the page asks. Best effort."""
+    try:
+        await poster(path)
+    except (MediaError, OSError):
+        pass
+
+
+async def _make_poster(video, target):
     target.parent.mkdir(exist_ok=True)
     target.unlink(missing_ok=True)
     scale = "scale='min({},iw)':-2".format(POSTER_WIDTH)

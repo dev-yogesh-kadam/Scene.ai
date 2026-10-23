@@ -6,7 +6,7 @@
 import { api } from '../api.js';
 import { creditMark, el, icon, phaseOf, reel, runningGate, segmented, still, tabTitle } from '../dom.js';
 import { store, subscribe } from '../store.js';
-import { openViewer } from '../components/media.js';
+import { openViewer, reuseSeed, seedOf } from '../components/media.js';
 import { quickActions } from '../components/quick.js';
 import { agentTabs } from '../components/agent-tabs.js';
 import { KIT, addToKitDialog, kitPanel } from '../components/kit.js';
@@ -18,8 +18,11 @@ const LABEL = 144;      // room left of a row for the name of its shot
 const GAP = 48;
 const SNAP = 8;
 const MIN_ZOOM = 0.1;
-const MAX_ZOOM = 2;
+const MAX_ZOOM = 3;   // 300%: close enough to check a face or a hand
 const ACTIVE = ['queued', 'running'];
+// A job that failed stays on the canvas, where its result would have been, saying why, for this long: a frame that just
+// vanished would look like the studio losing work.
+const FAILED_SHOWN = 24 * 3600;
 const PANEL = 380;      // the width the panel starts with; its left edge can be dragged
 const PANEL_MIN = 320;
 const PANEL_MAX = 960;
@@ -224,7 +227,7 @@ export function render(view) {
         el('h2', {}, asset.name),
         asset.about && el('p', { class: 'muted small' }, asset.about),
         asset.use_note && el('p', { class: 'small' }, el('b', {}, 'When to use: '), asset.use_note),
-        el('div', { class: 'dialog-buttons' }, el('a', { class: 'btn small quiet', href: '/assets' }, 'Edit in Assets'),
+        el('div', { class: 'dialog-buttons' },
           el('button', { class: 'btn small primary', onclick: () => dialog.close() }, 'Close'))));
     dialog.addEventListener('close', () => dialog.remove());
     document.body.append(dialog);
@@ -357,7 +360,8 @@ export function render(view) {
 
   function arrange() {
     const before = JSON.stringify(layout);
-    const jobs = store.jobs.filter((j) => ACTIVE.includes(j.status) && (!project || j.project_id === project));
+    const jobs = store.jobs.filter((j) => (ACTIVE.includes(j.status) || (j.status === 'failed' && j.finished && Date.now() / 1000 - j.finished < FAILED_SHOWN))
+      && (!project || j.project_id === project));
     const known = new Set(items.map((i) => i.id));
     // A job that has just finished keeps its place until what it made comes in (a moment later), so the result lands
     // where the job was and the shots never trade places. Two minutes at most: a job may make nothing to show here.
@@ -416,6 +420,41 @@ export function render(view) {
     count.textContent = items.length === 1 ? '1 item' : `${items.length} items`;
   }
 
+  // A job that failed: what it was, why in plain words, and that its credits came back. It stays a day, then goes.
+  function failedFrame(job, spot) {
+    const shot = el('div', { class: 'shot failed-shot', style: `height:${spot.h}px` },
+      el('b', {}, "Didn't work"),
+      el('span', {}, job.reason || 'Something went wrong while it was being made.'),
+      el('span', { class: 'failed-credits' }, job.cost ? `Your ${job.cost} credits came back.` : ''));
+    const node = el('div', { class: 'frame failed', title: 'Open for the details', role: 'button', tabindex: '0',
+      onclick: () => failedDetails(job), onkeydown: (e) => { if (e.key === 'Enter') failedDetails(job); } },
+      shot, el('div', { class: 'slate' }, el('b', {}, job.workflow.split('/')[0]), el('span', {}, job.name)));
+    return { node, failed: true };
+  }
+
+  // What a failed job was asked to make and what became of it, opened from its frame. An admin also sees the render
+  // server's own words, for working out what went wrong.
+  function failedDetails(job) {
+    const s = job.settings || {};
+    const when = (t) => (t ? new Date(t * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '');
+    const ran = job.started && job.finished ? Math.max(0, Math.round(job.finished - job.started)) : null;
+    const chosen = [s.resolution && `${s.resolution}p`, s.orientation, ...Object.entries(s.options || {}).map(([k, v]) => `${k}: ${v}`)].filter(Boolean).join(' · ');
+    const facts = [['Model', s.workflow_title || job.workflow], ['Prompt', s.prompt], ['Settings', chosen || job.summary],
+      ['Asked at', when(job.created)], ['Stopped at', when(job.finished)],
+      ['Ran for', ran == null ? '' : ran < 90 ? `${ran} s` : `${Math.round(ran / 60)} min`],
+      ['Credits', job.cost ? `${job.cost} charged, all ${job.cost} given back` : 'Free']].filter(([, v]) => v);
+    const dialog = el('dialog', { class: 'failed-dialog', 'aria-label': 'Why it didn\'t work' },
+      el('h2', {}, "Didn't work"),
+      el('p', { class: 'failed-reason' }, job.reason || 'Something went wrong while it was being made.'),
+      el('dl', { class: 'failed-facts' }, facts.flatMap(([k, v]) => [el('dt', {}, k), el('dd', {}, v)])),
+      store.user.role === 'admin' && job.error && el('details', { class: 'failed-raw' }, el('summary', {}, 'What the render server said'), el('pre', {}, job.error)),
+      el('div', { class: 'row', style: 'justify-content:flex-end;margin-top:16px' },
+        el('button', { class: 'btn', onclick: () => dialog.close() }, 'Close')));
+    dialog.addEventListener('close', () => dialog.remove());
+    document.body.append(dialog);
+    dialog.showModal();
+  }
+
   // Frames of jobs are kept between updates, so the running Gate isn't restarted by every progress message.
   function drawJobs(jobs) {
     for (const [id, frame] of jobFrames) {
@@ -428,6 +467,18 @@ export function render(view) {
       const spot = spots.get('job:' + job.id);
       if (!spot) continue;   // its result is already on the canvas
       let frame = jobFrames.get(job.id);
+      if (frame && frame.failed !== (job.status === 'failed')) {   // it was running and has just failed: drawn anew
+        frame.node.remove();
+        jobFrames.delete(job.id);
+        frame = null;
+      }
+      if (!frame && job.status === 'failed') {
+        frame = failedFrame(job, spot);
+        jobFrames.set(job.id, frame);
+        jobLayer.append(frame.node);
+        boxes.set('job:' + job.id, { key: 'job:' + job.id, ...spot, node: frame.node });
+      }
+      if (frame && frame.failed) continue;
       if (!frame) {
         const clock = el('span');
         const fact = el('span');
@@ -449,7 +500,8 @@ export function render(view) {
       frame.clock.textContent = waiting ? 'queued' : elapsed(job);   // how long it has been at it; no percentage
       frame.film.set(done);   // a reel that fills, and what the job is at in words, in place of a step count
       // before its steps start, what the worker says it is at ("Writing the caption…", "Waiting for the GPU…")
-      frame.fact.textContent = waiting ? `position ${job.position}` : job.steps ? phaseOf(done) : job.node || 'Setting up the shot';
+      frame.fact.textContent = waiting ? (job.waiting_for_server ? 'waiting for the render server' : `position ${job.position}`)
+        : job.steps ? phaseOf(done) : job.node || 'Setting up the shot';
     }
     hint.classList.toggle('hidden', boxes.size > 0);
   }
@@ -731,7 +783,8 @@ export function render(view) {
 
   const download = (item) => el('a', { href: `/api/library/${item.id}/file?download=true`, download: item.filename }).click();
   const open = (item) => openViewer(item, { actions: /^(edit|upload)\//.test(item.workflow) ? []
-    : [{ label: 'Re-run', run: (dialog) => { dialog.close(); store.rerun = item; store.from = '/canvas'; go('/create'); } }] });
+    : [{ label: 'Re-run', run: (dialog) => { dialog.close(); store.rerun = item; store.from = '/canvas'; go('/create'); } },
+      seedOf(item) != null && { label: 'Reuse seed', run: (dialog) => { dialog.close(); reuseSeed(item, '/canvas'); } }].filter(Boolean) });
 
   async function addToTimeline(videos, button) {
     button.disabled = true;
@@ -763,10 +816,14 @@ export function render(view) {
       one && el('button', { class: 'btn small quiet', onclick: () => open(one) }, 'Open'),
       one && !/^(edit|upload)\//.test(one.workflow) && el('button', { class: 'btn small quiet', title: 'Open Create with the same settings',
         onclick: () => { store.rerun = one; store.from = '/canvas'; go('/create'); } }, 'Re-run'),
+      one && !/^(edit|upload)\//.test(one.workflow) && seedOf(one) != null && el('button', { class: 'btn small quiet',
+        title: `Seed ${seedOf(one)}: open Create with the same settings and this seed, to make the same picture with a change (Draft to Final, a word of the prompt)`,
+        onclick: () => reuseSeed(one, '/canvas') }, 'Reuse seed'),
+      one && seedOf(one) != null && el('span', { class: 'slate-text small' }, `Seed ${seedOf(one)}`),
       videos.length > 0 && el('button', { class: 'btn small quiet', onclick: (e) => addToTimeline(videos, e.currentTarget) },
         one ? 'Add to timeline' : `Add ${videos.length} to timeline`),
       el('button', { class: 'btn small quiet', title: 'Download (D)', onclick: () => chosen.forEach(download) }, one ? 'Download' : `Download ${chosen.length}`),
-      one && el('button', { class: 'btn small quiet', title: `Keep it in this project's ${KIT} under a name`,
+      one && project && el('button', { class: 'btn small quiet', title: `Keep it in this project's ${KIT} under a name`,
         onclick: async () => { if (await addToKitDialog({ project, item: one })) { shared.load(); dock.recast(); } } }, `Add to ${KIT}`),
     ].filter(Boolean));
     const area = bounds(chosen.map((i) => boxes.get(i.id)));
@@ -810,7 +867,14 @@ export function render(view) {
     try {
       projects = (await api('/api/projects')).projects;
       if (project && !projects.some((p) => p.id === project)) project = 0;
-      picker.textContent = (projects.find((p) => p.id === project) || { name: 'All work' }).name;
+      {
+        const here = projects.find((p) => p.id === project);
+        picker.textContent = here ? (here.parent_name ? `${here.parent_name} › ${here.name}` : here.canvas_name ? `${here.name} › ${here.canvas_name}` : here.name) : 'All work';
+        picker.onclick = here ? () => go('/project?id=' + (here.parent_id || here.id)) : null;
+        picker.classList.toggle('linked', !!here);
+        assetsButton.classList.toggle('hidden', !project);   // a NeuralCore belongs to a project: none for all work
+        picker.title = here ? 'Open the project: its kit and its modules' : 'Everything you have made';
+      }
       tabTitle((projects.find((p) => p.id === project) || { name: 'Canvas' }).name);
       const [board] = await Promise.all([api('/api/boards/canvas?project=' + project), loadItems(), loadAssets()]);
       drawAssets();

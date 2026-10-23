@@ -39,9 +39,11 @@ def client(tmp_path):
     if POSTGRES:
         empty_postgres()
     # local_tools off: these tests fake a local model that answers once; the tool loop of local models has tests of its own.
-    settings = Settings(database_url=POSTGRES, comfy_url="http://127.0.0.1:9", ollama_url="http://127.0.0.1:9", local_tools=False, gpu_shared="off", storage_dir=str(tmp_path), signup_credits=500, first_account_local=False,
+    settings = Settings(database_url=POSTGRES, hold_queue_offline=False, comfy_url="http://127.0.0.1:9", ollama_url="http://127.0.0.1:9", local_tools=False, gpu_shared="off", storage_dir=str(tmp_path), signup_credits=500, first_account_local=False,
                         workflows_dir=str(ROOT / "workflows"), frontend_dir=str(ROOT / "frontend"))
     with TestClient(create_app(settings)) as test_client:
         # The video workflow is a normal ComfyUI save: it is read with the node definitions a real server gave.
         test_client.app.state.catalog.saved = json.loads((BACKEND / "tests" / "fixtures" / "node_definitions.json").read_text(encoding="utf-8"))
+        # The admin console: a site of its own beside the studio, with its own sign-in and cookie (test_api.console).
+        test_client.console = TestClient(test_client.app.state.console)
         yield test_client

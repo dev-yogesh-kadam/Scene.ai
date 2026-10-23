@@ -1,7 +1,7 @@
 // The All projects page: every project as a card with its newest item as the thumbnail. Opening one goes to its Canvas.
 
 import { api } from '../api.js';
-import { still, el, icon, ago, initials, spill } from '../dom.js';
+import { ask, still, el, icon, ago, initials, spill } from '../dom.js';
 import { subscribe } from '../store.js';
 import { projectDialog } from '../components/projects.js';
 import { go } from '../nav.js';
@@ -18,8 +18,10 @@ export function render(view) {
   const light = spill();   // the cover of the project worked on last lights the top of the page
   view.replaceChildren(light.node, el('div', { class: 'page-head' }, el('h1', {}, 'All projects'), tools), body);
 
+  // A project opens on its page (its kit and its modules); "Open all work" opens the canvas of everything.
   function open(id) {
-    localStorage.setItem('scene.project', id || '');
+    if (id) return go('/project?id=' + id);
+    localStorage.setItem('scene.project', '');
     go('/canvas');
   }
   const run = (action) => action().then(load).catch((e) => alert(e.message));
@@ -28,8 +30,9 @@ export function render(view) {
     if (made) open(made.id);   // a new project opens straight away, on its empty canvas
   }
   const rename = async (p) => { if (await projectDialog({ project: p })) load(); };
-  const remove = (p) => {
-    if (confirm(`Delete the project "${p.name}"? Its ${p.items} items stay in your library.`)) run(() => api('/api/projects/' + p.id, { method: 'DELETE' }));
+  const remove = async (p) => {
+    if (await ask({ title: `Delete "${p.name}"?`, danger: true, confirm: 'Delete project',
+      message: `Its ${p.items} items, its modules and its NeuralCore are deleted with it, for good. This can't be undone.` })) run(() => api('/api/projects/' + p.id, { method: 'DELETE' }));
   };
   const act = (fn) => (e) => { e.stopPropagation(); fn(); };   // a button on a card must not also open the card
 
@@ -41,7 +44,7 @@ export function render(view) {
     el('div', { class: 'pcard-cover' }, cover(p)),
     el('div', { class: 'pcard-info' },
       el('b', { title: p.name }, p.name),
-      el('span', {}, p.items === 1 ? '1 item' : `${p.items} items`),
+      el('span', {}, [p.modules ? `${p.modules + 1} modules` : '', p.items === 1 ? '1 item' : `${p.items} items`].filter(Boolean).join(' · ')),
       el('span', { class: 'muted small' }, ago(p.updated || p.created))),
     el('div', { class: 'pcard-actions' },
       el('button', { class: 'icon-btn', title: 'Rename', 'aria-label': 'Rename ' + p.name, onclick: act(() => rename(p)) }, icon('pencil')),
@@ -62,7 +65,7 @@ export function render(view) {
 
   async function load() {
     try {
-      projects = (await api('/api/projects')).projects.sort((a, b) => (b.updated || b.created) - (a.updated || a.created));
+      projects = (await api('/api/projects')).projects.filter((p) => !p.parent_id).sort((a, b) => (b.updated || b.created) - (a.updated || a.created));
       const lit = projects.find((p) => p.cover_id && p.cover_kind !== 'audio');
       light.show(lit && lit.cover_id, lit && lit.cover_kind);
       draw();

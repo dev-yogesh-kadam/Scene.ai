@@ -14,7 +14,7 @@ export function render(view) {
   const form = {
     kind: localStorage.getItem('scene.kind') || 'video',
     catalog: [], kinds: ['video', 'image'], fallback: '',
-    wf: null, values: {}, options: {}, resolution: null, orientation: null, seedMode: 'fixed', name: '',
+    wf: null, values: {}, options: {}, resolution: null, orientation: null, seed: '', name: '',   // seed: empty = a new random one on every Generate
     clips: 1,        // more than 1 = a long video made of chained clips
     projectId: Number(localStorage.getItem('scene.project')) || null, projects: [],
     refs: {},        // slot id -> {file}, {existing: name on the render server} or {assetId}, plus {name, url}
@@ -100,13 +100,13 @@ export function render(view) {
   async function selectWorkflow(id, saved) {
     const wf = await api('/api/workflows/' + id);
     form.wf = wf;
-    keep.show(wf.id.split('/')[0]);
+    keep.show(wf.id.split('/')[0], !!form.projectId);
     localStorage.setItem('scene.workflow.' + form.kind, id);
     form.values = Object.fromEntries(wf.controls.map((c) => [c.id, c.default]));
     form.options = Object.fromEntries(wf.options.map((o) => [o.id, o.default]));
     form.resolution = wf.size && wf.size.resolution;
     form.orientation = wf.size && wf.size.orientation;
-    form.seedMode = 'fixed';
+    form.seed = '';
     form.name = wf.id.split('/')[1];
     form.clips = 1;
     form.refs = {};
@@ -122,7 +122,7 @@ export function render(view) {
         form.resolution = saved.resolution || form.resolution;
         form.orientation = saved.orientation || form.orientation;
       }
-      form.seedMode = saved.seed_mode || 'fixed';
+      form.seed = saved.seed_mode === 'fixed' && saved.seed != null ? String(saved.seed) : '';   // set by "Reuse seed" only
       form.name = saved.name || form.name;
       form.clips = wf.chain ? Number(saved.clips) || 1 : 1;
       for (const r of wf.refs) {
@@ -231,11 +231,11 @@ export function render(view) {
           : 'Make a longer video as several chained clips. Faster and steadier than one long clip.')));
     }
     const seed = byRole('seed');
-    if (seed) {
-      special.add(seed.id);
-      groups.push(field('Seed', el('div', { class: 'row' },
-        seg([{ id: 'random', label: 'Random' }, { id: 'fixed', label: 'Fixed' }], form.seedMode, (m) => { form.seedMode = m; }),
-        form.seedMode === 'fixed' && numberInput(seed))));
+    if (seed) special.add(seed.id);
+    if (form.wf.seeded) {
+      groups.push(field('Seed', el('input', { type: 'number', min: 0, max: 4294967295, step: 1, placeholder: 'Random', value: form.seed,
+        oninput: (e) => { form.seed = e.target.value; } }),
+      el('div', { class: 'hint' }, 'Empty: a new random seed on every Generate. A number: that seed again, so the same settings give the same picture.')));
     }
     parts.push(el('div', { class: 'grid2' }, groups));
 
@@ -346,7 +346,8 @@ export function render(view) {
       else if (r.assetId) refs[id] = { asset_id: r.assetId };
     }
     return { workflow: form.wf.id, name: form.name, values: form.values, options: form.options,
-      resolution: form.resolution, orientation: form.orientation, seed_mode: form.seedMode,
+      resolution: form.resolution, orientation: form.orientation, seed_mode: String(form.seed).trim() ? 'fixed' : 'random',
+      seed: String(form.seed).trim() ? Number(form.seed) : null,
       clips: form.wf.chain ? form.clips : 1, project_id: form.projectId, parent: form.parent, refs, keep: keep.value() };
   }
 
@@ -436,10 +437,12 @@ export function render(view) {
   // ------------------------------------------------------------ start
 
   const rerun = store.rerun;
-  store.rerun = null;
+  const reused = store.reuseSeed;
+  store.rerun = store.reuseSeed = null;
   if (rerun) { form.kind = rerun.workflow.split('/')[0]; form.parent = rerun.id; }
   if (store.prefill) form.kind = 'video';
-  loadCatalog(rerun && rerun.workflow, rerun && rerun.settings).catch(showError);
+  // Re-run: a new seed. Reuse seed: the result's own seed, so the picture stays the same with the settings changed.
+  loadCatalog(rerun && rerun.workflow, rerun && { ...rerun.settings, seed_mode: reused != null ? 'fixed' : 'random', seed: reused }).catch(showError);
   drawQueue();
   drawRecent().catch(() => {});
   return unsubscribe;

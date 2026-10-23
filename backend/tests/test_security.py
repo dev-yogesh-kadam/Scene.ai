@@ -38,8 +38,9 @@ def test_every_answer_carries_the_security_headers_and_the_api_map_is_hidden(cli
 def test_an_upload_must_be_what_its_name_says(client):
     account(client)
     page = b"<html><script>alert(1)</script></html>"
-    assert client.post("/api/assets", files={"file": ("face.png", page, "image/png")}).status_code == 400
-    assert client.post("/api/assets", files={"file": ("face.png", PNG, "image/png")}).status_code == 200
+    film = {"project_id": str(client.post("/api/projects", json={"name": "Film"}).json()["id"])}
+    assert client.post("/api/kit", files={"file": ("face.png", page, "image/png")}, data=film).status_code == 400
+    assert client.post("/api/kit", files={"file": ("face.png", PNG, "image/png")}, data=film).status_code == 200
     assert security.sniff(b"\x00\x00\x00\x18ftypmp42") == "video/audio"
     assert security.content_matches("audio", b"ID3\x04" + b"0" * 20) and not security.content_matches("image", b"ID3\x04")
 
@@ -115,10 +116,15 @@ def test_two_step_sign_in(client):
     assert client.post("/api/auth/login", json=dict(password, code=codes[1].upper())).status_code == 200
     assert client.get("/api/auth/mfa").json()["recovery_left"] == 6
 
+    # The admin console asks for the second step too.
+    desk = client.console
+    assert desk.post("/api/console/login", json=password).json()["mfa_required"] is True
+    assert desk.post("/api/console/login", json=dict(password, code="123")).status_code == 401
+    assert desk.post("/api/console/login", json=dict(password, code=codes[2])).status_code == 200
     # An admin can turn it off for someone who lost their phone, which signs them out.
-    users = client.get("/api/admin/users").json()["users"]
+    users = desk.get("/api/admin/users").json()["users"]
     assert users[0]["mfa_enabled"] == 1
-    assert client.put("/api/admin/users/{}".format(users[0]["id"]), json={"mfa_off": True}).status_code == 200
+    assert desk.put("/api/admin/users/{}".format(users[0]["id"]), json={"mfa_off": True}).status_code == 200
     assert client.get("/api/auth/me").status_code == 401
     assert client.post("/api/auth/login", json=password).status_code == 200
 

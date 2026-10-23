@@ -2,7 +2,7 @@
 // for each project, opened to its items) and Not in a project (items that belong to none).
 
 import { api } from '../api.js';
-import { el, segmented, still, initials, ago } from '../dom.js';
+import { ask, el, segmented, still, initials, ago } from '../dom.js';
 import { subscribe } from '../store.js';
 import { mediaCard } from '../components/media.js';
 
@@ -21,7 +21,6 @@ export function render(view) {
   const search = el('input', { type: 'text', placeholder: 'Search Library…', style: 'max-width:260px',
     oninput: (e) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { filters.q = e.target.value; drawItems(); }, 250); } });
   view.replaceChildren(el('div', { class: 'page-head' }, el('h1', {}, 'Library'),
-    el('a', { class: 'btn quiet', href: '/assets', title: 'Saved characters, outfits, backgrounds and voices' }, 'Assets'),
     search),
   el('p', { class: 'muted', style: 'margin:0 0 14px' }, 'Everything you have made, in one place. Reuse what is here instead of rebuilding it.'),
   el('div', { class: 'row', style: 'margin-bottom:14px;gap:12px;flex-wrap:wrap' }, tabs, kinds), projectBar, grid);
@@ -47,8 +46,9 @@ export function render(view) {
           const name = prompt('Project name', open.name);
           if (name && name.trim()) run(() => api('/api/projects/' + open.id, { method: 'PUT', json: { name } }));
         } }, 'Rename'),
-        el('button', { class: 'btn small quiet danger', onclick: () => {
-          if (confirm(`Delete the project "${open.name}"? Its ${open.items} items stay in your library.`)) {
+        el('button', { class: 'btn small quiet danger', onclick: async () => {
+          if (await ask({ title: `Delete "${open.name}"?`, danger: true, confirm: 'Delete project',
+            message: `Its ${open.items} items, its modules and its NeuralCore are deleted with it, for good. This can't be undone.` })) {
             run(async () => { await api('/api/projects/' + open.id, { method: 'DELETE' }); open = null; filters.project = ''; });
           }
         } }, 'Delete project'));
@@ -65,7 +65,7 @@ export function render(view) {
   // The folders of the Projects view: the newest item of a project is its cover.
   function drawFolders() {
     const q = filters.q.trim().toLowerCase();
-    const shown = projects.filter((p) => !q || p.name.toLowerCase().includes(q));
+    const shown = projects.filter((p) => !p.parent_id && (!q || p.name.toLowerCase().includes(q)));
     grid.className = 'project-grid';
     grid.replaceChildren(...(shown.length ? shown.map((p) => el('button', { class: 'project', onclick: () => {
       open = p;
@@ -83,6 +83,7 @@ export function render(view) {
     grid.className = 'media-grid';
     try {
       const query = new URLSearchParams(Object.entries(filters).filter(([, v]) => v));
+      if (tab === 'projects' && open) query.set('modules', '1');   // an opened project shows its modules' items too
       const items = (await api('/api/library?' + query)).items;
       const empty = filters.q || filters.project || filters.kind ? 'Nothing matches.' : 'Nothing here yet. Make something on the Create page.';
       grid.replaceChildren(...(items.length

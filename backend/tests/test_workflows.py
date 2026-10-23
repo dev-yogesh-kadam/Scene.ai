@@ -174,14 +174,15 @@ def test_every_video_workflow_has_a_presets_file_and_only_drafts_stay_archived()
 
 def test_every_picture_workflow_has_a_presets_file_and_the_new_family_its_shape_and_upscale():
     image = VIDEO.parent / "image"
-    flows = sorted(p.stem for p in image.glob("*.json") if not p.name.endswith(".studio.json"))
+    flows = sorted(p.stem for p in image.glob("*.json") if not p.name.endswith((".studio.json", ".ui.json")))
     assert len(flows) == 24
     for name in flows:
         profile = json.loads((image / (name + ".studio.json")).read_text(encoding="utf-8"))
         assert profile["title"], name
-        if name.startswith("image_t2i_"):   # one shape: an aspect ratio, and a final upscale to switch on
-            assert {(c["node"], c["input"]) for c in profile["controls"]} >= {("37", "aspect_ratio"), ("45", "switch")}, name
-            assert profile["defaults"]["100:value"] == "", name   # the sample prompt is not left in the box
+        if name.startswith("image_t2i_"):   # one shape: an aspect ratio, and Draft or Final (the SeedVR2 upscale)
+            assert ("37", "aspect_ratio") in {(c["node"], c["input"]) for c in profile["controls"]}, name
+            assert [[c["id"] for c in o["choices"]] for o in profile["options"] if o["id"] == "quality"] == [["draft", "final"]], name
+            assert "45" in profile["hide"], name   # the upscale switch is set by the quality, not shown
 
 
 def test_a_workflow_of_a_fixed_length_is_billed_for_it():

@@ -35,6 +35,7 @@ export function render(view) {
       grid));
 
   const openProject = (project) => {
+    if (project.modules) return go('/project?id=' + project.id);   // a project with modules opens on its page, to pick one
     localStorage.setItem('scene.project', project.id);
     go('/canvas');
   };
@@ -43,7 +44,7 @@ export function render(view) {
 
   // Recent projects: left out completely until the user has made one.
   async function drawRecent() {
-    const projects = (await api('/api/projects')).projects
+    const projects = (await api('/api/projects')).projects.filter((p) => !p.parent_id)
       .sort((a, b) => (b.updated || b.created) - (a.updated || a.created)).slice(0, RECENT);
     recent.classList.toggle('hidden', !projects.length);
     if (!projects.length) return;

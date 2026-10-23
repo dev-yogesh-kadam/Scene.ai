@@ -1,5 +1,7 @@
 """The library: each user's finished images and videos, organised in projects."""
 
+import csv
+import io
 import json
 import tempfile
 import time
@@ -8,8 +10,9 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
-from .. import fetch, media
+from .. import fetch, media, kit
 from ..catalog import KINDS
+from ..outputs import MAIN_CANVAS
 from ..references import media_kind, read_text_upload, read_upload, safe_name, text_kind, upload_reference
 from .deps import current_user
 
@@ -37,10 +40,11 @@ def _own_project(request, user, project_id):
 # ---------------------------------------------------------------- items
 
 @router.get("/library")
-async def list_items(request: Request, kind: str = "", q: str = "", project: str = "", run: str = "",
+async def list_items(request: Request, kind: str = "", q: str = "", project: str = "", run: str = "", modules: int = 0,
                      user: dict = Depends(current_user)):
-    """`project` is a project id, "none" for items in no project, or empty for everything. `run`: the working files of
-    that run (slices, trims, references of a long skill), which are otherwise left out."""
+    """`project` is a project id, "none" for items in no project, or empty for everything; with `modules=1` a project's
+    modules count as part of it. `run`: the working files of that run (slices, trims, references of a long skill), which
+    are otherwise left out."""
     # Each item comes with what its details panel shows: the job's cost and the project's name.
     sql = ("SELECT g.*, j.cost, p.name AS project_name FROM generations g LEFT JOIN jobs j ON j.id = g.job_id "
            "LEFT JOIN projects p ON p.id = g.project_id WHERE g.user_id = ?")
@@ -50,6 +54,8 @@ async def list_items(request: Request, kind: str = "", q: str = "", project: str
         sql, params = sql + " AND g.kind = ?", params + [kind]
     if project == "none":
         sql += " AND g.project_id IS NULL"
+    elif project.isdigit() and modules:
+        sql, params = sql + " AND g.project_id IN (SELECT id FROM projects WHERE id = ? OR parent_id = ?)", params + [int(project)] * 2
     elif project.isdigit():
         sql, params = sql + " AND g.project_id = ?", params + [int(project)]
     for word in q.split()[:6]:  # every word must appear in the name, the workflow or the settings (prompt)
@@ -131,11 +137,12 @@ async def _file_in(request, user, data, filename, kind, project_id, summary, wor
         if found["seconds"]:
             context["duration"] = round(found["seconds"], 2)
     db = request.app.state.db
+    filed = request.app.state.outputs.settle(user["id"], project_id, target)   # into its project's folder
     db.run("INSERT INTO generations (user_id, job_id, project_id, workflow, kind, name, filename, summary, settings, "
            "context, seconds, size, created) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
-           (user["id"], project_id, workflow, kind, name, target.name, summary,
+           (user["id"], project_id, workflow, kind, name, filed, summary,
             json.dumps({"name": name, "prompt": "", **({"source": source} if source else {})}), json.dumps(context), len(data), time.time()))
-    row = db.one("SELECT * FROM generations WHERE user_id = ? AND filename = ?", (user["id"], target.name))
+    row = db.one("SELECT * FROM generations WHERE user_id = ? AND filename = ?", (user["id"], filed))
     return dict(row, settings=json.loads(row["settings"]), context=json.loads(row["context"]))
 
 
@@ -201,15 +208,14 @@ async def update_item(item_id: int, body: dict, request: Request, user: dict = D
         if body["project_id"] is not None:
             _own_project(request, user, body["project_id"])
         db.run("UPDATE generations SET project_id = ? WHERE id = ?", (body["project_id"], item_id))
+        request.app.state.outputs.refile(user["id"], item_id, body["project_id"])   # its file follows it to that project's folder
     return {"ok": True}
 
 
 @router.delete("/library/{item_id}")
 async def delete_item(item_id: int, request: Request, user: dict = Depends(current_user)):
     row = _own(request, user, item_id)
-    path = _path(request, row)
-    path.unlink(missing_ok=True)
-    media.poster_path(path).unlink(missing_ok=True)
+    media.remove_result(_path(request, row))
     request.app.state.db.run("DELETE FROM generations WHERE id = ?", (item_id,))
     return {"ok": True}
 
@@ -238,25 +244,189 @@ async def as_reference(item_id: int, request: Request, kind: str = "image", user
 
 # ---------------------------------------------------------------- projects
 
+# A project and its modules: "p.id = ? OR p.parent_id = ?" in the counts below, so a project counts what its modules hold.
+_IN_PROJECT = "g.project_id IN (SELECT q.id FROM projects q WHERE q.id = p.id OR q.parent_id = p.id)"
+
+
 @router.get("/projects")
 async def list_projects(request: Request, user: dict = Depends(current_user)):
+    """Every project and module of the user. A module has "parent_id" and "parent_name"; a project has "modules", the
+    number of its modules, and counts (items, cover, updated) over itself and its modules together."""
     return {"projects": request.app.state.db.all(
-        "SELECT p.id, p.name, p.created, (SELECT COUNT(*) FROM generations g WHERE g.project_id = p.id AND g.run = '') AS items, "
+        "SELECT p.id, p.name, p.canvas_name, p.created, p.parent_id, pp.name AS parent_name, "
+        "(SELECT COUNT(*) FROM projects m WHERE m.parent_id = p.id) AS modules, "
+        "(SELECT COUNT(*) FROM generations g WHERE " + _IN_PROJECT + " AND g.run = '') AS items, "
         # The newest item of a project is its cover on the Home page, and tells when it was last worked on.
-        "(SELECT g.id FROM generations g WHERE g.project_id = p.id AND g.run = '' ORDER BY g.created DESC LIMIT 1) AS cover_id, "
-        "(SELECT g.kind FROM generations g WHERE g.project_id = p.id AND g.run = '' ORDER BY g.created DESC LIMIT 1) AS cover_kind, "
-        "(SELECT MAX(g.created) FROM generations g WHERE g.project_id = p.id) AS updated "
-        "FROM projects p WHERE p.user_id = ? ORDER BY lower(p.name)", (user["id"],))}
+        "(SELECT g.id FROM generations g WHERE " + _IN_PROJECT + " AND g.run = '' ORDER BY g.created DESC LIMIT 1) AS cover_id, "
+        "(SELECT g.kind FROM generations g WHERE " + _IN_PROJECT + " AND g.run = '' ORDER BY g.created DESC LIMIT 1) AS cover_kind, "
+        "(SELECT MAX(g.created) FROM generations g WHERE " + _IN_PROJECT + ") AS updated "
+        "FROM projects p LEFT JOIN projects pp ON pp.id = p.parent_id WHERE p.user_id = ? ORDER BY lower(p.name)", (user["id"],))}
+
+
+@router.get("/projects/{project_id}")
+async def get_project(project_id: int, request: Request, user: dict = Depends(current_user)):
+    """A project's page: the project, its own canvas as the first module ("main"), then its modules, each with its items,
+    cover and last change. For a module, the project it is in."""
+    db = request.app.state.db
+    here = _own_project(request, user, project_id)
+    top = _own_project(request, user, here["parent_id"]) if here["parent_id"] else here
+
+    def counted(row, main=False):
+        stats = db.one("SELECT COUNT(*) AS items, MAX(created) AS updated FROM generations WHERE project_id = ? AND run = ''", (row["id"],))
+        cover = db.one("SELECT id, kind FROM generations WHERE project_id = ? AND run = '' ORDER BY created DESC LIMIT 1", (row["id"],))
+        name = (row["canvas_name"] or MAIN_CANVAS) if main else row["name"]   # the project's own canvas goes by its own name
+        return {"id": row["id"], "name": name, "created": row["created"], "main": main, "items": stats["items"],
+                "updated": stats["updated"], "cover_id": cover and cover["id"], "cover_kind": cover and cover["kind"]}
+    modules = [counted(top, True)] + [counted(m) for m in db.all(
+        "SELECT * FROM projects WHERE parent_id = ? AND user_id = ? ORDER BY created", (top["id"], user["id"]))]
+    return {"project": {"id": top["id"], "name": top["name"], "created": top["created"],
+                        "items": sum(m["items"] for m in modules), "updated": max((m["updated"] or 0 for m in modules), default=0) or None,
+                        **next(({"cover_id": m["cover_id"], "cover_kind": m["cover_kind"]} for m in sorted(modules, key=lambda m: -(m["updated"] or 0))
+                                if m["cover_id"]), {"cover_id": None, "cover_kind": None})},
+            "modules": modules}
+
+
+# ---------------------------------------------------------------- a project's analytics
+
+# What a project's credits went on, by the kind of thing made. A sound is music or a voice by its workflow.
+ASSET_TYPES = (("video", "Videos"), ("voiceover", "Voiceover"), ("music", "Music"), ("image", "Images"),
+               ("motion", "Motion graphics"), ("edit", "Edits"), ("llm", "Agent"))
+PERIODS = ("today", "7", "30", "month")
+
+
+def _asset_type(workflow, kind):
+    if str(workflow).startswith("audio/"):
+        return "music" if "music" in str(workflow).lower() else "voiceover"
+    return {"video": "video", "upscaler": "video", "image": "image", "motion": "motion"}.get(kind, "edit")
+
+
+def _period(period, now=None):
+    """(start, end) of a period, by this machine's clock: today, the last 7 or 30 days, or this month."""
+    now = now or time.time()
+    day = time.localtime(now)
+    midnight = time.mktime((day.tm_year, day.tm_mon, day.tm_mday, 0, 0, 0, 0, 0, -1))
+    if period == "today":
+        return midnight, now
+    if period == "month":
+        return time.mktime((day.tm_year, day.tm_mon, 1, 0, 0, 0, 0, 0, -1)), now
+    return midnight - (int(period) - 1) * 86400, now
+
+
+def project_analytics_data(db, user, project_id, period):
+    row = db.one("SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user["id"]))
+    if row is None:
+        raise HTTPException(404, "No such project.")
+    root = row["parent_id"] or project_id
+    project = db.one("SELECT * FROM projects WHERE id = ?", (root,))
+    modules = [dict(project, main=True)] + [dict(m, main=False) for m in db.all(
+        "SELECT * FROM projects WHERE parent_id = ? ORDER BY id", (root,))]
+    ids = [m["id"] for m in modules]
+    marks = ", ".join("?" * len(ids))
+    period = period if period in PERIODS else "7"
+    start, end = _period(period)
+    before = start - (end - start)
+    # What a job spent is its price less what was given back: the charge itself is written before the job has an id.
+    jobs = db.all("SELECT j.id, j.project_id, j.workflow, j.kind, j.status, j.created, j.user_id, j.cost - j.credits_refunded AS spent "
+                  "FROM jobs j WHERE j.user_id = ? AND j.project_id IN ({}) AND j.created >= ? AND j.created < ?".format(marks),
+                  (user["id"], *ids, before, end))
+    talks = db.all("SELECT project_id, created, -amount AS spent FROM credit_events WHERE user_id = ? AND reason = 'agent' AND project_id IN ({}) "
+                   "AND created >= ? AND created < ?".format(marks), (user["id"], *ids, before, end))
+    made = db.all("SELECT project_id, kind, workflow, created FROM generations WHERE user_id = ? AND project_id IN ({}) AND run = '' "
+                  "AND created >= ? AND created < ?".format(marks), (user["id"], *ids, start, end))
+    first = {r["project_id"]: r["first"] for r in db.all(
+        "SELECT project_id, MIN(created) AS first FROM generations WHERE user_id = ? AND project_id IN ({}) GROUP BY project_id".format(marks),
+        (user["id"], *ids))}
+    spends = [(j["project_id"], _asset_type(j["workflow"], j["kind"]), j["created"], j["spent"] or 0) for j in jobs] + \
+             [(t["project_id"], "llm", t["created"], t["spent"] or 0) for t in talks]
+    now_spend = [x for x in spends if x[2] >= start]
+    spent, spent_before = sum(x[3] for x in now_spend), sum(x[3] for x in spends if x[2] < start)
+
+    days, at = [], start
+    while at < end and len(days) < 40:
+        days.append(time.strftime("%Y-%m-%d", time.localtime(at)))
+        at += 86400
+    daily = {day: {t: 0 for t, _ in ASSET_TYPES} for day in days}
+    for _, kind, when, credits in now_spend:
+        day = time.strftime("%Y-%m-%d", time.localtime(when))
+        if day in daily:
+            daily[day][kind] += credits
+    by_type = {t: {"credits": 0, "generations": 0} for t, _ in ASSET_TYPES}
+    for _, kind, _, credits in now_spend:
+        by_type[kind]["credits"] += credits
+    for g in made:
+        by_type[_asset_type(g["workflow"], g["kind"])]["generations"] += 1
+
+    rows = []
+    for number, m in enumerate(modules, start=1):
+        mine = [x for x in now_spend if x[0] == m["id"]]
+        items = [g for g in made if g["project_id"] == m["id"]]
+        kinds = {x[1] for x in mine} | {_asset_type(g["workflow"], g["kind"]) for g in items}
+        types = {t: {"credits": sum(x[3] for x in mine if x[1] == t), "generations": sum(1 for g in items if _asset_type(g["workflow"], g["kind"]) == t)}
+                 for t, _ in ASSET_TYPES}
+        rows.append({"id": m["id"], "number": number, "name": (m["canvas_name"] or MAIN_CANVAS) if m["main"] else m["name"], "main": m["main"],
+                     "first": first.get(m["id"]), "generations": len(items), "asset_types": len(kinds),
+                     "credits": sum(x[3] for x in mine), "types": {t: v for t, v in types.items() if v["credits"] or v["generations"]}})
+    rows.sort(key=lambda r: (-r["credits"], -r["generations"], r["number"]))
+    return {
+        "project": {"id": root, "name": project["name"]}, "period": period, "start": start, "end": end, "owner": user["email"],
+        "spend": spent, "spend_before": spent_before,
+        "change": None if not spent_before else round(100 * (spent - spent_before) / spent_before),
+        "generations": len(made), "active_modules": sum(1 for r in rows if r["generations"] or r["credits"]),
+        "contributors": len({j["user_id"] for j in jobs if j["created"] >= start}),
+        "types": [{"id": t, "label": label, **by_type[t]} for t, label in ASSET_TYPES],
+        "days": days, "daily": [daily[d] for d in days], "modules": rows,
+    }
+
+
+@router.get("/projects/{project_id}/analytics")
+async def project_analytics(project_id: int, request: Request, period: str = "7", user: dict = Depends(current_user)):
+    """What a project (its modules too) spent and made in a period (today, 7, 30 or month): by day and kind of thing
+    made, and by module. Credits are what the jobs cost less their refunds, and the agent's messages in the project."""
+    return project_analytics_data(request.app.state.db, user, project_id, period)
+
+
+@router.get("/projects/{project_id}/analytics.csv")
+async def project_analytics_csv(project_id: int, request: Request, period: str = "7", user: dict = Depends(current_user)):
+    found = project_analytics_data(request.app.state.db, user, project_id, period)
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["module", "first generation", "generations", "asset types", "credits"] + [label + " credits" for _, label in ASSET_TYPES])
+    for r in found["modules"]:
+        writer.writerow([r["name"], time.strftime("%Y-%m-%d", time.localtime(r["first"])) if r["first"] else "", r["generations"],
+                         r["asset_types"], r["credits"]] + [r["types"].get(t, {}).get("credits", 0) for t, _ in ASSET_TYPES])
+    name = "".join(c if c.isalnum() else "-" for c in found["project"]["name"]).strip("-") or "project"
+    return Response(out.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="{}-{}.csv"'.format(name, found["period"])})
+
+
+@router.post("/projects/{project_id}/duplicate")
+async def duplicate_project(project_id: int, request: Request, user: dict = Depends(current_user)):
+    """A copy of a project to start again from: its modules (empty canvases of the same names) and its NeuralCore kit,
+    named "<name> copy". What was made stays with the first project."""
+    state, db = request.app.state, request.app.state.db
+    row = _own_project(request, user, project_id)
+    root = db.one("SELECT * FROM projects WHERE id = ?", (row["parent_id"] or project_id,))
+    copy = db.run("INSERT INTO projects (user_id, name, created) VALUES (?, ?, ?)", (user["id"], (root["name"] + " copy")[:60], time.time()))
+    for m in db.all("SELECT name FROM projects WHERE parent_id = ? ORDER BY id", (root["id"],)):
+        db.run("INSERT INTO projects (user_id, name, created, parent_id) VALUES (?, ?, ?, ?)", (user["id"], m["name"], time.time(), copy))
+    kit.copy_entries(db, user["id"], root["id"], copy)
+    return {"id": copy, "name": (root["name"] + " copy")[:60]}
 
 
 @router.post("/projects")
 async def create_project(body: dict, request: Request, user: dict = Depends(current_user)):
+    """{"name", "parent_id"?}: a project, or with parent_id a module inside that project (a module holds no modules)."""
     name = str(body.get("name", "")).strip()[:60]
     if not name:
         raise HTTPException(400, "Give the project a name.")
-    project_id = request.app.state.db.run("INSERT INTO projects (user_id, name, created) VALUES (?, ?, ?)",
-                                          (user["id"], name, time.time()))
-    return {"id": project_id, "name": name}
+    parent = None
+    if body.get("parent_id"):
+        parent = _own_project(request, user, body["parent_id"]) if isinstance(body["parent_id"], int) else None
+        if parent is None or parent["parent_id"]:
+            raise HTTPException(400, "A module goes inside a project, not inside another module.")
+    project_id = request.app.state.db.run("INSERT INTO projects (user_id, name, created, parent_id) VALUES (?, ?, ?, ?)",
+                                          (user["id"], name, time.time(), parent and parent["id"]))
+    return {"id": project_id, "name": name, "parent_id": parent and parent["id"]}
 
 
 @router.put("/projects/{project_id}")
@@ -265,17 +435,55 @@ async def rename_project(project_id: int, body: dict, request: Request, user: di
     name = str(body.get("name", "")).strip()[:60]
     if not name:
         raise HTTPException(400, "Give the project a name.")
+    outputs = request.app.state.outputs
+    before = outputs.folder_of(project_id)
     request.app.state.db.run("UPDATE projects SET name = ? WHERE id = ?", (name, project_id))
+    outputs.rename(user["id"], before, outputs.folder_of(project_id))   # its folder (with its modules') takes the new name
     return {"ok": True}
+
+
+@router.put("/projects/{project_id}/canvas")
+async def rename_canvas(project_id: int, body: dict, request: Request, user: dict = Depends(current_user)):
+    """Rename a project's own canvas (shown as "Main canvas" until it is named). Its folder of results takes the name."""
+    here = _own_project(request, user, project_id)
+    if here["parent_id"]:
+        raise HTTPException(400, "A module is renamed as a module.")
+    name = str(body.get("name", "")).strip()[:60]
+    if not name:
+        raise HTTPException(400, "Give the canvas a name.")
+    outputs = request.app.state.outputs
+    before = outputs.relative(project_id)
+    request.app.state.db.run("UPDATE projects SET canvas_name = ? WHERE id = ?", ("" if name == MAIN_CANVAS else name, project_id))
+    outputs.rename(user["id"], before, outputs.relative(project_id))
+    return {"ok": True, "name": name}
 
 
 @router.delete("/projects/{project_id}")
 async def delete_project(project_id: int, request: Request, user: dict = Depends(current_user)):
-    """Delete a project. Its items stay in the library, in no project."""
-    _own_project(request, user, project_id)
-    db = request.app.state.db
-    db.run("UPDATE generations SET project_id = NULL WHERE project_id = ?", (project_id,))
-    db.run("UPDATE jobs SET project_id = NULL WHERE project_id = ?", (project_id,))
-    db.run("UPDATE assets SET project_id = NULL WHERE project_id = ?", (project_id,))   # its uploads too
-    db.run("DELETE FROM projects WHERE id = ?", (project_id,))
-    return {"ok": True}
+    """Delete a project, or a module, and everything in it, so nothing that can no longer be used stays in storage: what
+    was made in it (the files, their posters and keyframes), its jobs still waiting or running (their credits given
+    back), and its canvases, timelines and agent tabs. A project takes its modules and its NeuralCore with it. The jobs'
+    records stay, in no project, for the credit history."""
+    here = _own_project(request, user, project_id)
+    state, db = request.app.state, request.app.state.db
+    gone = [project_id] if here["parent_id"] else [m["id"] for m in db.all("SELECT id FROM projects WHERE parent_id = ?", (project_id,))] + [project_id]
+    its_folder = state.outputs.folder_of(project_id)   # a project's folder holds its modules' folders: all of it
+    marks = ", ".join("?" * len(gone))
+    for job in db.all("SELECT id FROM jobs WHERE user_id = ? AND status IN ('queued', 'running') AND project_id IN ({})".format(marks), (user["id"], *gone)):
+        state.jobs.remove(user["id"], job["id"])   # a running one stops at its next check; its result is not kept (jobs._record)
+    folder = state.outputs.folder(user["id"])
+    removed = db.all("SELECT id, filename FROM generations WHERE user_id = ? AND project_id IN ({})".format(marks), (user["id"], *gone))
+    for row in removed:
+        media.remove_result(folder / row["filename"])
+    db.run("DELETE FROM generations WHERE user_id = ? AND project_id IN ({})".format(marks), (user["id"], *gone))
+    for one in gone:
+        db.run("UPDATE jobs SET project_id = NULL WHERE project_id = ?", (one,))
+        # Its canvas, timeline and agent tabs go with it: a project made later must not open with them.
+        db.run("DELETE FROM boards WHERE project_id = ? AND user_id = ?", (one, user["id"]))
+        if not here["parent_id"]:   # the NeuralCore is the project's: its modules share it, so it goes only with the project
+            for row in db.all("SELECT id FROM assets WHERE project_id = ? AND user_id = ?", (one, user["id"])):
+                kit.remove(db, state.assets_dir / str(user["id"]), user["id"], row["id"])   # files too
+        db.run("DELETE FROM projects WHERE id = ?", (one,))
+    state.outputs.remove_folder(user["id"], its_folder)   # whatever is left in its folder; never the backup's copy
+    state.notify(user["id"], library_changed=True)
+    return {"ok": True, "items_deleted": len(removed)}

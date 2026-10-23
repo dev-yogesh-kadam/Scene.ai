@@ -1,18 +1,12 @@
-"""Saved assets: characters, outfits, backgrounds and voices a user keeps to reuse as references."""
-
-import hashlib
-import shutil
-import time
+"""The file of a NeuralCore entry (a row of assets). Assets are kept only in a project's NeuralCore (see kit.py and
+api/kit.py, which add, change and remove them); there are no saved assets of their own any more."""
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from ..references import media_kind, read_upload, safe_name
 from .deps import current_user
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
-TAGS = ("character", "outfit", "background", "prop", "voice", "style", "other")
-NOTE_CHARS = 600   # the most a description or a note on how to use an asset can hold
 
 
 def _folder(request, user):
@@ -28,58 +22,6 @@ def _own(request, user, asset_id):
     return row
 
 
-def _note(text):
-    return " ".join(str(text or "").split())[:NOTE_CHARS]
-
-
-def _insert(request, user, name, tag, kind, filename, size, use_note="", about=""):
-    asset_id = request.app.state.db.run(
-        "INSERT INTO assets (user_id, name, tag, kind, filename, size, created, use_note, about) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (user["id"], name.strip()[:60] or "Untitled", tag if tag in TAGS else "other", kind, filename, size, time.time(),
-         _note(use_note), _note(about)))
-    return {"id": asset_id}
-
-
-@router.get("")
-async def list_assets(request: Request, kind: str = "", user: dict = Depends(current_user)):
-    sql, params = "SELECT id, name, tag, kind, filename, size, created, about, use_note, origin, project_id FROM assets WHERE user_id = ?", [user["id"]]
-    if kind == "audio":  # a voice slot also takes the sound of a video
-        sql += " AND kind IN ('audio', 'video')"
-    elif kind in ("image", "video"):
-        sql, params = sql + " AND kind = ?", params + [kind]
-    return {"assets": request.app.state.db.all(sql + " ORDER BY tag, lower(name)", params), "tags": TAGS}
-
-
-@router.post("")
-async def create_asset(request: Request, user: dict = Depends(current_user)):
-    """Multipart form with "file", "name" and "tag"; or JSON {"generation_id", "name", "tag"} to keep a library image."""
-    if request.headers.get("content-type", "").startswith("application/json"):
-        body = await request.json()
-        item = request.app.state.db.one("SELECT * FROM generations WHERE id = ? AND user_id = ?",
-                                        (body.get("generation_id"), user["id"]))
-        source = item and request.app.state.outputs.folder(user["id"]) / item["filename"]
-        if not item or not source.is_file():
-            raise HTTPException(404, "No such library item.")
-        filename = "{}_{}".format(int(time.time()), source.name)
-        shutil.copyfile(source, _folder(request, user) / filename)
-        # What the agent's model saw in the library item comes along, so it need not look again.
-        return _insert(request, user, str(body.get("name") or item["name"]), str(body.get("tag", "character")),
-                       item["kind"], filename, source.stat().st_size, body.get("use_note"), item.get("about"))
-
-    form = await request.form()
-    upload = form.get("file")
-    if not hasattr(upload, "filename"):
-        raise HTTPException(400, "Choose a file.")
-    kind = media_kind(upload.filename)
-    if kind is None:
-        raise HTTPException(400, "Use an image, video or audio file.")
-    data = await read_upload(upload)
-    filename = "{}_{}".format(hashlib.sha1(data).hexdigest()[:10], safe_name(upload.filename))
-    (_folder(request, user) / filename).write_bytes(data)
-    return _insert(request, user, str(form.get("name") or upload.filename.rsplit(".", 1)[0]),
-                   str(form.get("tag", "character")), kind, filename, len(data), form.get("use_note"))
-
-
 @router.get("/{asset_id}/file")
 async def get_file(asset_id: int, request: Request, user: dict = Depends(current_user)):
     row = _own(request, user, asset_id)
@@ -87,28 +29,3 @@ async def get_file(asset_id: int, request: Request, user: dict = Depends(current
     if not path.is_file():
         raise HTTPException(404, "The file is missing from storage.")
     return FileResponse(path)
-
-
-@router.put("/{asset_id}")
-async def update_asset(asset_id: int, body: dict, request: Request, user: dict = Depends(current_user)):
-    row = _own(request, user, asset_id)
-    name = str(body.get("name", row["name"])).strip()[:60] or row["name"]
-    tag = body.get("tag", row["tag"])
-    # about: what it shows, as the agent's model wrote it or as the user corrected it. use_note: when and how to use it.
-    about, note = (_note(body.get(key, row[key])) for key in ("about", "use_note"))
-    # An upload the user keeps becomes a saved asset, of every project; a saved one does not go back.
-    origin = "saved" if body.get("origin") == "saved" else row["origin"]
-    request.app.state.db.run("UPDATE assets SET name = ?, tag = ?, about = ?, use_note = ?, origin = ?, project_id = ? WHERE id = ?",
-                             (name, tag if tag in TAGS else row["tag"], about, note, origin,
-                              None if origin == "saved" else row["project_id"], asset_id))
-    return {"ok": True}
-
-
-@router.delete("/{asset_id}")
-async def delete_asset(asset_id: int, request: Request, user: dict = Depends(current_user)):
-    row = _own(request, user, asset_id)
-    db = request.app.state.db
-    db.run("DELETE FROM assets WHERE id = ?", (asset_id,))
-    if not db.one("SELECT 1 FROM assets WHERE user_id = ? AND filename = ?", (user["id"], row["filename"])):
-        (_folder(request, user) / row["filename"]).unlink(missing_ok=True)
-    return {"ok": True}

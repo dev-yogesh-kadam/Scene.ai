@@ -1,8 +1,8 @@
 // The admin console's Skills section: create, edit and delete the recipes the agent follows. Skills are Markdown
 // files on the server; a change takes effect on the next agent message, with no restart.
 
-import { api } from '../../api.js';
-import { el, field } from '../../dom.js';
+import { api } from '../api.js';
+import { el, field } from '../dom.js';
 import { table } from './shared.js';
 
 // A skill file as text: "key: value" lines, a line of three dashes, then the steps. Skills written for other tools come with

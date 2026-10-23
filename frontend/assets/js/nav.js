@@ -28,3 +28,9 @@ export function linkClicks() {
 export function oldAddress() {
   if (location.hash.startsWith('#/')) history.replaceState(null, '', location.hash.slice(1));
 }
+
+// Where an admin's browser finds the admin console, a site of its own: the address the studio was told, or its port on
+// the host the studio was opened at.
+export function consoleAddress(user) {
+  return user.console.url || `${location.protocol}//${location.hostname}:${user.console.port}`;
+}

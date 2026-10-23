@@ -7,8 +7,8 @@ export const store = {
   user: null,
   jobs: [],
   online: null,
-  people: null,  // how many people have the studio open now; sent to admins only, as it changes
   rerun: null,   // a library item whose settings the Create page should load
+  reuseSeed: null, // with rerun: the seed it was made with, which the Create page keeps ("Reuse seed")
   prefill: null, // {slot, ref}: a reference the Create page should put into a slot (e.g. the first frame)
   from: null,    // the page that opened Create ('/canvas'), so Create can offer a way back to it
 };
@@ -43,10 +43,6 @@ export function startLive() {
     socket.onopen = sayPage;
     socket.onmessage = (e) => {
       const message = JSON.parse(e.data);
-      if (message.online_users != null) {   // someone opened the studio or closed their last tab
-        store.people = message.online_users;
-        return emit('people');
-      }
       store.jobs = message.jobs;
       emit('jobs');
       if (store.user && message.credits != null && message.credits !== store.user.credits) {

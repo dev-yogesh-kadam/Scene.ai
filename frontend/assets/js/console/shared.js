@@ -1,6 +1,6 @@
 // Helpers shared by the admin console sections.
 
-import { el } from '../../dom.js';
+import { el } from '../dom.js';
 
 export const STATUS = { queued: 'Waiting', running: 'Running', done: 'Done', failed: 'Failed', cancelled: 'Cancelled' };
 

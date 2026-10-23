@@ -27,7 +27,10 @@ async function call(path, { method = 'GET', json, form } = {}) {
   try { return JSON.parse(text); } catch { return text; }
 }
 
-await call('/api/auth/register', { method: 'POST', json: { name: 'Tester', email: 'tester' + Date.now() + '@example.com', password: 'correct horse battery staple' } });
+const CONSOLE = 'http://127.0.0.1:8098';
+const EMAIL = 'tester' + Date.now() + '@example.com';
+const PASSWORD = 'correct horse battery staple';
+await call('/api/auth/register', { method: 'POST', json: { name: 'Tester', email: EMAIL, password: PASSWORD } });
 const project = await call('/api/projects', { method: 'POST', json: { name: 'E2E' } });
 async function upload(file, type) {
   const form = new FormData();
@@ -222,10 +225,11 @@ await page.$$eval('.quick-action', (bs) => bs.find((b) => b.textContent.includes
 await wait(800);
 const quick = await page.evaluate(() => document.querySelector('.side-panel').innerText);
 check('no Continue from the end of in Quick actions', !/Continue from the end of|Start on /.test(quick), quick.slice(0, 120).replace(/\s+/g, ' '));
-// the admin Pricing tab loads, with its Agent models card
-await page.goto(BASE + '/#/admin', { waitUntil: 'networkidle2' });
-await page.evaluate(() => sessionStorage.setItem('scene.admin.tab', 'pricing'));
-await page.reload({ waitUntil: 'networkidle2' });
+// the admin console's Pricing section loads, with its Agent models card (the console is on its own port and sign-in)
+await page.goto(CONSOLE + '/pricing', { waitUntil: 'networkidle2' });
+await page.type('input[type=email]', EMAIL);
+await page.type('input[type=password]', PASSWORD);
+await Promise.all([page.waitForSelector('.sidebar'), page.click('button[type=submit]')]);
 await wait(800);
 const pricingText = await page.evaluate(() => document.querySelector('main').innerText);
 check('Pricing tab loads with Agent models', pricingText.includes('Agent models') && !pricingText.includes('Not Found'), pricingText.slice(0, 80).replace(/\s+/g, ' '));

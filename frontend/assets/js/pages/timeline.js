@@ -3,6 +3,7 @@
 import { api } from '../api.js';
 import { el, icon, tabTitle, timecode } from '../dom.js';
 import { subscribe, refreshJobs } from '../store.js';
+import { go } from '../nav.js';
 
 const fileUrl = (id) => `/api/library/${id}/file`;
 const lengths = {};   // generation id -> promise of the video's length in seconds
@@ -204,7 +205,13 @@ export function render(view) {
     try {
       const [projects, library, board] = await Promise.all([api('/api/projects'),
         api('/api/library?kind=video' + (project ? '&project=' + project : '')), api('/api/boards/timeline?project=' + project)]);
-      picker.textContent = (projects.projects.find((p) => p.id === project) || { name: 'All work' }).name;
+      {
+        const here = projects.projects.find((p) => p.id === project);
+        picker.textContent = here ? (here.parent_name ? `${here.parent_name} › ${here.name}` : here.name) : 'All work';
+        picker.onclick = here ? () => go('/project?id=' + (here.parent_id || here.id)) : null;
+        picker.classList.toggle('linked', !!here);
+        picker.title = here ? 'Open the project: its kit and its modules' : 'Everything you have made';
+      }
       tabTitle((projects.projects.find((p) => p.id === project) || { name: 'Timeline' }).name);
       videos = library.items;
       name.value = board.data.name || 'Timeline';

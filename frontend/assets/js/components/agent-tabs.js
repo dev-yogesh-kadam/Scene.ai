@@ -3,7 +3,7 @@
 // it was used and what it spent; pointing at what it spent shows it by kind.
 
 import { api } from '../api.js';
-import { el, icon } from '../dom.js';
+import { ask, el, icon } from '../dom.js';
 import { agentPanel, popover, spendCard } from './agent.js';
 
 const MAX_TABS = 30;   // conversations kept per project; the oldest closed one goes when there are more
@@ -151,8 +151,9 @@ export function agentTabs({ projectId = () => 0, onJobs = () => {}, onMemory = n
             el('button', { type: 'button', class: 'icon-btn small', title: 'Rename', 'aria-label': `Rename ${t.name}`,
               onclick: () => { box.close(); show(t.id); rename(t.id, strip.querySelector('.agent-tab.on .agent-tab-name')); } }, icon('pencil')),
             el('button', { type: 'button', class: 'icon-btn small', title: 'Delete this conversation', 'aria-label': `Delete ${t.name}`,
-              onclick: () => {
-                if (!confirm(`Delete "${t.name}"? Its messages and plans are removed. What it made stays in the library.`)) return;
+              onclick: async () => {
+                if (!await ask({ title: `Delete "${t.name}"?`, danger: true, confirm: 'Delete conversation',
+                  message: 'Its messages and plans are removed. What it made stays on the canvas and in the library.' })) return;
                 box.close();
                 document.querySelectorAll('.agent-spend-card').forEach((c) => c.remove());
                 const wasActive = t.id === index.active;

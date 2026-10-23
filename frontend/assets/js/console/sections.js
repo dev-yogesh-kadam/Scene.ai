@@ -1,16 +1,17 @@
-// The admin console's list sections: users, jobs, library, credits, workflows, system, audit log, settings.
+// The admin console's list sections: users, jobs, library, credits, system, audit log, settings (workflows: workflows.js).
 
-import { api } from '../../api.js';
-import { still, el, field, segmented } from '../../dom.js';
-import { store, refreshStatus } from '../../store.js';
-import { meter } from '../../components/charts.js';
-import { openViewer } from '../../components/media.js';
+import { api } from '../api.js';
+import { still, el, field, segmented } from '../dom.js';
+import { session } from './session.js';
+import { modelServerCard, maintenanceCard, alertsCard, phoneCard } from './health.js';
+import { meter } from '../components/charts.js';
+import { openViewer } from '../components/media.js';
 import { number, bytes, span, ago, stamp, person, pill, tile, table, searchBox, exportLink, drawer, section, facts } from './shared.js';
 
 const REASON = { welcome: 'Sign-up credits', generation: 'Generation', refund: 'Refund', 'admin grant': 'Changed by an admin' };
 const act = (ctx, request) => request.then(ctx.draw).catch((e) => alert(e.message));
 const itemUrl = (id) => `/api/admin/library/${id}/file`;
-const thumb = (item) => still(itemUrl(item.id), item.kind, item.name);
+export const thumb = (item) => still(itemUrl(item.id), item.kind, item.name);
 
 // ---------------------------------------------------------------- give or take credits
 
@@ -68,18 +69,30 @@ export function creditsDialog(people, after) {
 
 // ---------------------------------------------------------------- users
 
+const ROLE_WORDS = { user: 'a user (no console)', support: 'support staff (helps people)', finance: 'finance staff (credits and pricing)',
+  moderator: 'a moderator (what is made)', admin: 'an admin (everything)' };
+
 function userActions(ctx, u, after) {
   const put = (json) => api('/api/admin/users/' + u.id, { method: 'PUT', json }).then(after).catch((e) => alert(e.message));
-  const self = u.id === store.user.id;
+  const self = u.id === session.user.id;
   return el('div', { class: 'row' },
     el('button', { class: 'btn small primary', onclick: () => creditsDialog([u], after) }, 'Give or take credits'),
     el('button', { class: 'btn small', onclick: () => {
       const password = prompt(`New password for ${u.name} (at least 8 characters). They are signed out everywhere.`);
       if (password) put({ password });
     } }, 'Set password'),
-    !self && el('button', { class: 'btn small', onclick: () => {
-      if (confirm(`Make ${u.name} ${u.role === 'admin' ? 'a normal user' : 'an admin'}?`)) put({ role: u.role === 'admin' ? 'user' : 'admin' });
-    } }, u.role === 'admin' ? 'Make user' : 'Make admin'),
+    !self && session.user.role === 'admin' && el('label', { class: 'role-pick' }, 'Role ',
+      el('select', { onchange: (e) => {
+        const role = e.target.value;
+        if (confirm(`Make ${u.name} ${ROLE_WORDS[role]}?`)) put({ role }); else e.target.value = u.role;
+      } }, Object.keys(ROLE_WORDS).map((r) => el('option', { value: r, selected: r === u.role }, r[0].toUpperCase() + r.slice(1))))),
+    !self && session.user.role === 'admin' && u.role !== 'admin' && !u.disabled && el('button', { class: 'btn small', title: 'Opens the studio as they see it, read only, for an hour', onclick: async () => {
+      if (!confirm(`View the studio as ${u.name}, read only? It opens in a new tab and is written in the audit log. In this browser your own studio sign-in is replaced while you view.`)) return;
+      try {
+        const view = await api(`/api/admin/users/${u.id}/view`, { method: 'POST' });
+        window.open(`${location.protocol}//${location.hostname}:${view.port}${view.path}`, '_blank', 'noopener');
+      } catch (e) { alert(e.message); }
+    } }, 'View the studio as them'),
     u.mfa_enabled && el('button', { class: 'btn small', onclick: () => {
       if (confirm(`Turn off two-step sign-in for ${u.name}? Do this only when you know it is them asking, for example after a lost phone. They are signed out everywhere.`)) put({ mfa_off: true });
     } }, 'Turn off two-step sign-in'),
@@ -103,6 +116,32 @@ function limitSection(d, u, after) {
     el('p', { class: 'muted small', style: 'margin-top:6px' }, 'Leave it empty to follow the studio\'s limit (Settings). 0 means no limit for this user.'));
 }
 
+// "Chrome on Windows", from a browser's own description of itself.
+function browserName(agent) {
+  if (!agent) return 'Unknown browser';
+  const browser = /Edg\//.test(agent) ? 'Edge' : /OPR\//.test(agent) ? 'Opera' : /Firefox\//.test(agent) ? 'Firefox'
+    : /Chrome\//.test(agent) ? 'Chrome' : /Safari\//.test(agent) ? 'Safari' : /python|curl|node|httpx/i.test(agent) ? 'A script' : 'A browser';
+  const system = /Windows/.test(agent) ? 'Windows' : /Android/.test(agent) ? 'Android' : /iPhone|iPad/.test(agent) ? 'iPhone or iPad'
+    : /Mac OS X/.test(agent) ? 'Mac' : /Linux/.test(agent) ? 'Linux' : '';
+  return system ? `${browser} on ${system}` : browser;
+}
+
+// Where a user is signed in, with a way to end one session or all of them.
+function sessionsSection(d, u, after) {
+  const end = async (key) => {
+    if (!confirm(key ? 'Sign out this session?' : `Sign ${u.name} out everywhere, in the studio and this console?`)) return;
+    try { await api(`/api/admin/users/${u.id}/sign-out`, { method: 'POST', json: key ? { key } : {} }); after(); } catch (e) { alert(e.message); }
+  };
+  const others = d.sessions.filter((x) => !x.here);
+  return section(`Signed in (${d.sessions.length})`,
+    d.sessions.length
+      ? table(['Where', 'Browser', 'Address', 'Last used', ''], d.sessions.map((x) => [
+        x.console ? 'Admin console' : 'Studio', browserName(x.agent), x.ip || '', ago(x.seen || x.created),
+        x.here ? el('span', { class: 'muted small' }, 'You, here') : el('button', { class: 'btn small quiet', onclick: () => end(x.key) }, 'Sign out')]))
+      : el('p', { class: 'muted' }, 'Not signed in anywhere.'),
+    others.length > 1 && el('button', { class: 'btn small quiet danger', style: 'margin-top:8px', onclick: () => end('') }, 'Sign out everywhere'));
+}
+
 async function openUser(ctx, id) {
   const panel = drawer('User', el('p', { class: 'muted' }, 'Loading…'));
   const load = async () => {
@@ -111,7 +150,7 @@ async function openUser(ctx, id) {
     panel.replace(
       el('div', { class: 'drawer-title' }, el('div', { class: 'avatar' }, (u.name[0] || '?').toUpperCase()),
         el('div', {}, el('b', {}, u.name), el('div', { class: 'muted' }, u.email)),
-        el('span', { class: 'pill ' + (u.role === 'admin' ? 'running' : 'queued') }, u.role),
+        el('span', { class: 'pill ' + (u.role !== 'user' ? 'running' : 'queued') }, u.role),
         u.role !== 'admin' && u.agent ? el('span', { class: 'pill done' }, 'Agent') : null,
         u.mfa_enabled ? el('span', { class: 'pill done' }, 'Two-step') : null,
         u.disabled ? el('span', { class: 'pill failed' }, 'Disabled') : null),
@@ -124,6 +163,7 @@ async function openUser(ctx, id) {
       limitSection(d, u, () => { load(); ctx.draw(); }),
       section('Account', facts([['Joined', stamp(u.created)], ['Last sign-in', u.last_sign_in ? stamp(u.last_sign_in) : 'No active session'],
         ['Last job', u.last_job ? stamp(u.last_job) : 'Never']])),
+      sessionsSection(d, u, () => load()),
       section('Latest items', d.items.length
         ? el('div', { class: 'thumbs' }, d.items.map((i) => el('div', { class: 'thumb-box', title: i.name }, thumb(i))))
         : el('p', { class: 'muted' }, 'Nothing made yet.')),
@@ -142,7 +182,7 @@ export async function users(ctx) {
   return [
     el('div', { class: 'toolbar' },
       searchBox('Search name or email', s.q, (q) => { s.q = q; ctx.draw(); }),
-      segmented([{ id: '', label: 'All' }, { id: 'admins', label: 'Admins' }, { id: 'no_credits', label: 'Out of credits' }, { id: 'disabled', label: 'Disabled' }],
+      segmented([{ id: '', label: 'All' }, { id: 'admins', label: 'Staff' }, { id: 'no_credits', label: 'Out of credits' }, { id: 'disabled', label: 'Disabled' }],
         s.show, (v) => { s.show = v; ctx.draw(); }),
       el('span', { class: 'muted small', style: 'margin-left:auto' }, `${list.length} user${list.length === 1 ? '' : 's'}`), exportLink('users')),
     el('div', { class: 'card' }, table(
@@ -335,21 +375,6 @@ export async function credits(ctx) {
   ];
 }
 
-// ---------------------------------------------------------------- workflows
-
-export async function workflows() {
-  const report = await api('/api/admin/workflows');
-  return [
-    el('div', { class: 'card' }, table(
-      ['Workflow', 'Type', 'File', 'Status', 'Presets', 'Jobs', 'Succeeded', 'Avg. time', 'Last used'],
-      report.workflows.map((w) => [
-        el('div', {}, w.title, w.description && el('div', { class: 'muted small' }, w.description)), w.kind, w.file,
-        w.error ? el('div', {}, el('span', { class: 'pill failed' }, 'Can\'t be read'), el('div', { class: 'error small' }, w.error)) : el('span', { class: 'pill done' }, 'Ready'),
-        w.presets ? 'Yes' : 'No', number(w.jobs), w.done + w.failed ? Math.round((100 * w.done) / (w.done + w.failed)) + '%' : '', span(w.avg_seconds), ago(w.last_used)]))),
-    el('p', { class: 'muted small', style: 'margin-top:10px' }, `Workflow files are read from ${report.folder}. Add a file there and it appears on the Create page.`),
-  ];
-}
-
 // ---------------------------------------------------------------- system
 
 // How a dated copy is put back, for the database the studio runs on.
@@ -364,6 +389,19 @@ const RESTORE = {
     'Start the app again and sign in to check. docs/database.md has the full steps.'],
 };
 
+// Whether the newest copy reads back whole: checked once a day by the watcher, or now.
+function checkLine(b, ctx) {
+  const c = b.check;
+  const now = el('button', { class: 'btn small', disabled: !b.copies.length, onclick: async () => {
+    now.disabled = true;
+    now.textContent = 'Checking…';
+    try { await api('/api/admin/backups/check', { method: 'POST' }); ctx.draw(); } catch (e) { alert(e.message); now.disabled = false; now.textContent = 'Check the newest copy'; }
+  } }, 'Check the newest copy');
+  return el('div', { class: 'notice ' + (!c ? '' : c.ok ? 'ok' : 'error'), style: 'display:flex;gap:10px;align-items:center;flex-wrap:wrap' },
+    el('span', { style: 'flex:1;min-width:200px' }, !c ? 'The newest copy has not been read back yet. It is checked once a day.'
+      : `${c.ok ? 'Whole' : 'Not whole'}: ${c.copy || ''} ${c.detail} Checked ${ago(c.when)}.`), now);
+}
+
 function backupsCard(b, ctx) {
   const now = el('button', { class: 'btn small primary', disabled: !b.on, onclick: async () => {
     now.disabled = true;
@@ -376,10 +414,12 @@ function backupsCard(b, ctx) {
     el('p', { class: 'muted small' },
       'A backup is a dated copy of the studio\'s database: the accounts, projects, canvases, jobs, credits, prices and settings. ',
       'With it goes a copy of config.json, which holds the server addresses and keys. ',
-      'The finished pictures, videos and sounds are not in it; they stay in the outputs folder, and the database only names them.'),
+      'The finished pictures, videos and sounds and the kit\'s uploads are copied too, into the files folder beside them: ',
+      'only what is new or changed each time, and a file deleted in the studio keeps its copy there.'),
     el('p', { class: 'muted small' }, b.on
       ? `A copy is made each time the app starts and once a day while it runs. The last ${b.keep} days are kept in ${b.folder}. A copy made today replaces today's earlier one.`
       : 'Backups are switched off on this installation (backup_keep is 0 in config.json).'),
+    checkLine(b, ctx),
     el('h3', {}, databases.length ? `Copies (${databases.length})` : 'Copies'),
     databases.length
       ? table(['Copy', 'Made', 'Size'], databases.slice(0, 14).map((c) => [c.name, stamp(c.made), bytes(c.bytes)]))
@@ -418,7 +458,7 @@ function storageCards(st, ctx) {
 }
 
 export async function system(ctx) {
-  const [s, b, st] = await Promise.all([api('/api/admin/system'), api('/api/admin/backups'), api('/api/admin/storage')]);
+  const [s, b, st, alerts] = await Promise.all([api('/api/admin/system'), api('/api/admin/backups'), api('/api/admin/storage'), api('/api/admin/alerts')]);
   const sys = s.server.system || {};
   const gb = (v) => (v / 1024 ** 3).toFixed(1) + ' GB';
   const disk = s.storage;
@@ -428,6 +468,8 @@ export async function system(ctx) {
     try { await api('/api/admin/server/check', { method: 'POST' }); ctx.draw(); } catch (e) { alert(e.message); check.disabled = false; check.textContent = 'Check now'; }
   } }, 'Check now');
   return [el('div', { class: 'grid-2' },
+    alertsCard(alerts, ctx),
+    maintenanceCard(s.maintenance, ctx),
     el('div', { class: 'card' },
       el('div', { class: 'card-head' }, el('h2', {}, 'Render server'), el('span', { class: 'pill ' + (s.server.online ? 'done' : 'failed') }, s.server.online ? 'Online' : 'Offline'), check),
       facts([[s.server.online ? 'Online since' : 'Offline since', stamp(s.server.since)], ['Address', s.server.url], ['ComfyUI', sys.comfyui_version], ['Operating system', sys.os],
@@ -437,6 +479,7 @@ export async function system(ctx) {
       (s.server.devices || []).map((d) => el('div', {}, el('h3', {}, d.name.replace(/^cuda:\d+\s*/, '').split(' : ')[0] || d.type),
         meter('Video memory', d.vram_total - d.vram_free, d.vram_total, gb))),
       sys.ram_total && meter('System memory', sys.ram_total - sys.ram_free, sys.ram_total, gb)),
+    modelServerCard(s.model_server),
     el('div', { class: 'card' },
       el('div', { class: 'card-head' }, el('h2', {}, 'Scene.ai app')),
       facts([['Version', s.app.version], ['Running for', span(s.app.uptime_seconds)], ['Python', s.app.python], ['Operating system', s.app.os],
@@ -455,17 +498,36 @@ export async function system(ctx) {
 
 // ---------------------------------------------------------------- audit log
 
+// Checks the seals of the audit log (backend/scene/audit.py): whether any entry was changed or taken out.
+function sealCheck() {
+  const out = el('span', { class: 'small' });
+  const button = el('button', { class: 'btn small', onclick: async () => {
+    button.disabled = true;
+    try {
+      const v = await api('/api/admin/audit/verify');
+      out.className = 'small ' + (v.ok ? 'ok-text' : 'error');
+      out.textContent = v.ok
+        ? (v.sealed ? `All ${number(v.sealed)} sealed entries hold${v.since ? ` (sealed since ${stamp(v.since)})` : ''}.` : 'No sealed entries yet.')
+        : v.missing ? `${number(v.missing)} entr${v.missing === 1 ? 'y was' : 'ies were'} taken out.`
+          : `Changed: ${v.broken.action}${v.broken.created ? ` at ${stamp(v.broken.created)}` : ''} (entry ${v.broken.id ?? 'at the end'}).`;
+    } catch (e) { out.className = 'small error'; out.textContent = e.message; }
+    button.disabled = false;
+  } }, 'Check the seals');
+  return el('span', { class: 'row' }, out, button);
+}
+
 export async function audit(ctx) {
   const s = ctx.state.audit;
   const entries = (await api('/api/admin/audit?' + new URLSearchParams({ q: s.q }))).entries;
   return [
     el('div', { class: 'toolbar' }, searchBox('Search person, action or target', s.q, (q) => { s.q = q; ctx.draw(); }),
-      el('span', { style: 'margin-left:auto' }), exportLink('audit')),
+      el('span', { style: 'margin-left:auto' }), sealCheck(), exportLink('audit')),
     el('div', { class: 'card' }, table(['When', 'Who', 'Action', 'On', 'Details', 'Address'],
       entries.map((e) => [stamp(e.created), e.actor_name ? person(e.actor_name, e.actor_email) : el('span', { class: 'muted' }, 'Not signed in'),
         e.action, e.target, e.detail, el('span', { class: 'muted small' }, e.ip)]), { empty: 'No entries match.' })),
     el('p', { class: 'muted small', style: 'margin-top:10px' },
-      'Sign-ins, failed sign-ins, new accounts and every admin action are recorded here. The latest 300 are shown; Export CSV gives all of them.'),
+      'Sign-ins, failed sign-ins, new accounts and every admin action are recorded here. The latest 300 are shown; Export CSV gives all of them. ',
+      'Each entry is sealed with a hash of itself and the entry before it, so an entry changed or taken out shows when the seals are checked.'),
   ];
 }
 
@@ -485,7 +547,6 @@ function announcementCard(current) {
   const send = async (body) => {
     try {
       const shown = await api('/api/admin/announcement', { method: 'PUT', json: body });
-      window.dispatchEvent(new Event('scene:announcement'));
       notice.className = 'notice ok';
       notice.textContent = shown.text ? (shown.until ? `Showing to everyone until ${stamp(shown.until)}.` : 'Showing to everyone until you remove it.') : 'Removed.';
       if (!shown.text) text.value = '';
@@ -502,8 +563,8 @@ function announcementCard(current) {
       current.text && el('button', { class: 'btn quiet danger', onclick: () => send({ text: '' }) }, 'Remove')));
 }
 
-export async function settings() {
-  const [current, admins, news] = await Promise.all([api('/api/admin/settings'), api('/api/admin/admins'), api('/api/announcement')]);
+export async function settings(ctx) {
+  const [current, admins, news, alerts] = await Promise.all([api('/api/admin/settings'), api('/api/admin/admins'), api('/api/admin/announcement'), api('/api/admin/alerts')]);
   const url = el('input', { type: 'text', value: current.comfy_url });
   const signup = el('input', { type: 'checkbox', checked: current.allow_signup });
   const welcome = el('input', { type: 'number', min: 0, step: 1, value: current.signup_credits });
@@ -515,9 +576,9 @@ export async function settings() {
     try {
       await api('/api/admin/settings', { method: 'PUT', json: { comfy_url: url.value, allow_signup: signup.checked, signup_credits: welcome.value,
         daily_cap: cap.value || 0, admin_mfa: mfa.checked } });
-      await refreshStatus();
-      notice.className = 'notice ' + (store.online ? 'ok' : 'error');
-      notice.textContent = store.online ? 'Saved. The render server is online.' : 'Saved, but the render server does not answer at this address.';
+      const { online } = await api('/api/admin/server/check', { method: 'POST' });
+      notice.className = 'notice ' + (online ? 'ok' : 'error');
+      notice.textContent = online ? 'Saved. The render server is online.' : 'Saved, but the render server does not answer at this address.';
     } catch (err) { notice.className = 'notice error'; notice.textContent = err.message; }
   };
   return [el('div', { class: 'card narrow' },
@@ -527,7 +588,7 @@ export async function settings() {
     el('label', { class: 'check', style: 'margin-top:0' }, signup, 'Anyone who can open this site may create an account'),
     el('label', { class: 'check' }, mfa, 'Admins must use two-step sign-in to open the admin console'),
     el('p', { class: 'muted small', style: 'margin:6px 0 0 25px' }, without.length
-      ? `Without it now: ${without.map((a) => a.name).join(', ')}. They keep using the studio but can't open this console until they turn it on in Settings.`
+      ? `Without it now: ${without.map((a) => a.name).join(', ')}. They keep using the studio but can't sign in to this console until they turn it on in the studio's Settings.`
       : 'Every admin has two-step sign-in.'),
     el('h3', {}, 'Credits'),
     field('Credits for a new account', welcome),
@@ -536,5 +597,5 @@ export async function settings() {
     el('p', { class: 'muted small', style: 'margin-top:8px' }, 'What each kind of work costs is set in the Pricing section.'),
     notice,
     el('button', { class: 'btn primary', style: 'margin-top:12px', onclick: save }, 'Save')),
-  announcementCard(news)];
+  announcementCard(news), phoneCard(alerts.phone, ctx)];
 }

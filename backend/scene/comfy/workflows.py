@@ -7,7 +7,7 @@ An optional "<name>.studio.json" file next to a workflow adds presets, time esti
 
 import copy
 import json
-import os
+import random
 import re
 from pathlib import Path
 
@@ -35,6 +35,8 @@ KNOWN_INPUTS = {
     "seed": ("int", "seed"),
     "noise_seed": ("int", "seed"),
 }
+# The inputs a seed is typed into ("sampling_mode.seed" in a dynamic combo counts by its last part).
+SEED_INPUTS = {"seed", "noise_seed"}
 REF_CLASS = re.compile(r"(?:Load|Optional)(Image|Video|Audio)")
 # Reference slots the app treats specially, found by the loader node's title.
 EXTRA_LOADERS = {"image": ("LoadImage", "image"), "audio": ("LoadAudio", "audio")}
@@ -64,7 +66,7 @@ def _is_link(value):
 
 # ---------------------------------------------------------------- loading
 
-def load_workflow(path, object_info=None, workflow_id=None):
+def load_workflow(path, object_info=None, workflow_id=None, sidecar=None):
     """Read a workflow file. Returns {"id", "nodes", "info", "profile", "approximate"}.
 
     "nodes" is the graph in API format, including bypassed nodes. "info" holds what the API format
@@ -84,7 +86,7 @@ def load_workflow(path, object_info=None, workflow_id=None):
         raise WorkflowError("{} is not a ComfyUI workflow.".format(path.name))
 
     profile = {}
-    sidecar = path.with_name(path.stem + ".studio.json")
+    sidecar = Path(sidecar) if sidecar else path.with_name(path.stem + ".studio.json")
     if sidecar.is_file():
         try:
             profile = json.loads(sidecar.read_text(encoding="utf-8"))
@@ -343,6 +345,14 @@ def _type_ok(ctype, value):
     return isinstance(value, int) if ctype == "int" else isinstance(value, (int, float))
 
 
+def final_first(option):
+    """An option that offers "final" (a workflow's quality: draft or final) starts on it, whatever its presets file
+    says: the studio's results are the finished ones unless a draft is asked for."""
+    if any(isinstance(c, dict) and c.get("id") == "final" for c in option.get("choices") or []):
+        return dict(option, default="final")
+    return option
+
+
 def describe(wf):
     """List the controls, reference slots and presets of a workflow for the web page."""
     nodes, info, profile = wf["nodes"], wf["info"], wf["profile"]
@@ -400,6 +410,9 @@ def describe(wf):
             if name in node["inputs"] and _type_ok(ctype, node["inputs"][name]):
                 label = "{} ({})".format(name, cls) if title == cls else "{}: {}".format(title, name)
                 add_control(nid, name, ctype, label, role)
+    # A job's one seed is written into every seed of the workflow: a second seed is not a setting of its own.
+    targets = set(seed_targets(wf))
+    controls[:] = [c for c in controls if c["role"] == "seed" or (c["node"], c["input"]) not in targets]
 
     for extra in profile.get("controls", []):
         nid, name = str(extra["node"]), extra["input"]
@@ -453,19 +466,49 @@ def describe(wf):
         "description": profile.get("description", ""),
         "controls": controls,
         "refs": refs,
-        "options": profile.get("options", []),
+        "options": [final_first(o) for o in profile.get("options", [])],
         "hints": profile.get("hints", []),
         "confirm": confirm,
         "size": size,
         "slots": slots,
         # A long video is made as several clips, each starting on the last frame of the one before.
         "chain": "duration" in roles and "first_frame" in slots and "prompt" in roles,
+        # It takes a seed: a new random one on every job, unless one is given (a fixed seed, "Reuse seed").
+        "seeded": bool(targets) or "seed" in roles,
         "max_clips": MAX_CLIPS,
         "resolutions": sorted(SHORT_EDGE),
         "approximate": wf["approximate"],
         # The presets file says the prompt may be left empty: the workflow has its own instruction, the prompt only adds notes.
         "prompt_optional": bool(profile.get("prompt_optional")),
+        # How the prompt names each reference picture (REF 1, REF 2 ...), read from the presets file's hints.
+        "ref_naming": ref_naming(profile, [r for r in refs if r["kind"] == "image"]),
     }
+
+
+# The ways a model's hints say references are named in a prompt, tried in order: (what the hint says, REF n's token).
+REF_TOKENS = (
+    (re.compile(r"<ref_image_0>"), lambda n: "<ref_image_{}>".format(n - 1)),
+    (re.compile(r"<image1>"), lambda n: "<image{}>".format(n)),
+    (re.compile(r"Picture 1\b.*Picture 2", re.S), lambda n: "Picture 1" if n == 1 else "Picture 2"),
+    (re.compile(r"\bimage 1\b", re.I), lambda n: "image {}".format(n)),
+    (re.compile(r"style (?:image|reference)|in the style of the reference", re.I), lambda n: "the reference"),
+)
+REF_HINT = re.compile(r"\breferences?\b", re.I)
+NOT_FOR_MONEY = re.compile(r"not for monetized|no monetized", re.I)
+
+
+def ref_naming(profile, image_refs):
+    """{"tokens": [REF 1's token, REF 2's ...], "hint": the hint about references, "unique": whether each REF has a token
+    of its own (so tokens can be renumbered when one is removed), "license": a note on a license that limits use}.
+    tokens is [] when the model names no references (a location rebuild)."""
+    hints = [str(h) for h in profile.get("hints", [])]
+    said = " ".join(hints)
+    make = next((make for pattern, make in REF_TOKENS if pattern.search(said)), None) if image_refs else None
+    tokens = [make(n) for n in range(1, len(image_refs) + 1)] if make else []
+    money = NOT_FOR_MONEY.search(" ".join(hints + [str(profile.get("description", ""))]))
+    return {"tokens": tokens, "unique": len(set(tokens)) == len(tokens),
+            "hint": next((h for h in hints if REF_HINT.search(h)), "") if image_refs else "",
+            "license": "Research license: not for monetized content" if money else ""}
 
 
 def context(schema, settings):
@@ -539,21 +582,69 @@ def refs_in_use(schema, settings):
 
 # ---------------------------------------------------------------- building a job
 
+# Seeds are kept below 2**32: some nodes take no larger one (SeedVR2's upscaler refuses it, failing the job), and every
+# node takes one this size.
+SEED_RANGE = 2 ** 32
+
+
+def new_seed(low=0, high=SEED_RANGE - 1):
+    return random.SystemRandom().randint(low, high)
+
+
+def fit_seed(seed):
+    """A seed every node takes: one too large (from before seeds were kept small, or stepped per clip) wraps round."""
+    return int(seed) % SEED_RANGE
+
+
+def seed_targets(wf):
+    """Every [node, input] a job's seed is written into: those the presets file lists under "seed": {"targets": ...},
+    and every seed typed into a node (a sampler's seed or noise_seed, a number node titled SEED), so that no seed of a
+    workflow is sent as it was saved."""
+    nodes, spec = wf["nodes"], wf["profile"].get("seed")
+    found = [(str(nid), name) for nid, name in (spec.get("targets") or [] if isinstance(spec, dict) else []) if str(nid) in nodes]
+    for nid, node in nodes.items():
+        title = ((node.get("_meta") or {}).get("title") or "").lower()
+        for name, value in node["inputs"].items():
+            if not isinstance(value, int) or isinstance(value, bool) or (nid, name) in found:
+                continue
+            if name.rsplit(".", 1)[-1] in SEED_INPUTS or (node["class_type"] == "PrimitiveInt" and name == "value" and "seed" in title):
+                found.append((nid, name))
+    return found
+
+
+def job_seed(wf, settings, schema=None):
+    """The seed of one job. A new random one (within the presets file's "seed" min and max, never above 2**32 - 1)
+    unless the settings fix one: "seed_mode": "fixed" with "seed" (or, from before, the value of the seed control)."""
+    spec = wf["profile"].get("seed") if isinstance(wf["profile"].get("seed"), dict) else {}
+    if settings.get("seed_mode") == "fixed":
+        given = settings.get("seed")
+        if given in (None, ""):
+            role = next((c for c in (schema or describe(wf))["controls"] if c["role"] == "seed"), None)
+            given = (settings.get("values") or {}).get(role["id"], role["default"]) if role else None
+        if given not in (None, ""):
+            return fit_seed(_cast("int", given))
+    low = min(max(0, int(spec.get("min", 0))), SEED_RANGE - 1)
+    return new_seed(low, max(low, min(SEED_RANGE - 1, int(spec.get("max", SEED_RANGE - 1)))))
+
+
 def build_prompt(wf, settings):
     """Return (graph to send to ComfyUI, context incl. the seed that was used)."""
     schema = describe(wf)
     ctx = context(schema, settings)
     nodes = copy.deepcopy(wf["nodes"])
     values = settings.get("values") or {}
+    seed = job_seed(wf, settings, schema) if schema["seeded"] else None
+    if seed is not None:
+        ctx["seed"] = seed
+        for nid, name in seed_targets(wf):
+            nodes[nid]["inputs"][name] = seed
 
     for c in schema["controls"]:
         value = values.get(c["id"], c["default"])
         if c["role"] in ("width", "height"):
             value = ctx[c["role"]]
         elif c["role"] == "seed":
-            if settings.get("seed_mode") == "random":
-                value = int.from_bytes(os.urandom(6), "big")
-            ctx["seed"] = _cast("int", value)
+            value = seed
         value = _cast(c["type"], value)
         if c["role"] == "prompt" and not value.strip() and not schema["prompt_optional"]:
             raise WorkflowError("The prompt is empty.")

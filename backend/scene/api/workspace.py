@@ -432,35 +432,6 @@ async def _retake(state, user, item, verdict, previous):
             "why": fix.get("why") or "", "start": start, "workflow_title": schema["title"]}
 
 
-@router.post("/agent/improve")
-async def agent_improve(body: dict, request: Request, user: dict = Depends(current_user)):
-    return await _patient(_agent_improve(body, request, user))
-
-
-async def _agent_improve(body, request, user):
-    """Have the agent rewrite a prompt into a fuller one. Nothing is queued or charged."""
-    prompt = str(body.get("prompt") or "").strip()[:2000]
-    if not prompt:
-        raise HTTPException(400, "Write a prompt first, then improve it.")
-    kind = body.get("kind") if body.get("kind") in agent.IMPROVE_KINDS else "video"
-    project = _project_id(request, user, body.get("project_id"))
-    state = request.app.state
-    # The chosen workflow's own prompting tips, and the cast when that workflow has slots for it.
-    tips, pinned = [], []
-    if body.get("workflow"):
-        try:
-            schema = workflows.describe(await state.catalog.load(str(body["workflow"])))
-            tips = schema["hints"]
-            full = kit.always(state.db, user["id"], project or None)
-            filled = {f["asset"] for f in kit.fills(schema, full)}
-            pinned = [e for e in full if e["id"] in filled]
-        except (workflows.WorkflowError, HTTPException):
-            pass
-    return {"prompt": await state.agent.improve(prompt, kind, tips=tips, project_cast=pinned,
-                                                structure=agent.PROMPT_STRUCTURE if kind != "audio" else "", **_model(body))}
-
-
-
 @router.post("/agent/compact")
 async def agent_compact(body: dict, request: Request, user: dict = Depends(current_user)):
     return await _patient(_agent_compact(body, request, user))
@@ -482,9 +453,9 @@ async def _agent_compact(body, request, user):
 STILL_WORKFLOWS = ("z_image", "sdxl")   # cheap picture workflows, in the order the storyboard prefers them
 
 
-async def _still_workflow(state):
+async def _still_workflow(state, user):
     """The workflow that draws a storyboard still: a cheap picture workflow that is switched on. None when there is none."""
-    found = [w for w in await state.catalog.listing() if w["kind"] == "image" and not w.get("error") and state.credits.enabled(w["id"])]
+    found = [w for w in await state.catalog.listing() if w["kind"] == "image" and not w.get("error") and state.credits.enabled(w["id"], user)]
     for word in STILL_WORKFLOWS:
         for w in found:
             if word in w["id"]:
@@ -520,11 +491,11 @@ async def agent_storyboard(body: dict, request: Request, user: dict = Depends(ag
     wanted = _proposals(body.get("shots"))
     if not wanted:
         raise HTTPException(400, "There are no video shots to draw first.")
-    still = await _still_workflow(state)
+    still = await _still_workflow(state, user)
     if not still:
         raise HTTPException(400, "No picture workflow is switched on to draw the stills with.")
     schemas = {still: workflows.describe(await state.catalog.load(still))}
-    pinned, menu = kit.always(state.db, user["id"], project or None), await _menu(state)
+    pinned, menu = kit.always(state.db, user["id"], project or None), await _menu(state, user)
     steps, dropped = [], []
     for shot_id, proposal, _ in wanted:
         card = {key: proposal.get(key) for key in ("prompt", "orientation", "shot_size", "angle", "end_state")}
@@ -562,7 +533,7 @@ async def agent_animate(body: dict, request: Request, user: dict = Depends(agent
                 schemas[proposal["workflow"]] = workflows.describe(await state.catalog.load(proposal["workflow"]))
             except (workflows.WorkflowError, HTTPException):
                 pass
-    pinned, menu = kit.always(state.db, user["id"], project or None), await _menu(state)
+    pinned, menu = kit.always(state.db, user["id"], project or None), await _menu(state, user)
     for shot_id, proposal, item in wanted:
         before = len(steps)
         reason = await _plan_step(state, dict(proposal, start_from=item, after=0, uses=[]), "", steps, {}, schemas, names, kinds, [],
@@ -596,10 +567,10 @@ async def agent_reroll(body: dict, request: Request, user: dict = Depends(agent_
     return {"retake": retake}
 
 
-async def _menu(state):
+async def _menu(state, user):
     """The workflows an approval card can switch a step to: every readable one that is switched on."""
     return [{"id": w["id"], "title": w["title"], "kind": w["kind"]} for w in await state.catalog.listing()
-            if w["kind"] in ("video", "image", "audio") and not w.get("error") and state.credits.enabled(w["id"])]
+            if w["kind"] in ("video", "image", "audio") and not w.get("error") and state.credits.enabled(w["id"], user)]
 
 
 @router.post("/agent/step")
@@ -619,7 +590,7 @@ async def agent_step(body: dict, request: Request, user: dict = Depends(agent_us
         raise HTTPException(400, str(e))
     if schema["id"].split("/", 1)[0] != old_schema["id"].split("/", 1)[0]:
         raise HTTPException(400, "A step can only change to a workflow that makes the same kind of thing.")
-    if not state.credits.enabled(schema["id"]):
+    if not state.credits.enabled(schema["id"], user):
         raise HTTPException(400, "This workflow is switched off for now.")
     try:
         ctx = workflows.context(old_schema, old)
@@ -668,7 +639,7 @@ async def agent_step(body: dict, request: Request, user: dict = Depends(agent_us
         schema, pinned, {u["slot"] for u in uses}, {u["asset"] for u in uses if u.get("asset")}, step.get("leave_out") or (),
         {u["id"] for u in uses if u.get("id")} | ({started} if started else set()))]
     try:
-        return await _shown_step(state, schema, settings, await _menu(state), uses,
+        return await _shown_step(state, schema, settings, await _menu(state, user), uses,
                                  dict(start, slot=first_frame) if start else None,
                                  dict(after, slot=first_frame) if after else None, step.get("why") or "")
     except workflows.WorkflowError as e:
@@ -873,9 +844,9 @@ async def _planning(request, user, body, instruction, project):
 
     schemas = {}
     default = state.catalog.current(state.settings.default_workflow)
-    menu = await _menu(state)
+    menu = await _menu(state, user)
     for listed in await state.catalog.listing():
-        if listed.get("error") or not state.credits.enabled(listed["id"]):
+        if listed.get("error") or not state.credits.enabled(listed["id"], user):
             continue
         # Video is made with the default workflow, which has the cast's slots and the quality choices; the other video
         # workflows are for the Create page, and the agent uses one only when the conversation names it (or a long skill
@@ -890,14 +861,14 @@ async def _planning(request, user, body, instruction, project):
     said_names = memory.named_in(instruction, selection[:tagged])
     named = memory.keep_named(state.db, folder, outputs, user["id"], said_names, project or None)
     if named:
-        yield activity("book", "Kept in the kit: " + ", ".join("{} ({})".format(n["name"], n["type"]) for n in named))
+        yield activity("book", "Kept in the NeuralCore: " + ", ".join("{} ({})".format(n["name"], n["type"]) for n in named))
     # A long run that starts with pictures nobody named keeps them too, without a name: the agent asks who they are.
     if run_id and long_skill and not carried:
         said_items = {n["item"] for n in said_names}
         unnamed = memory.keep_unnamed(state.db, folder, outputs, user["id"], project or None,
                                       [s["id"] for s in selection[:tagged] if s["kind"] == "image" and s["id"] not in said_items])
         if unnamed:
-            yield activity("book", "Kept {} picture{} without a name in the kit".format(len(unnamed), "" if len(unnamed) == 1 else "s"))
+            yield activity("book", "Kept {} picture{} without a name in the NeuralCore".format(len(unnamed), "" if len(unnamed) == 1 else "s"))
     pinned = kit.always(state.db, user["id"], project or None)
     # The asset book: what the agent knows of the project by name. Pictures it has not looked at yet are described now.
     book = memory.book(state.db, user["id"], project, pinned)
@@ -1068,6 +1039,8 @@ async def _planning(request, user, body, instruction, project):
 
     async def kit_save(call):
         name, said_type = kit.clean_name(call.get("text")), str(call.get("op") or "").strip().lower()
+        if not project:
+            return "There is no NeuralCore here: it belongs to a project, and this message is in no project. Say so to the user."
         if not name:
             return "Give the entry its name in text."
         always_on = str(call.get("settings") or "").strip().lower() == "always"
@@ -1077,7 +1050,7 @@ async def _planning(request, user, body, instruction, project):
             changes = {"name": name, "type": said_type, **({"about": about} if about else {}), **({"always": True} if always_on else {})}
             found = kit.update(state.db, user["id"], call["asset"], changes)
             if not found:
-                return "There is no kit entry {}.".format(call["asset"])
+                return "There is no NeuralCore entry {}.".format(call["asset"])
             asset = found["id"]
         elif call.get("item"):
             asset = kit.add_item(state.db, folder, state.outputs.folder(user["id"]), user["id"], project or None, call["item"],
@@ -1086,8 +1059,8 @@ async def _planning(request, user, body, instruction, project):
                 return "There is no library item {}.".format(call["item"])
             kit.update(state.db, user["id"], asset, {"name": name, "type": said_type, **({"about": about} if about else {})})
         else:
-            return "Give the library id of what to keep in item, or the kit entry to change in asset."
-        noted("book", "Kept “{}” ({}) in the kit".format(name, kit.TYPES.get(kit.tag_of(said_type), "other")))
+            return "Give the library id of what to keep in item, or the NeuralCore entry to change in asset."
+        noted("book", "Kept “{}” ({}) in the NeuralCore".format(name, kit.TYPES.get(kit.tag_of(said_type), "other")))
         return json.dumps({"asset": asset, "name": name, "type": kit.TYPES.get(kit.tag_of(said_type), "other"), "always": always_on})
 
     reminded = []   # the run was reminded once to save its work
@@ -1174,7 +1147,7 @@ async def _planning(request, user, body, instruction, project):
                                (call.get("item"), user["id"])) if isinstance(call.get("item"), int) else None
             path = state.outputs.folder(user["id"]) / row["filename"] if row else None
         if not path or not path.is_file():
-            return "That is not a text in the library or the kit."
+            return "That is not a text in the library or the NeuralCore."
         words = path.read_text(encoding="utf-8-sig", errors="replace")
         if call.get("path"):
             if not run:
@@ -1329,7 +1302,7 @@ async def _planning(request, user, body, instruction, project):
         # Each answer is charged at the price of the model that gave it (another one may have stood in for a busy one).
         used = answer.get("model") or chosen_model
         cost = state.credits.llm_cost(used)
-        if cost and state.credits.charge(user["id"], cost, "agent", note=used):
+        if cost and state.credits.charge(user["id"], cost, "agent", note=used, project_id=project or None):
             charged["credits"] += cost
             charged["model"] = used
         steps, dropped = await build(answer["steps"])

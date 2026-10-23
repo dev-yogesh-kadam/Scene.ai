@@ -44,7 +44,7 @@ def test_storyboard_then_animate_then_reroll(client, monkeypatch):
     assert all(s["proposal"]["workflow"] == "video/h3_master" for s in plan["steps"])
     sent = [{"shot_id": s["shot_id"], "proposal": s["proposal"]} for s in plan["steps"]]
     # the picture workflows need node definitions the test fixture lacks: a video workflow stands in for the still's
-    async def stand_in(state):
+    async def stand_in(state, user):
         return "video/h3_master"
     monkeypatch.setattr(workspace, "_still_workflow", stand_in)
     board = client.post("/api/agent/storyboard", json={"shots": sent})

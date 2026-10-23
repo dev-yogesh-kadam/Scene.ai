@@ -6,7 +6,7 @@ import json
 
 from scene import agent, media, memory
 from scene.api import workspace
-from test_api import register
+from test_api import console, register
 
 STEP = {"tool": "generate", "workflow": "video/h3_master", "name": "Dog in the park", "prompt": "A dog runs across a park.",
         "duration": 6, "resolution": 480, "orientation": "portrait"}
@@ -117,11 +117,11 @@ def test_a_video_shows_its_frames_and_a_result_can_be_rated(client):
 
 def test_a_message_costs_what_its_model_costs(client, monkeypatch):
     me = register(client)
-    prices = client.put("/api/admin/pricing/llm", json={"model": "gemini/flash", "credits": 3}).json()
+    prices = console(client).put("/api/admin/pricing/llm", json={"model": "gemini/flash", "credits": 3}).json()
     assert {"model": "gemini/flash", "credits": 3, "available": False} in prices["models"]
-    assert client.put("/api/admin/pricing/llm", json={"model": "local:9b", "credits": 1}).status_code == 200
-    assert client.put("/api/admin/pricing/llm", json={"model": "x", "credits": 1.5}).status_code == 400   # whole credits only
-    assert client.put("/api/admin/pricing/llm", json={"model": "", "credits": 1}).status_code == 400
+    assert console(client).put("/api/admin/pricing/llm", json={"model": "local:9b", "credits": 1}).status_code == 200
+    assert console(client).put("/api/admin/pricing/llm", json={"model": "x", "credits": 1.5}).status_code == 400   # whole credits only
+    assert console(client).put("/api/admin/pricing/llm", json={"model": "", "credits": 1}).status_code == 400
 
     async def pick(wanted=None):
         return wanted or "gemini/flash"
@@ -138,7 +138,7 @@ def test_a_message_costs_what_its_model_costs(client, monkeypatch):
     refused = client.post("/api/agent/plan", json={"instruction": "hi"})
     assert refused.status_code == 400 and "costs 3 cr" in refused.json()["detail"]
     # a free model costs nothing
-    assert client.put("/api/admin/pricing/llm", json={"model": "gemini/flash", "credits": 0}).status_code == 200
+    assert console(client).put("/api/admin/pricing/llm", json={"model": "gemini/flash", "credits": 0}).status_code == 200
     model(monkeypatch, client, {"thought": "", "reply": "Hello.", "steps": [], "model": "gemini/flash"})
     assert client.post("/api/agent/plan", json={"instruction": "hi"}).json()["llm"]["credits"] == 0
 

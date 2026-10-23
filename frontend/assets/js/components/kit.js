@@ -3,10 +3,10 @@
 // that has a slot for it (what the cast was). One panel for what the Cast box and the Shared memory tab were.
 
 import { api } from '../api.js';
-import { ago, el, field, icon } from '../dom.js';
+import { ago, ask, el, field, icon } from '../dom.js';
 import { addMenu } from './agent.js';
 
-export const KIT = 'Kit';   // what the feature is called wherever the user reads it
+export const KIT = 'NeuralCore';   // what the feature is called wherever the user reads it
 export const KIT_TYPES = [
   { id: 'character', label: 'Character' }, { id: 'location', label: 'Location' }, { id: 'prop', label: 'Prop' },
   { id: 'outfit', label: 'Outfit' }, { id: 'voice', label: 'Voice' }, { id: 'style', label: 'Style' },
@@ -42,6 +42,10 @@ const typeSelect = (current, onChange) => el('select', { class: 'kit-type', 'ari
 // Add a file, a canvas item or a script to a project's kit. file / item: what is added (a script has neither).
 // Resolves with the new entry, or null if the dialog is closed.
 export function addToKitDialog({ project = 0, file = null, item = null, script = false, type = '' } = {}) {
+  if (!project) {   // a NeuralCore belongs to a project: there is none for all work
+    alert(`The ${KIT} belongs to a project. Open a project from All projects and keep its characters, places and props there; every module of it shares them.`);
+    return Promise.resolve(null);
+  }
   return new Promise((resolve) => {
     let made = null;
     const guess = type || (script ? 'script' : file && /^audio\//.test(file.type) ? 'voice' : 'character');
@@ -97,9 +101,10 @@ export function keepField() {
   function draw() { row.classList.toggle('hidden', !on.checked); if (on.checked) name.focus(); }
   return {
     node,
-    show(kindMade) {
-      makes = kindMade;
-      const types = kindMade === 'audio' ? ['voice'] : kindMade === 'image' ? ['character', 'location', 'prop', 'outfit', 'style'] : [];
+    // inProject: whether the job is in a project; outside one there is no NeuralCore to keep it in
+    show(kindMade, inProject = true) {
+      makes = inProject ? kindMade : '';
+      const types = !makes ? [] : kindMade === 'audio' ? ['voice'] : kindMade === 'image' ? ['character', 'location', 'prop', 'outfit', 'style'] : [];
       node.classList.toggle('hidden', !types.length);
       kind.replaceChildren(...types.map((t) => el('option', { value: t }, KIT_TYPES.find((x) => x.id === t).label)));
     },
@@ -179,26 +184,7 @@ export function kitPanel({ projectId = () => 0, selected = () => null, onChange 
         if (await addToKitDialog({ project: projectId(), item: one })) changed();
       } },
       { icon: 'book', label: 'Paste a script', run: async () => { if (await addToKitDialog({ project: projectId(), script: true })) changed(); } },
-      ...(found && found.earlier.length ? [{ icon: 'memory', label: `Bring in earlier assets (${found.earlier.length})`, run: () => importDialog() }] : []),
     ]);
-  }
-
-  function importDialog() {
-    const ticks = new Map();
-    const dialog = openDialog(
-      el('h2', {}, `Bring earlier assets into this ${KIT}`),
-      el('p', { class: 'muted' }, 'Assets saved before projects had their own kit. Tick the ones this project uses.'),
-      el('div', { class: 'kit-import' }, found.earlier.map((e) => {
-        const box = el('input', { type: 'checkbox' });
-        ticks.set(e.id, box);
-        return el('label', { class: 'check' }, box, el('span', {}, `${e.name} · ${e.type}`));
-      })),
-      el('div', { class: 'dialog-buttons' },
-        el('button', { class: 'btn', onclick: () => dialog.close() }, 'Cancel'),
-        el('button', { class: 'btn primary', onclick: async () => {
-          const ids = [...ticks].filter(([, box]) => box.checked).map(([id]) => id);
-          try { if (ids.length) await api('/api/kit/import', { method: 'POST', json: { project_id: projectId() || null, ids } }); dialog.close(); changed(); } catch (e) { alert(e.message); }
-        } }, 'Bring in')));
   }
 
   async function change(entry, json) {
@@ -207,7 +193,8 @@ export function kitPanel({ projectId = () => 0, selected = () => null, onChange 
   }
 
   async function remove(entry) {
-    if (!confirm(`Take “${entry.name}” out of the ${KIT}? The agent will no longer know it by this name.`)) return;
+    if (!await ask({ title: `Take “${entry.name}” out of the ${KIT}?`, danger: true, confirm: 'Take it out',
+      message: 'The agent will no longer know it by this name.' })) return;
     try { await api('/api/kit/' + entry.id, { method: 'DELETE' }); } catch (e) { alert(e.message); }
     changed();
   }
@@ -248,6 +235,12 @@ export function kitPanel({ projectId = () => 0, selected = () => null, onChange 
 
   function draw() {
     stamp.textContent = loadedAt ? ago(loadedAt / 1000) : '';
+    addButton.classList.toggle('hidden', !projectId());
+    if (!projectId()) {   // all work, in no project: there is no NeuralCore here
+      node.querySelector('.kit-count').textContent = '';
+      body.replaceChildren(el('div', { class: 'kit-empty' }, el('p', {}, `The ${KIT} belongs to a project. Open a project from All projects and keep its characters, places and props there; every module of it shares them.`)));
+      return;
+    }
     if (!found) { body.replaceChildren(el('p', { class: 'small muted' }, 'Loading…')); return; }
     node.querySelector('.kit-count').textContent = `· ${found.entries.length}`;
     const words = search.value.trim().toLowerCase();
@@ -265,8 +258,9 @@ export function kitPanel({ projectId = () => 0, selected = () => null, onChange 
   }
 
   async function load() {
+    if (!projectId()) { found = null; draw(); return; }
     try {
-      found = await api('/api/kit?project=' + (projectId() || 0));
+      found = await api('/api/kit?project=' + projectId());
       loadedAt = Date.now();
     } catch (e) {
       body.replaceChildren(el('p', { class: 'error small' }, e.message));

@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 
 import httpx
 
-from .. import kit, media, memory, runs
+from .. import health, kit, media, memory, runs
 from ..catalog import KINDS
 from ..comfy import workflows
 from ..agent import AgentError
@@ -79,12 +79,18 @@ async def price(state, wf, settings, user_id=None):
     schema = workflows.describe(wf)
     estimate = workflows.estimate(wf, settings, state.jobs.history())
     estimate["seconds"] = await billed_seconds(state, wf, schema, settings, user_id)
-    estimate["credits"] = state.credits.cost(wf["id"], estimate["seconds"])
+    chosen = workflows.context(schema, settings)
+    estimate["credits"] = state.credits.cost(wf["id"], estimate["seconds"], chosen)
+    # What each other resolution and quality would cost, for the page to show beside them ("1080p · 200 cr").
+    others = {"quality": [c["id"] for o in schema["options"] if o["id"] == "quality" for c in o["choices"]],
+              "resolution": list(schema["resolutions"]) if "resolution" in chosen else []}
+    estimate["choices"] = {group: {str(v): state.credits.cost(wf["id"], estimate["seconds"], dict(chosen, **{group: v})) for v in values}
+                           for group, values in others.items() if values}
     return estimate
 
 
-def switched_on(state, workflow_id):
-    if not state.credits.enabled(workflow_id):
+def switched_on(state, workflow_id, user):
+    if not state.credits.enabled(workflow_id, user):
         raise HTTPException(400, "This workflow is switched off for now.")
 
 
@@ -102,14 +108,19 @@ async def status(request: Request, user: dict = Depends(current_user)):
 
 @router.get("/announcement")
 async def announcement(request: Request, user: dict = Depends(current_user)):
-    """The message an admin wants every user to see, while it lasts. Empty when there is none."""
-    return current_announcement(request.app.state.db)
+    """The message an admin wants every user to see, while it lasts. Empty when there is none. Under maintenance, its
+    message, in place of any other."""
+    db = request.app.state.db
+    closed = health.maintenance(db)
+    if closed:
+        return {"text": closed["text"], "level": "warning", "until": None, "maintenance": True}
+    return current_announcement(db)
 
 
 @router.get("/workflows")
 async def list_workflows(request: Request, user: dict = Depends(current_user)):
     state = request.app.state
-    listed = [w for w in await state.catalog.listing() if state.credits.enabled(w["id"])]
+    listed = [w for w in await state.catalog.listing() if state.credits.enabled(w["id"], user)]
     return {"workflows": listed, "kinds": KINDS, "default": state.catalog.current(state.settings.default_workflow)}
 
 
@@ -122,7 +133,7 @@ async def get_workflow(kind: str, name: str, request: Request, user: dict = Depe
 async def estimate(settings: dict, request: Request, user: dict = Depends(current_user)):
     state = request.app.state
     wf = await state.catalog.load(str(settings.get("workflow", "")))
-    switched_on(state, wf["id"])
+    switched_on(state, wf["id"], user)
     return dict(await price(state, wf, settings, user["id"]), balance=state.credits.balance(user["id"]))
 
 
@@ -131,7 +142,7 @@ async def list_jobs(request: Request, user: dict = Depends(current_user)):
     return {"jobs": request.app.state.jobs.snapshot(user["id"])}
 
 
-def _needs_caption(wf, settings, prompt_id):
+def needs_caption(wf, settings, prompt_id):
     """Some image models only work well with a structured JSON caption (a presets file says so with "caption"). A
     prompt in plain words is turned into one by the agent's model, with the instructions the workflow carries, when
     the job is about to render (see JobManager._captions): Generate does not wait for it, and the captions of the jobs
@@ -184,7 +195,7 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     except (KeyError, ValueError, TypeError):
         raise HTTPException(400, "Missing or broken settings.")
     wf = await state.catalog.load(str(settings.get("workflow", "")))
-    switched_on(state, wf["id"])
+    switched_on(state, wf["id"], user)
     schema = workflows.describe(wf)
     settings["workflow"] = wf["id"]   # the id it goes by now, if it was asked for by the id of a workflow it replaced
     slots = workflows.refs_in_use(schema, settings)   # a file for a slot the chosen mode does not read is not sent on
@@ -263,7 +274,7 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     values = settings.get("values") or {}
     if "prompt" in roles:
         settings["prompt"] = str(values.get(roles["prompt"]["id"], roles["prompt"]["default"]) or "")
-        _needs_caption(wf, settings, roles["prompt"]["id"])
+        needs_caption(wf, settings, roles["prompt"]["id"])
     settings["details"] = [[c["label"].split(" (")[0], values.get(c["id"], c["default"])] for c in schema["controls"] if not c["role"]]
     settings["workflow_title"] = schema["title"]
     quote = await price(state, wf, settings, user["id"])
@@ -318,7 +329,7 @@ async def events(ws: WebSocket):
         await ws.close(code=4401)
         return
     await ws.accept()
-    state.hub.add(user["id"], ws, admin=user["role"] == "admin")
+    state.hub.add(user["id"], ws)
     try:
         await ws.send_text(state.live_message(user["id"]))
         while True:

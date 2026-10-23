@@ -13,7 +13,8 @@ Entries come in from everywhere work is done: named in an agent message ("Maya -
 (keep_made), saved by the agent (its kit_save tool), dropped into a job's reference slot (keep_upload), and added by
 the user in the panel or from a result on the canvas.
 
-The assets saved before kits existed (no project) are kept, but no longer used on their own: a project can import them.
+A kit belongs to one project (its modules share it): nothing is kept outside a project, and nothing is shared between
+projects. The assets saved before kits existed, with no project, are not used at all.
 """
 
 import hashlib
@@ -21,6 +22,7 @@ import json
 import re
 import shutil
 import time
+from pathlib import Path
 
 from .references import safe_name
 
@@ -61,12 +63,24 @@ def clean_note(text):
     return " ".join(str(text or "").split())[:NOTE_CHARS]
 
 
+def root(db, project):
+    """The project whose kit a project uses: a module shares the kit of the project it is in."""
+    if not project:
+        return project
+    row = db.one("SELECT parent_id FROM projects WHERE id = ?", (project,))
+    return row["parent_id"] if row and row["parent_id"] else project
+
+
 def _where(project):
-    return ("project_id = ?", (project,)) if project else ("project_id IS NULL AND origin <> 'saved'", ())
+    return ("project_id = ?", (project,))
 
 
 def entries(db, user_id, project):
-    """The kit of a project, in order: the always-on entries first, then the rest. Each a row of assets with "type"."""
+    """The kit of a project, in order: the always-on entries first, then the rest. Each a row of assets with "type".
+    Outside a project there is none."""
+    project = root(db, project)
+    if not project:
+        return []
     where, params = _where(project)
     rows = db.all("SELECT id, name, tag, kind, filename, size, about, use_note, origin, made_from, always, position, named, created "
                   "FROM assets WHERE user_id = ? AND " + where + " ORDER BY always DESC, position, created", (user_id, *params))
@@ -79,6 +93,7 @@ def entry(db, user_id, asset_id):
 
 
 def _next_position(db, user_id, project):
+    project = root(db, project)
     where, params = _where(project)
     found = db.one("SELECT MAX(position) AS last FROM assets WHERE user_id = ? AND " + where, (user_id, *params))
     return (found["last"] or 0) + 1 if found else 1
@@ -87,7 +102,11 @@ def _next_position(db, user_id, project):
 def add(db, folder, user_id, project, data, filename, kind, name, tag="other", always=False, named=True, about="",
         use_note="", made_from=None, origin="kit"):
     """Add a file to a project's kit and return its id. The same file added again to the same project is the entry it
-    already is: a name, a type and always-on given now fill in what it lacked (an entry without a name gets one)."""
+    already is: a name, a type and always-on given now fill in what it lacked (an entry without a name gets one).
+    None outside a project: a kit belongs to a project and is never kept for all work."""
+    project = root(db, project)
+    if not project:
+        return None
     digest = hashlib.sha1(data).hexdigest()[:10]
     stored = "{}_{}".format(digest, safe_name(filename))
     where, params = _where(project)
@@ -120,7 +139,7 @@ def add_item(db, folder, outputs, user_id, project, item_id, name="", tag="other
     source = outputs / row["filename"] if row else None
     if not source or not source.is_file():
         return None
-    return add(db, folder, user_id, project, source.read_bytes(), row["filename"], row["kind"], name or row["name"], tag, always,
+    return add(db, folder, user_id, project, source.read_bytes(), Path(row["filename"]).name, row["kind"], name or row["name"], tag, always,
                named, about or row["about"] or "", made_from=row["id"])
 
 
@@ -148,6 +167,7 @@ def update(db, user_id, asset_id, changes):
 
 def reorder(db, user_id, project, ids):
     """Put a project's entries in the order given (ids); the ones not named keep their place after them."""
+    project = root(db, project)
     mine = {row["id"] for row in entries(db, user_id, project)}
     for position, asset_id in enumerate([i for i in ids if i in mine], start=1):
         db.run("UPDATE assets SET position = ? WHERE id = ?", (position, asset_id))
@@ -159,25 +179,11 @@ def remove(db, folder, user_id, asset_id):
         return False
     db.run("DELETE FROM assets WHERE id = ?", (asset_id,))
     if not db.one("SELECT 1 FROM assets WHERE user_id = ? AND filename = ?", (user_id, row["filename"])):
-        (folder / row["filename"]).unlink(missing_ok=True)   # another project may have the same file: then it stays
+        try:
+            (folder / row["filename"]).unlink(missing_ok=True)   # another project may have the same file: then it stays
+        except OSError:
+            pass   # held open for the moment (a download of it): the entry is gone, the file goes with the next cleanup
     return True
-
-
-def earlier(db, user_id):
-    """The assets saved before kits existed (no project), which a project can import."""
-    return db.all("SELECT id, name, tag, kind, about FROM assets WHERE user_id = ? AND project_id IS NULL AND origin = 'saved' "
-                  "ORDER BY tag, lower(name)", (user_id,))
-
-
-def import_earlier(db, folder, user_id, project, ids):
-    """Copy assets saved before kits existed into a project's kit. Returns the new entries' ids."""
-    made = []
-    for asset_id in ids:
-        row = db.one("SELECT * FROM assets WHERE id = ? AND user_id = ? AND project_id IS NULL AND origin = 'saved'", (asset_id, user_id))
-        if row and (folder / row["filename"]).is_file():
-            made.append(add(db, folder, user_id, project, (folder / row["filename"]).read_bytes(), row["filename"].split("_", 1)[-1],
-                            row["kind"], row["name"], row["tag"], about=row["about"], use_note=row["use_note"]))
-    return made
 
 
 # ---------------------------------------------------------------- always on: what goes into every shot
@@ -258,7 +264,7 @@ def described(on):
         else:
             said = SAID_AS.get(e["tag"], "the " + TYPES.get(e["tag"], "reference"))
         lines.append('- {} "{}" (asset {}): in prompts call it "{}".'.format(TYPES.get(e["tag"], "other"), e["name"], e["id"], said))
-    return ("Always on: these entries of the kit are attached to every shot automatically, in the slots meant for them "
+    return ("Always on: these entries of the NeuralCore are attached to every shot automatically, in the slots meant for them "
             "(the characters in this order). Do not describe how they look and do not list them in \"uses\"; name them in "
             "the prompt with the words given. A shot they do not belong in leaves them out: list their asset ids in "
             "\"leave_out\".\n" + "\n".join(lines))
@@ -336,6 +342,22 @@ CAST_ROLES = (("character_1", "character"), ("character_2", "character"), ("char
               ("background", "background"), ("prop", "prop"), ("voice", "voice"))
 
 
+def remove_global(db, assets_root):
+    """Delete the assets that belong to no project (saved before a NeuralCore belonged to a project, or kept for all
+    work), and their files when no other entry uses them. Nothing makes such rows any more; this clears what is left.
+    Returns how many were deleted."""
+    gone = db.all("SELECT id, user_id, filename FROM assets WHERE project_id IS NULL")
+    for row in gone:
+        db.run("DELETE FROM assets WHERE id = ?", (row["id"],))
+    for row in gone:
+        if not db.one("SELECT 1 FROM assets WHERE user_id = ? AND filename = ?", (row["user_id"], row["filename"])):
+            try:
+                (assets_root / str(row["user_id"]) / row["filename"]).unlink(missing_ok=True)
+            except OSError:
+                pass   # held open for the moment: it goes with the next start
+    return len(gone)
+
+
 def migrate_cast(db, assets_root, outputs):
     """Once: every project's cast (a board of pins: {role: library item id}) becomes always-on entries of its kit, in the
     cast's order. "Main character, another angle" keeps the main character's name, so it fills the other-angle slot."""
@@ -364,3 +386,12 @@ def migrate_cast(db, assets_root, outputs):
                     main = name
     db.set_setting("kit_migrated", "1")
     return moved
+
+
+def copy_entries(db, user_id, source, target):
+    """The kit of project `source` again in project `target` (a duplicate of the project): the same entries, sharing
+    their files, which stay until no entry uses them (remove)."""
+    fields = "name, tag, kind, filename, size, about, use_note, origin, made_from, always, position, named"
+    for row in db.all("SELECT " + fields + " FROM assets WHERE user_id = ? AND project_id = ? ORDER BY position, id", (user_id, source)):
+        db.run("INSERT INTO assets (user_id, " + fields + ", project_id, created) VALUES (?, " + ", ".join("?" * 12) + ", ?, ?)",
+               (user_id, *row.values(), target, time.time()))

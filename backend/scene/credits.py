@@ -4,6 +4,9 @@ The price is what the customer asked for, never the GPU time it took: an image c
 a sound, a motion graphic, a title laid over a video or an upscale costs an amount per second of the result. An admin sets the rates in the
 admin console (Pricing), for each kind and, where one needs its own, for a single workflow.
 
+What was chosen changes the price too: a resolution and a quality each multiply it (FACTORS), so a 480p draft costs
+less than a 1080p final. The factors are the studio's, set in the console, and a workflow may have its own.
+
 A job is charged when it is queued and refunded if it fails or is cancelled.
 """
 
@@ -17,8 +20,28 @@ PER_JOB = ("image",)
 MOTION = "edit/motion"       # what a motion graphic is priced and filed under; it has no workflow file
 OVERLAY = "edit/overlay"     # what a motion graphic laid over a video the user has is priced under
 ASSUMED_SECONDS = 5          # billed when a per-second workflow does not say how long its result is
+# How much each resolution and quality multiplies the price, to begin with. 720p and final cost the rate itself; 768p (the
+# short edge MiniMax H3 renders at) is priced as 720p. Quality is "draft"/"final" for most workflows and
+# "low"/"medium"/"high" for some video ones. A picture is priced by its quality only, not its size.
+FACTORS = {"resolution": {"480": 0.6, "720": 1.0, "1080": 2.0},
+           "quality": {"draft": 0.5, "final": 1.0, "low": 0.6, "medium": 0.8, "high": 1.0}}
+RESOLUTION_TIER = {480: "480", 720: "720", 768: "720", 1080: "1080"}
 INR_PER_1000_CREDITS = 100
 ELECTRICITY_INR_PER_KWH = 8
+
+
+def _number(value):
+    try:
+        return float(value) >= 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def kind_of(workflow_id):
@@ -68,9 +91,13 @@ class Credits:
         """The workflow's own pricing, or None when it follows the rate of its kind."""
         return self.db.one("SELECT * FROM workflow_pricing WHERE workflow = ?", (workflow_id,))
 
-    def enabled(self, workflow_id):
+    def enabled(self, workflow_id, user=None):
+        """Whether `user` may use the workflow: it is switched on and, while it is tried out by admins alone (the
+        console's Workflows section), they are one. With no user, as for anyone who is not an admin."""
         row = self.pricing(workflow_id)
-        return not row or bool(row["enabled"])
+        if not row:
+            return True
+        return bool(row["enabled"]) and (not row["admins_only"] or bool(user and user.get("role") == "admin"))
 
     def rate_for(self, workflow_id):
         """(base credits, credits per second, multiplier) for one workflow."""
@@ -84,11 +111,42 @@ class Credits:
             per_second = row["credits_per_second"]
         return base, per_second, row.get("resolution_multiplier", 1) * row.get("quality_multiplier", 1)
 
-    def cost(self, workflow_id, seconds=None):
-        """Credits for one job. `seconds` is the length of the result that was asked for, when it has one."""
+    def cost(self, workflow_id, seconds=None, chosen=None):
+        """Credits for one job. `seconds` is the length of the result that was asked for, when it has one; `chosen`, what
+        was picked (the job's context: its resolution and quality), which multiplies the price (factors)."""
         base, per_second, multiplier = self.rate_for(workflow_id)
         seconds = ASSUMED_SECONDS if seconds is None else seconds
-        return math.ceil(round((base + per_second * seconds) * multiplier, 6))
+        return math.ceil(round((base + per_second * seconds) * multiplier * self.choice_factor(workflow_id, chosen), 6))
+
+    def factors(self, workflow_id=None):
+        """The resolution and quality factors in force: the studio's (setting price_factors, over FACTORS), and over them
+        a workflow's own, when it has some (workflow_pricing.factors)."""
+        found = {group: dict(values) for group, values in FACTORS.items()}
+        for layer in (self._json(self.db.setting("price_factors", "") or "{}"),
+                      self._json((self.pricing(workflow_id) or {}).get("factors") or "{}") if workflow_id else {}):
+            for group in found:
+                found[group].update({str(k): float(v) for k, v in (layer.get(group) or {}).items() if _number(v)})
+        return found
+
+    def choice_factor(self, workflow_id, chosen):
+        """What the chosen resolution and quality multiply a workflow's price by (1 for what has no factor)."""
+        if not chosen:
+            return 1.0
+        found, factor = self.factors(workflow_id), 1.0
+        tier = RESOLUTION_TIER.get(_int(chosen.get("resolution")))
+        if tier and kind_of(workflow_id) not in PER_JOB:   # a picture is priced by its quality, not its size
+            factor *= found["resolution"].get(tier, 1.0)
+        if chosen.get("quality") is not None:
+            factor *= found["quality"].get(str(chosen["quality"]), 1.0)
+        return factor
+
+    @staticmethod
+    def _json(text):
+        try:
+            found = json.loads(text)
+        except (TypeError, ValueError):
+            return {}
+        return found if isinstance(found, dict) else {}
 
     @property
     def daily_cap(self):
@@ -121,14 +179,15 @@ class Credits:
         row = self.db.one("SELECT credits FROM users WHERE id = ?", (user_id,))
         return row["credits"] if row else 0
 
-    def charge(self, user_id, amount, reason, job_id=None, note=""):
-        """Take credits if the user has enough. Returns False when they don't."""
+    def charge(self, user_id, amount, reason, job_id=None, note="", project_id=None):
+        """Take credits if the user has enough. Returns False when they don't. `project_id`: the project it was spent in,
+        when no job says so (a message to the agent)."""
         if amount <= 0:
             return True
         if not self.db.change("UPDATE users SET credits = credits - ? WHERE id = ? AND credits >= ?",
                               (amount, user_id, amount)):
             return False
-        self._log(user_id, -amount, reason, job_id, note)
+        self._log(user_id, -amount, reason, job_id, note, project_id)
         return True
 
     def add(self, user_id, amount, reason, job_id=None, note=""):
@@ -141,6 +200,6 @@ class Credits:
             self._log(user_id, amount, reason, job_id, note)
         return amount
 
-    def _log(self, user_id, amount, reason, job_id, note=""):
-        self.db.run("INSERT INTO credit_events (user_id, amount, reason, job_id, note, created) VALUES (?, ?, ?, ?, ?, ?)",
-                    (user_id, amount, reason, job_id, note, time.time()))
+    def _log(self, user_id, amount, reason, job_id, note="", project_id=None):
+        self.db.run("INSERT INTO credit_events (user_id, amount, reason, job_id, note, created, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (user_id, amount, reason, job_id, note, time.time(), project_id))

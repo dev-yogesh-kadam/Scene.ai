@@ -1,7 +1,7 @@
 // Cards for finished images and videos, and the viewer with its details panel.
 
 import { api } from '../api.js';
-import { still, el, icon, duration, when } from '../dom.js';
+import { ask, still, el, icon, duration, when } from '../dom.js';
 import { store } from '../store.js';
 import { KIT, addToKitDialog } from './kit.js';
 import { go } from '../nav.js';
@@ -14,6 +14,16 @@ export function promptOf(item) {
   const settings = item.settings || {};
   if (settings.prompt != null) return settings.prompt;
   return Object.values(settings.values || {}).filter((v) => typeof v === 'string').sort((a, b) => b.length - a.length)[0] || '';
+}
+
+// Open Create with a result's settings and its own seed: the same picture again, with what is then changed (a Draft made
+// Final, a word of the prompt). Only for work made with a seed.
+export const seedOf = (item) => (item.context && item.context.seed != null ? item.context.seed : null);
+export function reuseSeed(item, from = null) {
+  store.rerun = item;
+  store.reuseSeed = seedOf(item);
+  store.from = from;
+  go('/create');
 }
 
 // The facts about a generation that are worth showing: [label, value] pairs, empty ones left out.
@@ -119,7 +129,7 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
   const rerun = () => { store.rerun = item; go('/create'); };
   const next = item.kind === 'video' ? 'Continue' : 'Use as first frame';
   const remove = async () => {
-    if (!confirm(`Delete "${item.name}" from your library? This can't be undone.`)) return;
+    if (!await ask({ title: `Delete "${item.name}"?`, danger: true, confirm: 'Delete', message: "It is deleted from your library for good. This can't be undone." })) return;
     try { await api('/api/library/' + item.id, { method: 'DELETE' }); onChanged(); } catch (e) { alert(e.message); }
   };
   const move = async (e) => {
@@ -131,6 +141,7 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
   const edited = /^(edit|upload)\//.test(item.workflow);   // a timeline export or an upload: there is no form to re-run
   const view = () => openViewer(item, { actions: [
     !edited && { label: 'Re-run', run: (dialog) => { dialog.close(); rerun(); } },
+    !edited && seedOf(item) != null && { label: 'Reuse seed', run: (dialog) => { dialog.close(); reuseSeed(item); } },
     !sound && { label: next, run: async (dialog) => { if (await useAsFirstFrame(item)) dialog.close(); } },
   ].filter(Boolean) });
   return el('div', { class: 'media' },
@@ -148,7 +159,7 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
       manage && el('div', { class: 'row' },
         el('select', { class: 'small', title: 'Project', onchange: move },
           el('option', { value: '' }, 'No project'),
-          projects.map((p) => el('option', { value: p.id, selected: p.id === item.project_id }, p.name))),
-        item.kind !== 'text' && el('button', { class: 'btn small', onclick: () => addToKitDialog({ project: item.project_id || 0, item }) }, `Add to ${KIT}`),
+          projects.map((p) => el('option', { value: p.id, selected: p.id === item.project_id }, p.parent_name ? `${p.parent_name} › ${p.name}` : p.name))),
+        item.kind !== 'text' && item.project_id && el('button', { class: 'btn small', onclick: () => addToKitDialog({ project: item.project_id || 0, item }) }, `Add to ${KIT}`),
         el('button', { class: 'btn small quiet danger', onclick: remove }, 'Delete'))));
 }

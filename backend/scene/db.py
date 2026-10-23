@@ -106,6 +106,53 @@ CREATE TABLE IF NOT EXISTS uploads (
     created REAL NOT NULL,
     PRIMARY KEY (user_id, name)
 );
+-- Each version of each workflow file and its presets, kept in storage/workflow_versions/<hash>.json.gz (versions.py).
+CREATE TABLE IF NOT EXISTS workflow_versions (
+    id INTEGER PRIMARY KEY,
+    workflow TEXT NOT NULL,
+    hash TEXT NOT NULL,
+    change TEXT NOT NULL,
+    seen REAL NOT NULL
+);
+-- Each call to the agent's models (traces.py): what it was for, which model, how long, what it cost, what it chose.
+CREATE TABLE IF NOT EXISTS agent_calls (
+    id INTEGER PRIMARY KEY,
+    run TEXT NOT NULL DEFAULT '',
+    user_id INTEGER,
+    purpose TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    asked TEXT NOT NULL DEFAULT '',
+    started REAL NOT NULL,
+    seconds REAL NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    answer_tokens INTEGER NOT NULL DEFAULT 0,
+    tool TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    chars INTEGER NOT NULL DEFAULT 0
+);
+-- Moderation (moderation.py): a verdict on an item ("fine", "removed"), or a prompt refused before it was made.
+CREATE TABLE IF NOT EXISTS moderation (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    generation_id INTEGER,
+    user_id INTEGER,
+    verdict TEXT NOT NULL,
+    words TEXT NOT NULL DEFAULT '',
+    prompt TEXT NOT NULL DEFAULT '',
+    by_name TEXT NOT NULL DEFAULT '',
+    created REAL NOT NULL
+);
+-- What the watcher (health.py) found wrong, from when it was sent until it was gone (`ended` NULL while it lasts).
+CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY,
+    key TEXT NOT NULL,
+    level TEXT NOT NULL,
+    text TEXT NOT NULL,
+    tab TEXT NOT NULL DEFAULT '',
+    started REAL NOT NULL,
+    ended REAL
+);
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY,
     actor_id INTEGER,
@@ -226,6 +273,29 @@ COLUMNS = [
     ("assets", "always", "INTEGER NOT NULL DEFAULT 0"),
     ("assets", "position", "REAL NOT NULL DEFAULT 0"),
     ("assets", "named", "INTEGER NOT NULL DEFAULT 1"),
+    # A module: a project inside a project, with a canvas, a timeline and agent tabs of its own, sharing the kit of the
+    # project it is in. NULL for a project.
+    ("projects", "parent_id", "INTEGER"),
+    # The name of a project's own canvas, the first of its modules; empty = "Main canvas".
+    ("projects", "canvas_name", "TEXT NOT NULL DEFAULT ''"),
+    # A sign-in to the admin console (1) or to the studio (0). Neither one's cookie opens the other.
+    ("sessions", "console", "INTEGER NOT NULL DEFAULT 0"),
+    # Where a session was started (the address, the browser) and when it was last used (written every few minutes).
+    ("sessions", "ip", "TEXT NOT NULL DEFAULT ''"),
+    ("sessions", "agent", "TEXT NOT NULL DEFAULT ''"),
+    ("sessions", "seen", "REAL"),
+    # The seal of an audit entry: a hash of it and the entry before it (audit.py). '' for entries from before seals.
+    ("audit_log", "seal", "TEXT NOT NULL DEFAULT ''"),
+    # A session in which an admin views the studio as this user, read only: the admin's id (api/admin.view_as).
+    ("sessions", "view_as", "INTEGER"),
+    # The project an agent message was charged in (a job's spend is found through its job): for a project's analytics.
+    ("credit_events", "project_id", "INTEGER"),
+    # A workflow's own resolution and quality factors over the studio's (credits.Credits.factors), as JSON.
+    ("workflow_pricing", "factors", "TEXT NOT NULL DEFAULT ''"),
+    # How many times a render was put back in the queue because the render server went away while it ran (jobs.RESUMES).
+    ("jobs", "resumes", "INTEGER NOT NULL DEFAULT 0"),
+    # A workflow offered to admins alone, to try it before users see it (with `enabled` still 1).
+    ("workflow_pricing", "admins_only", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # The studio's two machines, added to an installation that has no servers yet. Every value can be changed in the

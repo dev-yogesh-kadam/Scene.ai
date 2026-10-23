@@ -2,7 +2,7 @@
 // Everything else uses the workflow's own defaults; the Create page has the full form.
 
 import { api } from '../api.js';
-import { creditsText, el } from '../dom.js';
+import { ask, creditsText, el } from '../dom.js';
 import { subscribe, refreshJobs } from '../store.js';
 
 const KIND_LABEL = { video: 'Video', image: 'Image', audio: 'Audio' };
@@ -51,9 +51,20 @@ export function composer({ startFrom = () => null, projectId = () => null, onQue
     draw();
   }
 
-  const cell = (name, choices, current, onPick) => el('label', { class: 'cell' }, el('span', {}, name),
-    el('select', { onchange: (e) => { onPick(e.target.value); refreshEstimate(); } },
-      choices.map((c) => el('option', { value: c.id, selected: String(c.id) === String(current) }, c.label))));
+  // `priced`: "resolution" or "quality", for a choice that changes the price: each option then says what it costs.
+  const cell = (name, choices, current, onPick, priced) => el('label', { class: 'cell' }, el('span', {}, name),
+    el('select', { 'data-priced': priced || null, onchange: (e) => { onPick(e.target.value); refreshEstimate(); } },
+      choices.map((c) => el('option', { value: c.id, selected: String(c.id) === String(current), 'data-label': c.label }, c.label))));
+  // "1080 · 200 cr", from what the estimate says each choice would cost.
+  const priceChoices = (choices) => {
+    for (const select of readout.querySelectorAll('select[data-priced]')) {
+      const prices = (choices || {})[select.dataset.priced] || {};
+      for (const option of select.options) {
+        const price = prices[option.value];
+        option.textContent = option.dataset.label + (price != null ? ` · ${price} cr` : '');
+      }
+    }
+  };
 
   function draw() {
     const wf = form.wf;
@@ -68,18 +79,18 @@ export function composer({ startFrom = () => null, projectId = () => null, onQue
       (id) => selectWorkflow(id).catch(showError))];
     const sizes = wf.resolutions.map((r) => ({ id: r, label: String(r) }));
     if (wf.size) {
-      cells.push(cell('Resolution', sizes, form.resolution, (r) => { form.resolution = Number(r); }));
+      cells.push(cell('Resolution', sizes, form.resolution, (r) => { form.resolution = Number(r); }, 'resolution'));
       cells.push(cell('Orientation', ['landscape', 'portrait', 'square'].map((o) => ({ id: o, label: o[0].toUpperCase() + o.slice(1) })),
         form.orientation, (o) => { form.orientation = o; }));
     }
     const res = byRole('resolution');
-    if (res) cells.push(cell('Resolution', sizes, form.values[res.id], (r) => { form.values[res.id] = Number(r); }));
+    if (res) cells.push(cell('Resolution', sizes, form.values[res.id], (r) => { form.values[res.id] = Number(r); }, 'resolution'));
     const dur = byRole('duration');
     if (dur) {
       const lengths = [...new Set([5, 10, 15, Number(form.values[dur.id])])].sort((a, b) => a - b);
       cells.push(cell('Length', lengths.map((d) => ({ id: d, label: d + ' s' })), form.values[dur.id], (d) => { form.values[dur.id] = Number(d); }));
     }
-    for (const o of wf.options) cells.push(cell(o.label, o.choices, form.options[o.id], (id) => { form.options[o.id] = id; }));
+    for (const o of wf.options) cells.push(cell(o.label, o.choices, form.options[o.id], (id) => { form.options[o.id] = id; }, o.id === 'quality' ? 'quality' : null));
     cells.push(el('a', { class: 'cell link', href: '/create', title: 'Open the full form on the Create page' }, el('span', {}, 'More'), 'All settings'));
     readout.replaceChildren(...cells);
     refreshEstimate();
@@ -99,6 +110,7 @@ export function composer({ startFrom = () => null, projectId = () => null, onQue
         const quote = await api('/api/estimate', { method: 'POST', json: settings() });
         const short = quote.credits > quote.balance;
         cost.textContent = creditsText(quote.credits);
+        priceChoices(quote.choices);
         button.disabled = short;
         form.estimate = quote.text;
         button.title = `${quote.text} · Generate (Ctrl or ⌘ + Enter)`;
@@ -123,7 +135,8 @@ export function composer({ startFrom = () => null, projectId = () => null, onQue
       return showError(new Error('This workflow needs reference files. Add them on the Create page.'));
     }
     const hits = warnings();
-    if (hits.length && !confirm(hits.map((h) => h.message).join('\n') + `\n\nEstimated time: ${form.estimate || 'unknown'}\n\nGenerate anyway?`)) return;
+    if (hits.length && !await ask({ title: 'Generate anyway?', confirm: 'Generate',
+      message: hits.map((h) => h.message).join('\n') + `\n\nEstimated time: ${form.estimate || 'unknown'}` })) return;
     button.disabled = true;
     label.textContent = 'Sending…';
     try {

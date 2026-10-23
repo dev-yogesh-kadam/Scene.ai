@@ -1,41 +1,86 @@
 {
-  "title": "FLUX.1 Krea dev",
-  "description": "Text to image with FLUX.1 Krea dev: natural, photographic looks.",
+  "title": "Text to Image: FLUX.1 Krea dev",
+  "description": "FLUX.1 Krea dev text-to-image (FLUX.1 dev Non-Commercial (outputs usable)). Photoreal FLUX.1 dev variant; no negative prompt.",
   "output_name": "9.filename_prefix",
-  "labels": {
-    "100:value": "Describe the image: subject, setting, light and style.",
-    "106:value": "Seed"
-  },
-  "defaults": {
-    "100:value": ""
-  },
-  "hide": [],
+  "labels": {},
+  "required_refs": [],
+  "optional_refs": [],
   "controls": [
     {
       "node": "37",
       "input": "aspect_ratio",
       "type": "choice",
-      "primary": true,
       "choices": [
         "1:1",
         "16:9",
         "9:16",
         "4:3"
       ],
-      "label": "Aspect ratio"
-    },
-    {
-      "node": "45",
-      "input": "switch",
-      "type": "bool",
-      "primary": true,
-      "label": "Final quality: upscale with SeedVR2 7B (slower; off = quick draft upscale)"
+      "label": "Aspect ratio",
+      "primary": true
     }
   ],
+  "options": [
+    {
+      "id": "quality",
+      "label": "Quality",
+      "default": "draft",
+      "choices": [
+        {
+          "id": "draft",
+          "label": "Draft",
+          "hint": "fewer steps, fast upscale"
+        },
+        {
+          "id": "final",
+          "label": "Final",
+          "hint": "full steps + SeedVR2 upscale"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "quality": "draft"
+      },
+      "set": {
+        "505.steps": 20,
+        "45.switch": false
+      }
+    },
+    {
+      "when": {
+        "quality": "final"
+      },
+      "set": {
+        "505.steps": 32,
+        "45.switch": true
+      }
+    }
+  ],
+  "hide": [
+    "38",
+    "39",
+    "40",
+    "41",
+    "42",
+    "43",
+    "44",
+    "45",
+    "47",
+    "500",
+    "501",
+    "502",
+    "503",
+    "504",
+    "505",
+    "506",
+    "507"
+  ],
+  "pricing": {},
   "hints": [
-    "Describe the picture in full: who or what, where, the light, the camera and the style.",
-    "Aspect ratio sets the shape. Final quality upscales with SeedVR2 7B: sharper, and slower than the draft upscale.",
-    "Put the exact words you want written in the picture in quotes.",
-    "This model has no negative prompt: say what you want to see, not what to avoid."
+    "Photoreal FLUX.1 dev variant; no negative prompt.",
+    "Sizes: 1:1 1536x1536, 16:9 2752x1536, 9:16 1536x2752, 4:3 2048x1536 (rendered at the model's native size, then upscaled)."
   ]
 }

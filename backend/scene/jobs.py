@@ -17,8 +17,9 @@ from pathlib import Path
 
 import httpx
 import websockets
+from fastapi import HTTPException
 
-from . import edits, gpu, media, memory, motion, sequence
+from . import edits, errors, gpu, health, media, memory, moderation, motion, sequence
 from .comfy import workflows
 from .agent import AgentError
 from .comfy.client import ComfyError
@@ -29,10 +30,20 @@ IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
 AUDIO_TYPES = {".mp3", ".flac", ".wav", ".opus", ".ogg", ".m4a"}
 TEXT_TYPES = {".json", ".srt", ".txt"}   # a transcript, a list of times: filed as "text"
 CLIP_BREAK = re.compile(r"^\s*-{3,}\s*$", re.M)  # a line of dashes separates per-clip prompts
+RESUMES = 3          # times a render cut off by the render server going away goes back in the queue before it fails
+OFFLINE_CHECK = 10   # seconds between asking whether the render server answers again, while renders wait for it
 
 
 class Cancelled(Exception):
     pass
+
+
+class Closed(HTTPException):
+    """A new job refused while the studio is under maintenance (health.maintenance). It is an HTTP answer (503), so a
+    route that adds a job says it as it says any refusal, and so does the agent, which reads its steps' refusals."""
+
+    def __init__(self, text):
+        super().__init__(503, text)
 
 
 class JobManager:
@@ -50,6 +61,8 @@ class JobManager:
         self.gpu = gpu.Gate(lambda: False)   # the GPU it may share with the agent's model (main.py sets the real one)
         self.agent = None         # the agent's model, which writes the captions some image models need (main.py sets it)
         self.wake = asyncio.Event()
+        self.hold_offline = True    # renders wait for the render server instead of failing (settings.hold_queue_offline)
+        self.server_down = False    # the render server did not answer the last time a render was about to start
         # A job that was running when the app stopped can't be picked up again. Waiting jobs stay queued.
         for job in db.all("SELECT id, user_id, cost FROM jobs WHERE status = 'running'"):
             db.run("UPDATE jobs SET status = 'failed', error = ?, finished = ? WHERE id = ?",
@@ -78,13 +91,29 @@ class JobManager:
             row.update(step=live.get("step", 0), steps=live.get("steps", 0), node=live.get("node", ""),
                        clip=live.get("clip", 0), clips=live.get("clips", 0), eta_seconds=self._eta(row, live, now),
                        position=waiting[lane].index(row["id"]) + 1 + busy[lane] if row["id"] in waiting[lane] else None)
+            if row["status"] == "queued" and self.server_down and not edits.is_edit(row["workflow"]):
+                row["waiting_for_server"] = True   # the render server is off: it waits for it, and says so
+            if row["status"] == "failed":   # why, in words its owner reads (the canvas shows a failed job)
+                row["reason"] = errors.for_user(row["error"])
             del row["hidden"], row["user_id"]
             jobs.append(row)
         return jobs
 
-    def add(self, user_id, name, workflow_id, settings, summary, est_seconds, cost=0, project_id=None, seconds=None):
+    def add(self, user_id, name, workflow_id, settings, summary, est_seconds, cost=0, project_id=None, seconds=None,
+            during_maintenance=False):
         """`cost` has already been taken from the user: it is held for the job until it finishes or is refunded.
-        `seconds` is the length of the result that was asked for, which is what the price is based on."""
+        `seconds` is the length of the result that was asked for, which is what the price is based on.
+        Under maintenance it is refused, and what was taken for it is given back, unless it is `during_maintenance`
+        (an admin's test run, which is what maintenance is for)."""
+        closed = health.maintenance(self.db)
+        if closed and not during_maintenance:
+            if cost:
+                self.credits.add(user_id, cost, "refund", note="Maintenance")
+            raise Closed(closed["text"])
+        if moderation.refusal(self.db, user_id, settings):   # a prompt with words the studio does not make
+            if cost:
+                self.credits.add(user_id, cost, "refund", note="Prompt refused")
+            raise HTTPException(400, "This prompt can't be made here. Change its words and try again.")
         job_id = uuid.uuid4().hex[:12]
         self.db.run(
             "INSERT INTO jobs (id, user_id, name, workflow, kind, settings, summary, status, est_seconds, cost, "
@@ -130,6 +159,16 @@ class JobManager:
                 self.wake.clear()
                 await self.wake.wait()
                 continue
+            # The render server is off (turned off, restarting, its network gone): the renders wait for it, and their
+            # owners are told so, instead of each one failing in turn. It is asked again every few seconds.
+            if not local and self.hold_offline:
+                up = await self._render_server_up()
+                if up == self.server_down:
+                    self.server_down = not up
+                    self._notify_all_waiting(None)
+                if not up:
+                    await asyncio.sleep(OFFLINE_CHECK)
+                    continue
             job["settings"] = json.loads(job["settings"])
             job["started"] = time.time()
             self.live[job["id"]] = {"step": 0, "steps": 0, "titles": {}}
@@ -148,9 +187,19 @@ class JobManager:
                 status, error = "failed", str(e)
             except httpx.HTTPError as e:
                 status, error = "failed", "Lost the connection to ComfyUI ({}).".format(e or type(e).__name__)
+                # The render server went away while it ran: back to the front of the queue, its credits still held, to
+                # run again when the server answers. After RESUMES times it fails, as anything else would.
+                if not local and self.hold_offline and (job.get("resumes") or 0) < RESUMES:
+                    status = "resumed"
             except Exception as e:  # keep the queue alive whatever one job does
                 status, error = "failed", "{}: {}".format(type(e).__name__, e)
             self.live.pop(job["id"], None)
+            if status == "resumed":
+                self.db.run("UPDATE jobs SET status = 'queued', started = NULL, error = '', resumes = resumes + 1, "
+                            "priority = CASE WHEN priority < 50 THEN 50 ELSE priority END WHERE id = ?", (job["id"],))
+                self.notify(job["user_id"])
+                self._notify_all_waiting(None)
+                continue
             self.db.run("UPDATE jobs SET status = ?, error = ?, finished = ? WHERE id = ?",
                         (status, error, time.time(), job["id"]))
             if status == "done":
@@ -160,6 +209,13 @@ class JobManager:
                 self._refund(job)
             self.notify(job["user_id"], library_changed=status == "done")
             self._notify_all_waiting(None)
+
+    async def _render_server_up(self):
+        try:
+            await self.comfy.stats()
+            return True
+        except (httpx.HTTPError, ValueError):
+            return False
 
     def paused(self):
         return self.db.setting("queue_paused", "0") == "1"
@@ -293,10 +349,8 @@ class JobManager:
         prompts = [p.strip() for p in CLIP_BREAK.split(prompt) if p.strip()] or [prompt]
         refs = dict(settings.get("refs") or {})
         seed = None
-        if "seed" in roles:  # one seed for the whole video, stepped per clip so the clips differ
-            seed = int.from_bytes(os.urandom(6), "big") if settings.get("seed_mode") == "random" else int(float(
-                (settings.get("values") or {}).get(roles["seed"]["id"], roles["seed"]["default"])))
-            full_ctx["seed"] = seed
+        if schema["seeded"]:  # one seed for the whole video, stepped per clip so the clips differ
+            seed = full_ctx["seed"] = workflows.job_seed(wf, settings, schema)
 
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=self.tmp_dir) as tmp:
@@ -316,8 +370,7 @@ class JobManager:
                 clip_settings["values"] = dict(settings.get("values") or {})
                 clip_settings["values"][roles["prompt"]["id"]] = prompts[min(i, len(prompts) - 1)]
                 if seed is not None:
-                    clip_settings["seed_mode"] = "fixed"
-                    clip_settings["values"][roles["seed"]["id"]] = seed + i
+                    clip_settings.update(seed_mode="fixed", seed=seed + i)
                 clip_refs = dict(refs)
                 if previous:
                     clip_refs[slots["first_frame"]] = {"comfy_name": previous, "name": "end of clip {}".format(i)}
@@ -407,7 +460,7 @@ class JobManager:
     # ------------------------------------------------------------ files
 
     def _target(self, job):
-        folder = self.outputs.folder(job["user_id"])
+        folder = self.outputs.folder(job["user_id"]) / self.outputs.relative(job.get("project_id"))   # its project's folder
         folder.mkdir(parents=True, exist_ok=True)
         stem = "{}_{}".format(re.sub(r"[^\w.-]+", "_", job["name"]).strip("._") or "scene",
                               time.strftime("%Y%m%d_%H%M%S"))
@@ -424,12 +477,23 @@ class JobManager:
             await response.aclose()
 
     def _record(self, job, kind, target, ctx, name=None):
+        if job.get("project_id") and not self.db.one("SELECT 1 FROM projects WHERE id = ?", (job["project_id"],)):
+            media.remove_result(target)   # its project was deleted while it ran: nothing to file it in, nothing kept
+            return
+        # Its path inside the user's folder, in its project's folder (an edit writes at the top: it is moved there).
+        filename = self.outputs.settle(job["user_id"], job.get("project_id"), target)
+        target = self.outputs.folder(job["user_id"]) / filename
         item_id = self.db.run(
             "INSERT INTO generations (user_id, job_id, project_id, workflow, kind, name, filename, summary, settings, "
             "context, seconds, size, run, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (job["user_id"], job["id"], job.get("project_id"), job["workflow"], kind, name or job["name"], target.name,
+            (job["user_id"], job["id"], job.get("project_id"), job["workflow"], kind, name or job["name"], filename,
              job["summary"], json.dumps(job["settings"]), json.dumps(ctx), round(time.time() - job["started"], 1),
              target.stat().st_size, str((job.get("settings") or {}).get("run") or ""), time.time()))
+        if kind in ("image", "video"):   # its thumbnail, made now rather than when the canvas first asks for it
+            try:
+                asyncio.get_running_loop().create_task(media.make_poster_soon(target))
+            except RuntimeError:
+                pass
         # A step the agent planned as something to reuse ("keep": a character called Maya) goes into shared memory.
         keep = (job.get("settings") or {}).get("keep")
         if keep and item_id and self.assets_dir:

@@ -21,3 +21,6 @@ Thumbs.db
 
 # Internal notes and topology: kept local, never pushed
 docs/
+
+# The ComfyUI agent's handover folders as they came, after their files were sorted into workflows/: kept local
+workflows/archive/v3_handover_*/

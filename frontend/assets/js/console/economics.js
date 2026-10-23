@@ -1,8 +1,8 @@
 // The admin console's Economics section: what each workflow earned in credits and what it cost to run, from real jobs.
 // The cost is electricity only. It is for the studio's own eyes: none of it is shown to users.
 
-import { api } from '../../api.js';
-import { el, segmented } from '../../dom.js';
+import { api } from '../api.js';
+import { el, segmented } from '../dom.js';
 import { number, bytes, span, tile, table, exportLink } from './shared.js';
 
 const rupees = (value) => (value == null ? 'Not measured' : (value < 0 ? '−₹' : '₹') + Number(Math.abs(value).toFixed(2)).toLocaleString());

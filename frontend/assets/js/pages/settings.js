@@ -3,6 +3,7 @@
 import { api } from '../api.js';
 import { creditsText, el, field } from '../dom.js';
 import { store } from '../store.js';
+import { consoleAddress } from '../nav.js';
 
 export function render(view) {
   const current = el('input', { type: 'password', autocomplete: 'current-password', required: true });
@@ -27,10 +28,10 @@ export function render(view) {
           notice,
           el('button', { class: 'btn', style: 'margin-top:12px', type: 'submit' }, 'Change password'))),
       twoStep(),
-      store.user.role === 'admin' && el('div', { class: 'card' },
+      store.user.console && el('div', { class: 'card' },
         el('div', { class: 'card-head' }, el('h2', {}, 'Administration')),
-        el('p', { class: 'muted' }, 'Users, credits, the render server and every job are managed in the admin console.'),
-        el('a', { class: 'btn', style: 'margin-top:12px', href: '/admin' }, 'Open admin console'))));
+        el('p', { class: 'muted' }, 'Users, credits, the render server and every job are managed in the admin console. It is a site of its own, with its own sign-in.'),
+        el('a', { class: 'btn', style: 'margin-top:12px', href: consoleAddress(store.user), target: '_blank', rel: 'noopener' }, 'Open admin console'))));
 }
 
 // Two-step sign-in: after the password, a code from an authenticator app (Google Authenticator, 1Password, Authy…).

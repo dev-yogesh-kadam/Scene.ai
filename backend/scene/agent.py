@@ -8,10 +8,11 @@ import asyncio
 import json
 import math
 import re
+import time
 
 import httpx
 
-from . import camera, gpu, kit, sequence
+from . import camera, gpu, kit, sequence, traces
 
 MAX_STEPS = 12   # a longer film runs in stages (cast, stills, clips), each priced and approved on its own
 SHOT_SECONDS = (4, 15)  # the length the agent may give one video shot; the workflow takes any number of seconds
@@ -73,7 +74,7 @@ The asset book (the project's memory):
   user once who or what it is (a question), and when they say, save its name and type with kit_save.
 - A step that makes something meant for reuse in later shots (a character, an outfit, a location, a prop, a style
   picture, or a voice sample) fills "keep": {{"as": its type, "name": its short name, "Maya" or "the cafe"}}. Its result
-  is kept in the project's kit under that name, for every agent tab. Every other step writes {{"as": "", "name": ""}}.
+  is kept in the project's NeuralCore under that name, for every agent tab. Every other step writes {{"as": "", "name": ""}}.
   Name a kept asset by who or what it is, never "Maya Character Asset". When the user names one ("use Maya"), find it in the
   book by its name and put it in "uses"; a shot with several characters puts each in its own character slot.
 - In the prompt, call a used asset by what it is in plain words ("the girl", "the cafe"), never by its name in the book
@@ -162,9 +163,9 @@ the user to choose a setting.
 - One shot is ONE action in one place: a 5 second clip cannot show more. When the user lists several actions in a row
   ("she runs through the market, jumps over a crate, turns into an alley and hides behind a door"), plan one step for
   each action, in order (four steps for that example), each prompt describing only its own action.
-- When the kit has always-on entries, name them in the prompt with the words given for them ("the main character",
+- When the NeuralCore has always-on entries, name them in the prompt with the words given for them ("the main character",
   "the outfit", "the background") and do not describe their looks: the reference files carry the looks.
-- When the kit has nothing for a shot and nothing is attached, never ask for a picture: plan the shot from words. Describe the person
+- When the NeuralCore has nothing for a shot and nothing is attached, never ask for a picture: plan the shot from words. Describe the person
   and the place in a few concrete words (age, hair, clothes; the kind of place), and when a plan has several steps
   with the same person or place, repeat that same description word for word in every step so the shots match.
 - "start_from" is the id of a selected item the shot should start on, or 0. Use it only when the user asks to continue or animate a selected item.
@@ -193,27 +194,6 @@ Your answer:
 - "reply" may use **bold** for a few key words and a short list with "- " at the start of each line. No headings and no
   tables. To show an item of the asset book or an attached item as a small picture, write [[item:<its id>]]; for a
   saved asset write [[asset:<its id>]]. Use only ids you were given."""
-
-
-IMPROVE = """You rewrite prompts for an AI {kind} model inside Scene.ai. You are given the user's prompt and you return a better one.
-{tips}
-Rules:
-- Keep everything the user asked for: the subject, the action, the setting and any style or detail they named. Never change what the {what} is about.
-- Add what a good prompt needs and the user left out: {needs}
-- When always-on references are listed, name them with the words given for them and do not describe their looks. When
-  none is listed, describe the people and places in the user's own terms; do not call anyone "the main character".
-- Write plain descriptive sentences in the user's language. No lists, no headings, no quotation marks around the whole prompt, no explanations.
-- {length}
-- If the prompt is already detailed, tighten the wording instead of making it longer."""
-IMPROVE_KINDS = {
-    "video": {"what": "shot", "needs": "what moves and how, the camera (framing and movement), the light, the mood, and sound if it matters.",
-              "length": "Two to four sentences: one shot, one main action."},
-    "image": {"what": "picture", "needs": "the framing and viewpoint, the light, the colours, the mood, and the look (photograph, illustration, and so on).",
-              "length": "Two to four sentences."},
-    "audio": {"what": "music", "needs": "the genre, the tempo, the instruments, the mood, whether there are vocals and what kind, "
-                                         "and how the piece develops from start to end.",
-              "length": "Three to five sentences."},
-}
 
 
 WRITE_SCENES = """You write motion graphics videos for Scene.ai: videos made of words and shapes, with no pictures.
@@ -332,7 +312,7 @@ the tool and tells you the result, and then you answer again. Fill every field; 
 - save_note: "text" is the whole direction (see "Direction" in the message), kept for the next messages.
 - kit_save: keeps something in the project's kit, or names an entry. "text" is its name ("Violet"), "op" its type
   (character, location, prop, outfit, voice, style, script); "item" a library id to add (a sheet you made, a file the
-  user attached) or "asset" the kit entry to change; "value" what it shows, when you know better than the kit; and
+  user attached) or "asset" the NeuralCore entry to change; "value" what it shows, when you know better than the NeuralCore; and
   "settings" "always" to attach it to every shot of the project. You get its asset id.
 - state_read: "path" (/motion/chunks/c3) and "offset"; you get the value kept there, or every leaf under a folder, a
   page at a time. state_write: "path" and "value", the JSON text to keep there (it replaces what was there); a path
@@ -352,7 +332,7 @@ the tool and tells you the result, and then you answer again. Fill every field; 
 - read_skill: "op" is a skill's id and "query" one of its parts (its number or heading), "offset" where to start; you get
   that part, a page at a time. A skill too long to give you whole lists its parts: read each before you act on it.
 - read_text: "item" is a text in the library (a script or a document the user attached, a transcript), or "asset" a
-  script in the kit, and "offset"
+  script in the NeuralCore, and "offset"
   where to start; you get its words, a page at a time. With "path" as well, the whole text is kept in the run's state
   there (the script: /motion/inputs/script), word for word, so you need not copy it.
 - transcript: "item" is a transcript in the library (a transcription's JSON, or an .srt) and "path" a folder; every
@@ -602,6 +582,7 @@ class Agent:
         self.seen = {}   # local model -> what it can do ("vision", "tools", "thinking"), as Ollama says
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(max(60, int(options.get("timeout") or 600)), connect=5))
         self.gpu = gpu.Gate(lambda: False)   # the GPU it may share with the renders (main.py sets the real one)
+        self.recorder = None   # writes down each call (traces.Recorder; main.py sets it)
 
     def is_local(self, model):
         return self._service_of(model or self.model)[0] is None
@@ -628,7 +609,7 @@ class Agent:
         return min(local, key=lambda n: self.sizes.get(n) or 0) if local else None
 
     def helper(self, model):
-        """The model for the small jobs (a better prompt, a caption, the notes, the check of a skill): the fast local model
+        """The model for the small jobs (a caption, the notes, the check of a skill): the fast local model
         when one is set and a local model is in use, else the one in use."""
         return self.fast if self.fast and self.is_local(model) else model
 
@@ -713,7 +694,28 @@ class Agent:
             raise AgentError("There is no model for the agent. Pull one in Ollama (ollama pull <model>) or set an API key.")
         return next((name for name in (wanted, self.model) if name and name in names), names[0])
 
-    async def chat(self, messages, answer_format, context=None, model=None, images=(), think=False):
+    async def chat(self, messages, answer_format, context=None, model=None, images=(), think=False, purpose="plan"):
+        """_chat, written down (traces.py) as a call made for `purpose`: how long it took, what it cost, what it chose."""
+        started = time.time()
+        try:
+            answer = await self._chat(messages, answer_format, context, model, images, think)
+        except Exception as error:
+            self._record(purpose, None, model, started, messages, answer_format, images, error=str(error) or type(error).__name__)
+            raise
+        self._record(purpose, answer.get("_model"), model, started, messages, answer_format, images, content=answer,
+                     usage=answer.get("_usage"), tool=answer.get("tool"))
+        return answer
+
+    def _record(self, purpose, model, asked, started, messages, answer_format, images, **found):
+        if self.recorder is None:
+            return
+        try:
+            kept = [*messages[:-1], dict(messages[-1], images=list(images))] if images else messages
+            self.recorder.record(purpose, model, asked, started, kept, answer_format, **found)
+        except Exception as error:   # a record that can't be written must not cost the user their answer
+            print("The agent's call could not be recorded: {}".format(error))
+
+    async def _chat(self, messages, answer_format, context=None, model=None, images=(), think=False):
         """Send messages to the model and return its answer, which has to be JSON of the given shape.
         context: room for the conversation in tokens, when the instructions are longer than a local model's default.
         model: the model the user picked; the usual one when it is not given or not there.
@@ -827,30 +829,12 @@ class Agent:
                 raise AgentError("{} refused the API key. Check it in config.json.".format(s["name"]))
             raise AgentError("{} failed: {}".format(s["name"], said[:200].replace(s["key"], "<key>")))
 
-    async def improve(self, prompt, kind="video", model=None, tips=(), project_cast=None, structure=""):
-        """A fuller version of a prompt the user wrote, for an image, a video or a music model.
-        tips: how the chosen workflow's model wants prompts written. project_cast: the project's pinned references.
-        structure: the prompt structure the new prompt follows (PROMPT_STRUCTURE)."""
-        advice = ("\nAdvice on what works with this model. Use it to shape the prompt, but never mention the advice, "
-                  "reference images or consistency in the prompt itself:\n{}\n").format("\n".join("- " + str(t)[:220] for t in tips[:6])) if tips else ""
-        system = IMPROVE.format(kind=kind, tips=advice, **IMPROVE_KINDS[kind])
-        if structure:   # the studio's prompt structure wins over "plain sentences, no headings"
-            system += "\n\n" + STRUCTURE_GUIDE.format(structure=structure)
-        message = "Always-on references:\n{}\n\nPrompt:\n{}".format(kit.described(project_cast or []) or "(none)", prompt)
-        answer = await self.chat([{"role": "system", "content": system}, {"role": "user", "content": message}],
-                                 {"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}}},
-                                 **({"model": self.helper(model)} if self.helper(model) else {}))
-        better = str(answer.get("prompt") or "").strip().strip('"').strip()
-        if not better:
-            raise AgentError("The agent's model gave no prompt back. Try again.")
-        return better[:2000]
-
     async def write_scenes(self, about, model=None):
         """A whole motion graphics video written from what it is about: {"name", "look", "shape", "scenes"}.
         The scenes are as the model gave them, less the ones it made up; sequence.clean_scenes checks them."""
         message = "The video is about:\n{}".format(about)
         answer = await self.chat([{"role": "system", "content": WRITE_SCENES}, {"role": "user", "content": message}],
-                                 SCENES_FORMAT, **({"model": model} if model else {}))
+                                 SCENES_FORMAT, purpose="motion scenes", **({"model": model} if model else {}))
         return {"name": " ".join(str(answer.get("name") or "").split())[:80],
                 "look": answer.get("look") if answer.get("look") in sequence.LOOKS else "dark",
                 "shape": answer.get("orientation") if answer.get("orientation") in ORIENTATIONS else "landscape",
@@ -862,7 +846,8 @@ class Agent:
         answer = await self.chat([{"role": "system", "content": DESCRIBE},
                                   {"role": "user", "content": "The {} is called \"{}\". Describe it.".format(
                                       "video this frame is from" if kind == "video" else "picture", name or "untitled")}],
-                                 {"type": "object", "required": ["shows"], "properties": {"shows": {"type": "string"}}}, images=[picture])
+                                 {"type": "object", "required": ["shows"], "properties": {"shows": {"type": "string"}}}, images=[picture],
+                                 purpose="describe")
         shows = " ".join(str(answer.get("shows") or "").split())
         if not shows:
             raise AgentError("The agent's model gave no description back.")
@@ -881,7 +866,8 @@ class Agent:
             "checks": {"type": "array", "items": check}, "problem": {"type": "string"},
             "fix": {"type": "object", "required": ["prompt", "start_from_previous", "why"], "properties": {
                 "prompt": {"type": "string"}, "start_from_previous": {"type": "boolean"}, "why": {"type": "string"}}}}}
-        return await self.chat([{"role": "system", "content": REVIEW}, {"role": "user", "content": message}], shape, images=pictures)
+        return await self.chat([{"role": "system", "content": REVIEW}, {"role": "user", "content": message}], shape, images=pictures,
+                               purpose="review")
 
     async def caption(self, template, idea, ratio):
         """The structured JSON caption some image models are trained on, written from a plain prompt.
@@ -894,7 +880,7 @@ class Agent:
         model = self.helper(None) or await self.smallest()
         answer = await self.chat([{"role": "system", "content": system.strip()},
                                   {"role": "user", "content": user.replace("{{ratio}}", ratio).replace("{{original_prompt}}", idea)}],
-                                 "json", context=CAPTION_CONTEXT, **({"model": model} if model else {}))
+                                 "json", context=CAPTION_CONTEXT, purpose="caption", **({"model": model} if model else {}))
         answer.pop("_stood_in", None)   # a note of ours, not part of the caption
         if not answer:
             raise AgentError("The agent's model gave no caption back. Try again.")
@@ -1005,7 +991,7 @@ class Agent:
             "ready": {"type": "boolean"}, "missing": {"type": "array", "items": {"type": "string"}},
             "unsupported": {"type": "array", "items": {"type": "string"}}, "adaptation": {"type": "string"}, "message": {"type": "string"}}}
         answer = await self.chat([{"role": "system", "content": PREFLIGHT}, {"role": "user", "content": message}], shape,
-                                 **({"model": self.helper(model)} if self.helper(model) else {}))
+                                 purpose="skill check", **({"model": self.helper(model)} if self.helper(model) else {}))
         lists = {k: [" ".join(str(x).split())[:200] for x in answer.get(k) or [] if str(x).strip()][:8] for k in ("missing", "unsupported")}
         ready = answer.get("ready") is True and not lists["missing"]
         return {"ready": ready, **lists, "adaptation": " ".join(str(answer.get("adaptation") or "").split())[:600],
@@ -1024,7 +1010,7 @@ class Agent:
             direction or "(none yet)", said or "(nothing)")
         answer = await self.chat([{"role": "system", "content": COMPACT}, {"role": "user", "content": message}],
                                  {"type": "object", "required": ["direction"], "properties": {"direction": {"type": "string"}}},
-                                 **({"model": self.helper(model)} if self.helper(model) else {}))
+                                 purpose="compact", **({"model": self.helper(model)} if self.helper(model) else {}))
         text = clean_direction(answer.get("direction"))
         if not text:
             raise AgentError("The agent's model gave no summary back. Try again.")
@@ -1317,7 +1303,7 @@ def question(instruction, offers, selection, default="", history=(), project_cas
         offers[0] = dict(offers[0], default=True)
     said = ["{}: {}".format("User" if turn["role"] == "user" else "You", turn["content"]) for turn in history]
     parts = ["Always on:\n" + (kit.described(project_cast or []) or "(none)"),
-             "Asset book, the project's kit (its characters, locations, props, voices, scripts by name) and items:\n" + ("\n".join(json.dumps(entry, ensure_ascii=False) for entry in book)
+             "Asset book, the project's NeuralCore (its characters, locations, props, voices, scripts by name) and items:\n" + ("\n".join(json.dumps(entry, ensure_ascii=False) for entry in book)
                                                        or "(empty: nothing is saved for reuse yet)"),
              *([skills_part(guides)] if guides else []),
              "Workflows:\n" + "\n".join(json.dumps(o) for o in offers),

@@ -92,8 +92,10 @@ def keep_made(db, folder, user_id, item_id, source, kind, keep):
     if not keep:
         return None
     made = db.one("SELECT project_id FROM generations WHERE id = ? AND user_id = ?", (item_id, user_id))
-    project = made["project_id"] if made else None
-    where, params = ("project_id = ?", (project,)) if project else ("project_id IS NULL", ())
+    project = kit.root(db, made["project_id"]) if made else None
+    if not project:
+        return None   # made outside a project: there is no kit to keep it in
+    where, params = ("project_id = ?", (project,))
     before = db.one("SELECT id, filename FROM assets WHERE user_id = ? AND tag = ? AND lower(name) = lower(?) AND made_from IS NOT NULL AND "
                     + where, (user_id, keep["tag"], keep["name"], *params))
     if before:
@@ -161,6 +163,9 @@ def keep_named(db, folder, outputs, user_id, named, project=None):
     unless its own line said otherwise. Returns [{"asset", "name", "type"}] of the ones kept now (not those kept already
     under the same name and type)."""
     kept = []
+    project = kit.root(db, project)
+    if not project:
+        return kept
     for entry in named:
         row = db.one("SELECT id, filename, about FROM generations WHERE id = ? AND user_id = ? AND kind = 'image'", (entry["item"], user_id))
         source = outputs / row["filename"] if row else None
@@ -170,7 +175,7 @@ def keep_named(db, folder, outputs, user_id, named, project=None):
         if not entry["said"] and kind == "character" and (OBJECT.search(entry["name"]) or (row["about"] and not PERSON.search(row["about"]))):
             kind = "prop"
         tag = KEEP_AS[kind]
-        where, params = ("project_id = ?", (project,)) if project else ("project_id IS NULL", ())
+        where, params = ("project_id = ?", (project,))
         if db.one("SELECT 1 FROM assets WHERE user_id = ? AND made_from = ? AND tag = ? AND lower(name) = lower(?) AND " + where,
                   (user_id, row["id"], tag, entry["name"], *params)):
             continue   # kept already, as it is
@@ -184,9 +189,11 @@ def keep_unnamed(db, folder, outputs, user_id, project, items):
     """Keep attached pictures nobody named in the project's kit, as entries without a name: the agent asks the user who
     or what they are. Returns the ids of the ones new to the kit."""
     made = []
+    project = kit.root(db, project)
+    if not project:
+        return made
     for item_id in items:
-        if db.one("SELECT 1 FROM assets WHERE user_id = ? AND made_from = ? AND " + ("project_id = ?" if project else "project_id IS NULL"),
-                  (user_id, item_id, *([project] if project else []))):
+        if db.one("SELECT 1 FROM assets WHERE user_id = ? AND made_from = ? AND project_id = ?", (user_id, item_id, project)):
             continue
         asset = kit.add_item(db, folder, outputs, user_id, project, item_id, named=False)
         if asset:
