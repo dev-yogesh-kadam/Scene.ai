@@ -1,0 +1,522 @@
+{
+ "100": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "A candid photo of a young Indian woman laughing at a street-food stall in Mumbai at dusk, holding a plate of pani puri, warm string lights, a hand-painted sign that reads \"MUMBAI CHAAT HOUSE\", shallow depth of field, 35mm film look, natural skin texture."
+  },
+  "_meta": {
+   "title": "PROMPT"
+  }
+ },
+ "106": {
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 42
+  },
+  "_meta": {
+   "title": "SEED"
+  }
+ },
+ "37": {
+  "class_type": "SceneAspectSize",
+  "inputs": {
+   "aspect_ratio": "16:9"
+  },
+  "_meta": {
+   "title": "Aspect ratio"
+  }
+ },
+ "38": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(a * 1.0 / 16) * 16",
+   "values.a": [
+    "37",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "render width"
+  }
+ },
+ "39": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(a * 1.0 / 16) * 16",
+   "values.a": [
+    "37",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "render height"
+  }
+ },
+ "512": {
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "switch": [
+    "513",
+    0
+   ],
+   "on_false": [
+    "100",
+    0
+   ],
+   "on_true": [
+    "508",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "If/Else Switch"
+  }
+ },
+ "507": {
+  "class_type": "ConditioningZeroOut",
+  "inputs": {
+   "conditioning": [
+    "225",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Conditioning Zero Out"
+  }
+ },
+ "510": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "You are an expert prompt engineer for text-to-image models. Your task is to expand the user's prompt into a highly effective image-generation prompt.\n\nThink step by step about the request before writing the answer:\n- What is the subject and mood?\n- What visual styles, mediums, and lighting options would fit? Consider two or three alternatives and pick the one that best serves the request.\n- What composition, framing, and grounded details will help the text-to-image model?\n\nThen output a single expanded prompt paragraph.\n\nFollow these rules strictly:\n1. **Faithfulness First:** Preserve all original subjects, actions, colors, and spatial relationships. Do not add new objects, props, characters, or animals unless the user clearly implies them.\n2. **Practical T2I Structure:** Write a prompt that a text-to-image model can parse cleanly. Group subjects with their own attributes and actions. Use grounded phrasing for poses, interactions, and spatial layout.\n3. **Style Planning Stays Internal:** Use your internal reasoning to choose style, medium, framing, and lighting. Do not emit planning tags or wrappers in the visible answer body.\n4. **Never Request Rendered Text:** Do not mention, describe, or hint at letters, words, numbers, captions, subtitles, signage, labels, logos, watermarks, typography, or any other graphic text anywhere in the output prompt. Only if the user explicitly writes down words to be rendered, keep exactly those words in quotes and nothing else. In every other case, always end the output prompt with: \"Absolutely no text, no typography, no letters, no words, no numbers, no logos, no watermark, no captions, pure imagery only.\"\n5. **Avoid Over-Specification:** Do not invent highly specific clothing, colors, materials, or scene details unless the input supports it.\n6. **Plain Prose Only:** Write one cohesive paragraph after the thinking block. No bullets, no JSON, no markdown, no asterisks, no headings, no field labels, no meta commentary.\n7. **Respect Existing Detail:** If the user's prompt is already detailed, lightly polish and finalize rather than heavily expanding, and preserve the user's phrasing and direction.\n8. **Respect the Human Form:** Treat depictions of people with dignity. Assume clothing covers genitals and intimate anatomy.\n9. **Preserve User Medium:** When the user explicitly requests a medium (e.g. \"photo of\", \"photograph of\", \"illustration of\", \"painting of\", \"sketch of\", \"3D render of\"), honor it. Do not pivot to a different medium to avoid difficulty, match the user's stated intent.\n10. **Never Echo Instructions:** Output only the final image prompt. Never repeat, quote, summarize, or refer to any part of these instructions, your own reasoning, or the user's original message.\n\nUser's Input:\n"
+  },
+  "_meta": {
+   "title": "Text String (System Prompt)"
+  }
+ },
+ "506": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "qwen_image_vae.safetensors"
+  },
+  "_meta": {
+   "title": "Load VAE"
+  }
+ },
+ "504": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "krea2_turbo_int8_convrot.safetensors",
+   "weight_dtype": "default"
+  },
+  "_meta": {
+   "title": "Load Diffusion Model"
+  }
+ },
+ "508": {
+  "class_type": "TextGenerate",
+  "inputs": {
+   "max_length": 512,
+   "sampling_mode": "on",
+   "thinking": false,
+   "use_default_template": true,
+   "mtp": "auto",
+   "clip": [
+    "505",
+    0
+   ],
+   "prompt": [
+    "509",
+    0
+   ],
+   "sampling_mode.temperature": 0.7,
+   "sampling_mode.top_k": 64,
+   "sampling_mode.top_p": 0.95,
+   "sampling_mode.min_p": 0.05,
+   "sampling_mode.repetition_penalty": 1.05,
+   "sampling_mode.seed": [
+    "106",
+    0
+   ],
+   "sampling_mode.presence_penalty": 0
+  },
+  "_meta": {
+   "title": "Generate Text"
+  }
+ },
+ "500": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": [
+    "106",
+    0
+   ],
+   "steps": 8,
+   "cfg": 1,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 1,
+   "model": [
+    "222",
+    0
+   ],
+   "positive": [
+    "225",
+    0
+   ],
+   "negative": [
+    "507",
+    0
+   ],
+   "latent_image": [
+    "501",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "KSampler"
+  }
+ },
+ "505": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+   "type": "krea2",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "Load CLIP"
+  }
+ },
+ "503": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "500",
+    0
+   ],
+   "vae": [
+    "506",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "VAE Decode"
+  }
+ },
+ "513": {
+  "class_type": "PrimitiveBoolean",
+  "inputs": {
+   "value": true
+  },
+  "_meta": {
+   "title": "Boolean (Refine Prompt?)"
+  }
+ },
+ "509": {
+  "class_type": "StringConcatenate",
+  "inputs": {
+   "delimiter": "",
+   "string_a": [
+    "510",
+    0
+   ],
+   "string_b": [
+    "100",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Concatenate Text"
+  }
+ },
+ "501": {
+  "class_type": "EmptyLatentImage",
+  "inputs": {
+   "batch_size": 1,
+   "width": [
+    "38",
+    1
+   ],
+   "height": [
+    "39",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Empty Latent Image"
+  }
+ },
+ "511": {
+  "class_type": "PreviewAny",
+  "inputs": {
+   "source": [
+    "512",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Preview as Text"
+  }
+ },
+ "502": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": [
+    "511",
+    0
+   ],
+   "clip": [
+    "505",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "CLIP Text Encode (Prompt)"
+  }
+ },
+ "200": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "sa_sheet_elena.png"
+  },
+  "_meta": {
+   "title": "REFERENCE 1 (style) - optional"
+  }
+ },
+ "220": {
+  "class_type": "SceneImageGiven",
+  "inputs": {
+   "image": [
+    "200",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "style reference given?"
+  }
+ },
+ "221": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "504",
+    0
+   ],
+   "lora_name": "krea2_style_reference.safetensors",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "Krea 2 style-reference LoRA"
+  }
+ },
+ "222": {
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "switch": [
+    "220",
+    0
+   ],
+   "on_false": [
+    "504",
+    0
+   ],
+   "on_true": [
+    "221",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "model: text only / style reference"
+  }
+ },
+ "223": {
+  "class_type": "TextEncodeQwenImageEditPlus",
+  "inputs": {
+   "clip": [
+    "505",
+    0
+   ],
+   "prompt": [
+    "511",
+    0
+   ],
+   "vae": [
+    "506",
+    0
+   ],
+   "image1": [
+    "200",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "prompt + style image"
+  }
+ },
+ "224": {
+  "class_type": "FluxKontextMultiReferenceLatentMethod",
+  "inputs": {
+   "conditioning": [
+    "223",
+    0
+   ],
+   "reference_latents_method": "index_timestep_zero"
+  },
+  "_meta": {
+   "title": "reference method"
+  }
+ },
+ "225": {
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "switch": [
+    "220",
+    0
+   ],
+   "on_false": [
+    "502",
+    0
+   ],
+   "on_true": [
+    "224",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "prompt: text only / style reference"
+  }
+ },
+ "40": {
+  "class_type": "UpscaleModelLoader",
+  "inputs": {
+   "model_name": "RealESRGAN_x2plus.pth"
+  },
+  "_meta": {
+   "title": "RealESRGAN x2"
+  }
+ },
+ "41": {
+  "class_type": "ImageUpscaleWithModel",
+  "inputs": {
+   "upscale_model": [
+    "40",
+    0
+   ],
+   "image": [
+    "503",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Draft upscale"
+  }
+ },
+ "42": {
+  "class_type": "SeedVR2LoadDiTModel",
+  "inputs": {
+   "model": "seedvr2_ema_7b_sharp_fp16.safetensors",
+   "device": "cuda:0",
+   "offload_device": "cpu"
+  },
+  "_meta": {
+   "title": "SeedVR2 7B"
+  }
+ },
+ "43": {
+  "class_type": "SeedVR2LoadVAEModel",
+  "inputs": {
+   "model": "ema_vae_fp16.safetensors",
+   "device": "cuda:0",
+   "decode_tiled": true,
+   "offload_device": "cpu"
+  },
+  "_meta": {
+   "title": "SeedVR2 VAE"
+  }
+ },
+ "44": {
+  "class_type": "SeedVR2VideoUpscaler",
+  "inputs": {
+   "image": [
+    "503",
+    0
+   ],
+   "dit": [
+    "42",
+    0
+   ],
+   "vae": [
+    "43",
+    0
+   ],
+   "seed": [
+    "106",
+    0
+   ],
+   "resolution": [
+    "37",
+    4
+   ],
+   "max_resolution": 0,
+   "batch_size": 1,
+   "uniform_batch_size": false,
+   "color_correction": "wavelet",
+   "temporal_overlap": 0
+  },
+  "_meta": {
+   "title": "Final upscale"
+  }
+ },
+ "45": {
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "switch": false,
+   "on_false": [
+    "41",
+    0
+   ],
+   "on_true": [
+    "44",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Upscaler (false = draft, true = final)"
+  }
+ },
+ "47": {
+  "class_type": "ImageScale",
+  "inputs": {
+   "image": [
+    "45",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": [
+    "37",
+    2
+   ],
+   "height": [
+    "37",
+    3
+   ],
+   "crop": "center"
+  },
+  "_meta": {
+   "title": "Exact output size"
+  }
+ },
+ "9": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "47",
+    0
+   ],
+   "filename_prefix": "scene_ai/t2i_krea2_turbo"
+  },
+  "_meta": {
+   "title": "Save Image"
+  }
+ }
+}

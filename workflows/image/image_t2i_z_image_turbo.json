@@ -1,0 +1,299 @@
+{
+ "100": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "A candid photo of a young Indian woman laughing at a street-food stall in Mumbai at dusk, holding a plate of pani puri, warm string lights, a hand-painted sign that reads \"MUMBAI CHAAT HOUSE\", shallow depth of field, 35mm film look, natural skin texture."
+  },
+  "_meta": {
+   "title": "PROMPT"
+  }
+ },
+ "106": {
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 42
+  },
+  "_meta": {
+   "title": "SEED"
+  }
+ },
+ "37": {
+  "class_type": "SceneAspectSize",
+  "inputs": {
+   "aspect_ratio": "16:9"
+  },
+  "_meta": {
+   "title": "Aspect ratio"
+  }
+ },
+ "1": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "z_image_turbo_bf16.safetensors",
+   "weight_dtype": "default"
+  },
+  "_meta": {
+   "title": "Z-Image Turbo"
+  }
+ },
+ "2": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen_3_4b.safetensors",
+   "type": "lumina2",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "Qwen3 4B text encoder"
+  }
+ },
+ "3": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "ae.safetensors"
+  },
+  "_meta": {
+   "title": "VAE"
+  }
+ },
+ "4": {
+  "class_type": "ModelSamplingAuraFlow",
+  "inputs": {
+   "model": [
+    "1",
+    0
+   ],
+   "shift": 3.0
+  },
+  "_meta": {
+   "title": "Shift"
+  }
+ },
+ "10": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "2",
+    0
+   ],
+   "text": [
+    "100",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Prompt"
+  }
+ },
+ "11": {
+  "class_type": "ConditioningZeroOut",
+  "inputs": {
+   "conditioning": [
+    "10",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "No negative (turbo)"
+  }
+ },
+ "14": {
+  "class_type": "EmptySD3LatentImage",
+  "inputs": {
+   "width": [
+    "37",
+    0
+   ],
+   "height": [
+    "37",
+    1
+   ],
+   "batch_size": 1
+  },
+  "_meta": {
+   "title": "Render size"
+  }
+ },
+ "15": {
+  "class_type": "KSampler",
+  "inputs": {
+   "model": [
+    "4",
+    0
+   ],
+   "seed": [
+    "106",
+    0
+   ],
+   "steps": 8,
+   "cfg": 1.0,
+   "sampler_name": "res_multistep",
+   "scheduler": "simple",
+   "denoise": 1.0,
+   "positive": [
+    "10",
+    0
+   ],
+   "negative": [
+    "11",
+    0
+   ],
+   "latent_image": [
+    "14",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Sampler"
+  }
+ },
+ "16": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "15",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Decode"
+  }
+ },
+ "40": {
+  "class_type": "UpscaleModelLoader",
+  "inputs": {
+   "model_name": "RealESRGAN_x2plus.pth"
+  },
+  "_meta": {
+   "title": "RealESRGAN x2"
+  }
+ },
+ "41": {
+  "class_type": "ImageUpscaleWithModel",
+  "inputs": {
+   "upscale_model": [
+    "40",
+    0
+   ],
+   "image": [
+    "16",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Draft upscale"
+  }
+ },
+ "42": {
+  "class_type": "SeedVR2LoadDiTModel",
+  "inputs": {
+   "model": "seedvr2_ema_7b_sharp_fp16.safetensors",
+   "device": "cuda:0",
+   "offload_device": "cpu"
+  },
+  "_meta": {
+   "title": "SeedVR2 7B"
+  }
+ },
+ "43": {
+  "class_type": "SeedVR2LoadVAEModel",
+  "inputs": {
+   "model": "ema_vae_fp16.safetensors",
+   "device": "cuda:0",
+   "decode_tiled": true,
+   "offload_device": "cpu"
+  },
+  "_meta": {
+   "title": "SeedVR2 VAE"
+  }
+ },
+ "44": {
+  "class_type": "SeedVR2VideoUpscaler",
+  "inputs": {
+   "image": [
+    "16",
+    0
+   ],
+   "dit": [
+    "42",
+    0
+   ],
+   "vae": [
+    "43",
+    0
+   ],
+   "seed": [
+    "106",
+    0
+   ],
+   "resolution": [
+    "37",
+    4
+   ],
+   "max_resolution": 0,
+   "batch_size": 1,
+   "uniform_batch_size": false,
+   "color_correction": "wavelet",
+   "temporal_overlap": 0
+  },
+  "_meta": {
+   "title": "Final upscale"
+  }
+ },
+ "45": {
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "switch": false,
+   "on_false": [
+    "41",
+    0
+   ],
+   "on_true": [
+    "44",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Upscaler (false = draft, true = final)"
+  }
+ },
+ "47": {
+  "class_type": "ImageScale",
+  "inputs": {
+   "image": [
+    "45",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": [
+    "37",
+    2
+   ],
+   "height": [
+    "37",
+    3
+   ],
+   "crop": "center"
+  },
+  "_meta": {
+   "title": "Exact output size"
+  }
+ },
+ "9": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "47",
+    0
+   ],
+   "filename_prefix": "scene_ai/t2i_z_image_turbo"
+  },
+  "_meta": {
+   "title": "Save Image"
+  }
+ }
+}

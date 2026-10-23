@@ -1,0 +1,188 @@
+{
+  "title": "Character Video Master",
+  "description": "Microdramas, UGC and influencer clips: Qwen-Edit builds the first frame (the main character in the background, in the outfit) and MiniMax H3 animates it. Or reference mode builds a new scene from your references. Optional SeedVR2 upscale.",
+  "output_name": "83.filename_prefix",
+  "labels": {
+    "2:value": "Describe the action, camera, dialogue and sound. Call the first frame <Picture 1>.",
+    "26:value": "Keyframe prompt (how Qwen-Edit puts the character into the background)"
+  },
+  "defaults": {
+    "2:value": ""
+  },
+  "hide": [
+    "7",
+    "8",
+    "10",
+    "11",
+    "12",
+    "34",
+    "38",
+    "55",
+    "56",
+    "80"
+  ],
+  "options": [
+    {
+      "id": "engine",
+      "label": "Mode",
+      "default": "first_frame",
+      "top": true,
+      "choices": [
+        {
+          "id": "first_frame",
+          "label": "Build the first frame",
+          "hint": "Qwen-Edit puts CHARACTER 1 into the BACKGROUND in the OUTFIT, then H3 animates that frame: the steadiest face, room and light."
+        },
+        {
+          "id": "own_frame",
+          "label": "My first frame",
+          "hint": "H3 animates the FIRST FRAME you add (and ends on LAST FRAME if you add one)."
+        },
+        {
+          "id": "reference",
+          "label": "Reference mode",
+          "hint": "H3 invents the shot from the character, outfit, background, prop, motion video and voice sample. Slower, and the set can drift."
+        }
+      ]
+    },
+    {
+      "id": "quality",
+      "label": "Quality",
+      "default": "draft",
+      "choices": [
+        {
+          "id": "draft",
+          "label": "Draft",
+          "hint": "turbo: a quick look"
+        },
+        {
+          "id": "final",
+          "label": "Final",
+          "hint": "the full model, the final steps below"
+        }
+      ]
+    },
+    {
+      "id": "upscale",
+      "label": "Upscale",
+      "default": "on",
+      "choices": [
+        {
+          "id": "on",
+          "label": "On",
+          "hint": "SeedVR2 7B sharp, to the short edge below"
+        },
+        {
+          "id": "off",
+          "label": "Off",
+          "hint": "the native size"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "engine": "first_frame"
+      },
+      "set": {
+        "7.value": false,
+        "11.value": true
+      }
+    },
+    {
+      "when": {
+        "engine": "own_frame"
+      },
+      "set": {
+        "7.value": false,
+        "11.value": false
+      }
+    },
+    {
+      "when": {
+        "engine": "reference"
+      },
+      "set": {
+        "7.value": true,
+        "11.value": false
+      }
+    },
+    {
+      "when": {
+        "quality": "draft"
+      },
+      "set": {
+        "8.value": false
+      }
+    },
+    {
+      "when": {
+        "quality": "final"
+      },
+      "set": {
+        "8.value": true
+      }
+    },
+    {
+      "when": {
+        "upscale": "on"
+      },
+      "set": {
+        "12.value": true
+      }
+    },
+    {
+      "when": {
+        "upscale": "off"
+      },
+      "set": {
+        "12.value": false
+      }
+    }
+  ],
+  "refs_when": [
+    {
+      "when": {
+        "engine": "first_frame"
+      },
+      "refs": [
+        "15:image",
+        "18:image",
+        "19:image",
+        "24:image",
+        "25:audio"
+      ]
+    },
+    {
+      "when": {
+        "engine": "own_frame"
+      },
+      "refs": [
+        "23:image",
+        "24:image",
+        "25:audio"
+      ]
+    },
+    {
+      "when": {
+        "engine": "reference"
+      },
+      "refs": [
+        "15:image",
+        "16:image",
+        "17:image",
+        "18:image",
+        "19:image",
+        "20:image",
+        "21:video",
+        "22:audio"
+      ]
+    }
+  ],
+  "hints": [
+    "Build the first frame (the default) kept the face, room and light locked for the whole clip in testing.",
+    "Best results come from 5-6 s clips, one action each. Keep the seed fixed while you change the prompt.",
+    "For speech, put the words in quotes after \"Audio:\". A VOICE TRACK makes the lips follow your own audio."
+  ]
+}

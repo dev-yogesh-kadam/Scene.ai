@@ -1,0 +1,103 @@
+{
+  "title": "Text to Image: FLUX 3 Image Klein",
+  "description": "FLUX 3 Image Klein text-to-image (FLUX Kommunity (outputs OK < $5M revenue)). Your prompt is expanded by BFL's prompt upsampler first (recommended by BFL).",
+  "output_name": "9.filename_prefix",
+  "labels": {
+    "200:image": "REFERENCE 1 (character, product, outfit, style or location)",
+    "201:image": "REFERENCE 2 (character, product, outfit, style or location)",
+    "202:image": "REFERENCE 3 (character, product, outfit, style or location)",
+    "203:image": "REFERENCE 4 (character, product, outfit, style or location)"
+  },
+  "required_refs": [],
+  "optional_refs": [
+    "200:image",
+    "201:image",
+    "202:image",
+    "203:image"
+  ],
+  "controls": [
+    {
+      "node": "37",
+      "input": "aspect_ratio",
+      "type": "choice",
+      "choices": [
+        "1:1",
+        "16:9",
+        "9:16",
+        "4:3"
+      ],
+      "label": "Aspect ratio",
+      "primary": true
+    }
+  ],
+  "options": [
+    {
+      "id": "quality",
+      "label": "Quality",
+      "default": "draft",
+      "choices": [
+        {
+          "id": "draft",
+          "label": "Draft",
+          "hint": "fewer steps, fast upscale"
+        },
+        {
+          "id": "final",
+          "label": "Final",
+          "hint": "full steps + SeedVR2 upscale"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "quality": "draft"
+      },
+      "set": {
+        "506.steps": 16,
+        "45.switch": false
+      }
+    },
+    {
+      "when": {
+        "quality": "final"
+      },
+      "set": {
+        "506.steps": 16,
+        "45.switch": true
+      }
+    }
+  ],
+  "hide": [
+    "210",
+    "38",
+    "39",
+    "40",
+    "41",
+    "42",
+    "43",
+    "44",
+    "45",
+    "47",
+    "500",
+    "501",
+    "502",
+    "503",
+    "504",
+    "505",
+    "506",
+    "507",
+    "508",
+    "509",
+    "510",
+    "511",
+    "512"
+  ],
+  "pricing": {},
+  "hints": [
+    "Your prompt is expanded by BFL's prompt upsampler first (recommended by BFL).",
+    "Optional references 1-4: call them <ref_image_0>, <ref_image_1> ... in the prompt and say what to keep.",
+    "Sizes: 1:1 1536x1536, 16:9 2752x1536, 9:16 1536x2752, 4:3 2048x1536 (rendered at the model's native size, then upscaled)."
+  ]
+}

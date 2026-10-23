@@ -1,9 +1,10 @@
 // Cards for finished images and videos, and the viewer with its details panel.
 
 import { api } from '../api.js';
-import { still, el, icon, duration, when } from '../dom.js';
+import { ask, still, el, icon, duration, when } from '../dom.js';
 import { store } from '../store.js';
-import { saveAssetDialog } from './assets.js';
+import { KIT, addToKitDialog } from './kit.js';
+import { go } from '../nav.js';
 
 const title = (text) => String(text).replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 const fileSize = (bytes) => (bytes >= 1e9 ? (bytes / 1e9).toFixed(1) + ' GB' : bytes >= 1e6 ? (bytes / 1e6).toFixed(1) + ' MB' : Math.round((bytes || 0) / 1e3) + ' KB');
@@ -13,6 +14,16 @@ export function promptOf(item) {
   const settings = item.settings || {};
   if (settings.prompt != null) return settings.prompt;
   return Object.values(settings.values || {}).filter((v) => typeof v === 'string').sort((a, b) => b.length - a.length)[0] || '';
+}
+
+// Open Create with a result's settings and its own seed: the same picture again, with what is then changed (a Draft made
+// Final, a word of the prompt). Only for work made with a seed.
+export const seedOf = (item) => (item.context && item.context.seed != null ? item.context.seed : null);
+export function reuseSeed(item, from = null) {
+  store.rerun = item;
+  store.reuseSeed = seedOf(item);
+  store.from = from;
+  go('/create');
 }
 
 // The facts about a generation that are worth showing: [label, value] pairs, empty ones left out.
@@ -47,7 +58,12 @@ export function openViewer(item, { base = '/api/library', owner = false, actions
   const url = `${base}/${item.id}/file`;
   const media = item.kind === 'video' ? el('video', { src: url, controls: true, autoplay: true, loop: true })
     : item.kind === 'audio' ? el('audio', { src: url, controls: true, autoplay: true })
-      : el('img', { src: url, alt: item.name });
+      : item.kind === 'text' ? el('pre', { class: 'viewer-text' }, 'Loading…')
+        : el('img', { src: url, alt: item.name });
+  // A text is shown as it is: its first 200,000 characters
+  if (item.kind === 'text') fetch(url).then((r) => (r.ok ? r.text() : Promise.reject(new Error(r.statusText))))
+    .then((text) => { media.textContent = text.length > 200000 ? text.slice(0, 200000) + '\n…' : text; })
+    .catch(() => { media.textContent = 'This text could not be loaded.'; });
   const promptText = promptOf(item);
   const copy = el('button', { class: 'btn small quiet', onclick: async () => {
     try { await navigator.clipboard.writeText(promptText); copy.textContent = 'Copied'; } catch (e) { copy.textContent = 'Copy failed'; }
@@ -100,7 +116,7 @@ async function useAsFirstFrame(item, button) {
   try {
     const ref = await api(`/api/library/${item.id}/reference`, { method: 'POST' });
     store.prefill = { slot: 'first_frame', ref, parent: item.id };
-    location.hash = '#/create';
+    go('/create');
     return true;
   } catch (e) { alert(e.message); if (button) button.disabled = false; return false; }
 }
@@ -110,10 +126,10 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
   const fileUrl = `/api/library/${item.id}/file`;
   const thumb = still(fileUrl, item.kind, item.name);
   const sound = item.kind === 'audio';   // a sound can't be the first frame of a video
-  const rerun = () => { store.rerun = item; location.hash = '#/create'; };
+  const rerun = () => { store.rerun = item; go('/create'); };
   const next = item.kind === 'video' ? 'Continue' : 'Use as first frame';
   const remove = async () => {
-    if (!confirm(`Delete "${item.name}" from your library? This can't be undone.`)) return;
+    if (!await ask({ title: `Delete "${item.name}"?`, danger: true, confirm: 'Delete', message: "It is deleted from your library for good. This can't be undone." })) return;
     try { await api('/api/library/' + item.id, { method: 'DELETE' }); onChanged(); } catch (e) { alert(e.message); }
   };
   const move = async (e) => {
@@ -125,6 +141,7 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
   const edited = /^(edit|upload)\//.test(item.workflow);   // a timeline export or an upload: there is no form to re-run
   const view = () => openViewer(item, { actions: [
     !edited && { label: 'Re-run', run: (dialog) => { dialog.close(); rerun(); } },
+    !edited && seedOf(item) != null && { label: 'Reuse seed', run: (dialog) => { dialog.close(); reuseSeed(item); } },
     !sound && { label: next, run: async (dialog) => { if (await useAsFirstFrame(item)) dialog.close(); } },
   ].filter(Boolean) });
   return el('div', { class: 'media' },
@@ -142,7 +159,7 @@ export function mediaCard(item, { manage, projects = [], onChanged } = {}) {
       manage && el('div', { class: 'row' },
         el('select', { class: 'small', title: 'Project', onchange: move },
           el('option', { value: '' }, 'No project'),
-          projects.map((p) => el('option', { value: p.id, selected: p.id === item.project_id }, p.name))),
-        item.kind === 'image' && el('button', { class: 'btn small', onclick: () => saveAssetDialog({ generation: item }) }, 'Save as asset'),
+          projects.map((p) => el('option', { value: p.id, selected: p.id === item.project_id }, p.parent_name ? `${p.parent_name} › ${p.name}` : p.name))),
+        item.kind !== 'text' && item.project_id && el('button', { class: 'btn small', onclick: () => addToKitDialog({ project: item.project_id || 0, item }) }, `Add to ${KIT}`),
         el('button', { class: 'btn small quiet danger', onclick: remove }, 'Delete'))));
 }

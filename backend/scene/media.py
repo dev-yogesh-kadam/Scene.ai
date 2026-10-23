@@ -5,8 +5,11 @@ or from the system if that package is missing.
 """
 
 import asyncio
+import glob
+import weakref
 import re
 import shutil
+from pathlib import Path
 
 FPS = 24
 
@@ -26,10 +29,12 @@ def ffmpeg_path():
         return found
 
 
-async def _ffmpeg(*args, check=True):
+async def _ffmpeg(*args, check=True, cwd=None):
+    """Run ffmpeg and return what it said. cwd: the folder it runs in, so a filter can name its files (subtitles, a
+    font) without the escaping a full Windows path needs inside a filter."""
     process = await asyncio.create_subprocess_exec(
         ffmpeg_path(), "-hide_banner", "-y", *[str(a) for a in args],
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, cwd=cwd)
     try:
         _, stderr = await process.communicate()
     except asyncio.CancelledError:   # the job this was for was cancelled: don't leave ffmpeg running
@@ -65,11 +70,48 @@ def poster_path(video):
     return video.parent / ".posters" / (video.name + ".jpg")
 
 
+# Posters made at once, at most: a canvas of new pictures asks for all of theirs together. One limit per event loop.
+POSTERS_AT_ONCE = 3
+_poster_gates = weakref.WeakKeyDictionary()
+
+
+def _poster_gate():
+    loop = asyncio.get_running_loop()
+    if loop not in _poster_gates:
+        _poster_gates[loop] = asyncio.Semaphore(POSTERS_AT_ONCE)
+    return _poster_gates[loop]
+
+
 async def poster(video):
-    """A small still from the start of a video, for its thumbnail. It is made once and kept."""
+    """A small still from the start of a video, or a small copy of a picture, for its thumbnail. Made once and kept."""
     target = poster_path(video)
     if target.is_file() and target.stat().st_mtime >= video.stat().st_mtime:
         return target
+    async with _poster_gate():
+        if target.is_file() and target.stat().st_mtime >= video.stat().st_mtime:   # made while this one waited
+            return target
+        return await _make_poster(video, target)
+
+
+def remove_result(path):
+    """Delete a finished file and what was made from it for its thumbnail: its poster and a video's keyframes."""
+    path = Path(path)
+    path.unlink(missing_ok=True)
+    posters = path.parent / ".posters"
+    if posters.is_dir():
+        for made in posters.glob(glob.escape(path.name) + "*.jpg"):   # <name>.jpg and <name>.<tenth>.jpg
+            made.unlink(missing_ok=True)
+
+
+async def make_poster_soon(path):
+    """Make a new result's poster now, so its thumbnail is ready when the page asks. Best effort."""
+    try:
+        await poster(path)
+    except (MediaError, OSError):
+        pass
+
+
+async def _make_poster(video, target):
     target.parent.mkdir(exist_ok=True)
     target.unlink(missing_ok=True)
     scale = "scale='min({},iw)':-2".format(POSTER_WIDTH)
@@ -120,6 +162,46 @@ async def join(clips, target):
         args += ["-map", "[a]", "-c:a", "aac", "-b:a", "192k"]
     args += ["-c:v", "libx264", "-crf", "16", "-preset", "medium", "-pix_fmt", "yuv420p", "-movflags", "+faststart", target]
     await _ffmpeg(*args)
+    return target
+
+
+STILL_BITRATE = 60   # kb/s: a picture this thin may be one frame held still; anything richer is a real video
+
+# A sound kept as it is, in the file type its codec belongs in; any other sound is made AAC in an .m4a.
+SOUND_FILES = {"aac": ".m4a", "mp3": ".mp3", "flac": ".flac", "opus": ".ogg", "vorbis": ".ogg", "pcm_s16le": ".wav", "pcm_s24le": ".wav"}
+
+
+async def sound_only(path):
+    """Whether a video file is really a sound: it has sound, and its picture is cover art, or one frame that never
+    changes from start to end (what some apps make when they export audio "as a video")."""
+    text = await _ffmpeg("-i", path, check=False)
+    if not re.search(r"Stream #\S+.*Audio:", text):
+        return False
+    video = re.search(r"Stream #\S+.*Video:.*", text)
+    if not video:
+        return True
+    if "(attached pic)" in video.group(0):
+        return True
+    rate = re.search(r"(\d+) kb/s", video.group(0))
+    if not rate or int(rate.group(1)) > STILL_BITRATE:
+        return False
+    # Thin enough to be a still: check that the picture really never moves.
+    seconds = (await probe(path))["seconds"]
+    said = await _ffmpeg("-i", path, "-map", "0:v:0", "-vf", "freezedetect=n=0.003:d=0.5", "-f", "null", "-", check=False)
+    starts = [float(s) for s in re.findall(r"freeze_start: ([\d.]+)", said)]
+    ends = [float(s) for s in re.findall(r"freeze_end: ([\d.]+)", said)]
+    return bool(starts) and starts[0] <= 0.1 and (not ends or ends[-1] >= seconds - 0.2)
+
+
+async def keep_sound(path, stem):
+    """The sound of a file, without its picture, as a file of its own next to it: its codec copied when it fits a sound
+    file, made AAC otherwise. stem: the new file's name without its type. Returns the new path."""
+    text = await _ffmpeg("-i", path, check=False)
+    codec = re.search(r"Stream #\S+.*Audio: (\w+)", text)
+    suffix = SOUND_FILES.get(codec.group(1) if codec else "", ".m4a")
+    target = Path(path).with_name(stem + suffix)
+    copy = codec and codec.group(1) in SOUND_FILES
+    await _ffmpeg("-loglevel", "error", "-i", path, "-map", "0:a:0", "-vn", *(["-c:a", "copy"] if copy else ["-c:a", "aac", "-b:a", "192k"]), target)
     return target
 
 

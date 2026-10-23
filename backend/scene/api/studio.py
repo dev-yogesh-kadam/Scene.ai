@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 
 import httpx
 
-from .. import media, memory
+from .. import health, kit, media, memory, runs
 from ..catalog import KINDS
 from ..comfy import workflows
 from ..agent import AgentError
@@ -33,12 +33,22 @@ def current_announcement(db):
     return {"text": found["text"], "level": found.get("level", "info"), "until": found.get("until")}
 
 
+def by_source(wf):
+    """Whether a job is as long as the video it is given, and billed by that: an upscale, and any workflow whose presets
+    file says {"pricing": {"source": "video"}} (a lip sync)."""
+    return wf["id"].startswith("upscaler/") or (wf["profile"].get("pricing") or {}).get("source") == "video"
+
+
 async def billed_seconds(state, wf, schema, settings, user_id=None):
     """The length of the result these settings ask for, which is what a per-second price is based on. None when
     the workflow does not say."""
     ctx = workflows.context(schema, settings)
     if ctx.get("duration"):
         return ctx["duration"] * ctx.get("clips", 1)
+    # A workflow that always makes the same length says so in its presets file ({"pricing": {"fixed_seconds": 15}}).
+    fixed = (wf["profile"].get("pricing") or {}).get("fixed_seconds")
+    if isinstance(fixed, (int, float)) and not isinstance(fixed, bool) and fixed > 0:
+        return float(fixed)
     # A workflow whose length is not a duration control names the control in its presets file.
     named = (wf["profile"].get("pricing") or {}).get("seconds")
     control = next((c for c in schema["controls"] if c["id"] == named), None)
@@ -47,9 +57,9 @@ async def billed_seconds(state, wf, schema, settings, user_id=None):
             return max(0.0, float((settings.get("values") or {}).get(control["id"], control["default"])))
         except (TypeError, ValueError):
             return None
-    if not wf["id"].startswith("upscaler/"):
+    if not by_source(wf):
         return None
-    # An upscale is as long as the video it is made from. For a file the user brought, the browser says how long
+    # An upscale (or a lip sync) is as long as the video it is made from. For a file the user brought, the browser says how long
     # it is for the estimate, and the job is charged by what the server measures (see create_job).
     given = settings.get("source_seconds")
     if isinstance(given, (int, float)) and not isinstance(given, bool) and 0 < given < 86400:
@@ -69,12 +79,18 @@ async def price(state, wf, settings, user_id=None):
     schema = workflows.describe(wf)
     estimate = workflows.estimate(wf, settings, state.jobs.history())
     estimate["seconds"] = await billed_seconds(state, wf, schema, settings, user_id)
-    estimate["credits"] = state.credits.cost(wf["id"], estimate["seconds"])
+    chosen = workflows.context(schema, settings)
+    estimate["credits"] = state.credits.cost(wf["id"], estimate["seconds"], chosen)
+    # What each other resolution and quality would cost, for the page to show beside them ("1080p · 200 cr").
+    others = {"quality": [c["id"] for o in schema["options"] if o["id"] == "quality" for c in o["choices"]],
+              "resolution": list(schema["resolutions"]) if "resolution" in chosen else []}
+    estimate["choices"] = {group: {str(v): state.credits.cost(wf["id"], estimate["seconds"], dict(chosen, **{group: v})) for v in values}
+                           for group, values in others.items() if values}
     return estimate
 
 
-def switched_on(state, workflow_id):
-    if not state.credits.enabled(workflow_id):
+def switched_on(state, workflow_id, user):
+    if not state.credits.enabled(workflow_id, user):
         raise HTTPException(400, "This workflow is switched off for now.")
 
 
@@ -92,14 +108,19 @@ async def status(request: Request, user: dict = Depends(current_user)):
 
 @router.get("/announcement")
 async def announcement(request: Request, user: dict = Depends(current_user)):
-    """The message an admin wants every user to see, while it lasts. Empty when there is none."""
-    return current_announcement(request.app.state.db)
+    """The message an admin wants every user to see, while it lasts. Empty when there is none. Under maintenance, its
+    message, in place of any other."""
+    db = request.app.state.db
+    closed = health.maintenance(db)
+    if closed:
+        return {"text": closed["text"], "level": "warning", "until": None, "maintenance": True}
+    return current_announcement(db)
 
 
 @router.get("/workflows")
 async def list_workflows(request: Request, user: dict = Depends(current_user)):
     state = request.app.state
-    listed = [w for w in await state.catalog.listing() if state.credits.enabled(w["id"])]
+    listed = [w for w in await state.catalog.listing() if state.credits.enabled(w["id"], user)]
     return {"workflows": listed, "kinds": KINDS, "default": state.catalog.current(state.settings.default_workflow)}
 
 
@@ -112,7 +133,7 @@ async def get_workflow(kind: str, name: str, request: Request, user: dict = Depe
 async def estimate(settings: dict, request: Request, user: dict = Depends(current_user)):
     state = request.app.state
     wf = await state.catalog.load(str(settings.get("workflow", "")))
-    switched_on(state, wf["id"])
+    switched_on(state, wf["id"], user)
     return dict(await price(state, wf, settings, user["id"]), balance=state.credits.balance(user["id"]))
 
 
@@ -121,10 +142,12 @@ async def list_jobs(request: Request, user: dict = Depends(current_user)):
     return {"jobs": request.app.state.jobs.snapshot(user["id"])}
 
 
-async def _write_caption(state, wf, settings, prompt_id):
-    """Some image models only work well with a structured JSON caption (a presets file says so with "caption").
-    A prompt in plain words is turned into one by the agent's model, with the instructions the workflow carries.
-    The plain prompt stays in settings["prompt"], which is what the library shows."""
+def needs_caption(wf, settings, prompt_id):
+    """Some image models only work well with a structured JSON caption (a presets file says so with "caption"). A
+    prompt in plain words is turned into one by the agent's model, with the instructions the workflow carries, when
+    the job is about to render (see JobManager._captions): Generate does not wait for it, and the captions of the jobs
+    waiting are written together, so the image model stays loaded between them. The plain prompt stays in
+    settings["prompt"], which is what the library shows."""
     rule = wf["profile"].get("caption")
     plain = settings["prompt"].strip()
     if not rule or not plain:
@@ -141,11 +164,7 @@ async def _write_caption(state, wf, settings, prompt_id):
     values = settings.setdefault("values", {})
     ratio = str(values.get(rule.get("ratio")) or wf["nodes"].get(str(rule.get("ratio", "")).rpartition(":")[0], {})
                 .get("inputs", {}).get(str(rule.get("ratio", "")).rpartition(":")[2]) or "auto").split(" ")[0]
-    try:
-        values[prompt_id] = await state.agent.caption(template, plain, ratio)
-    except AgentError as error:
-        raise HTTPException(400, "This model needs a structured caption, which the agent writes from your prompt. {} "
-                                 "Nothing was charged.".format(error))
+    settings["caption"] = {"prompt": prompt_id, "template": template, "ratio": ratio}
 
 
 async def _video_seconds(state, data, filename):
@@ -176,7 +195,7 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     except (KeyError, ValueError, TypeError):
         raise HTTPException(400, "Missing or broken settings.")
     wf = await state.catalog.load(str(settings.get("workflow", "")))
-    switched_on(state, wf["id"])
+    switched_on(state, wf["id"], user)
     schema = workflows.describe(wf)
     settings["workflow"] = wf["id"]   # the id it goes by now, if it was asked for by the id of a workflow it replaced
     slots = workflows.refs_in_use(schema, settings)   # a file for a slot the chosen mode does not read is not sent on
@@ -189,14 +208,26 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     parent = settings.get("parent")
     owned = isinstance(parent, int) and state.db.one("SELECT 1 FROM generations WHERE id = ? AND user_id = ?", (parent, user["id"]))
     settings["parent"] = parent if owned else None
+    # A result the agent planned as something to reuse is kept in shared memory when it is done: only a type and a name.
+    settings["keep"] = memory.clean_keep(settings.get("keep"), wf["id"].split("/", 1)[0])
+    settings["shot"] = memory.clean_shot(settings.get("shot"))
 
-    # The length of a video the user brought to an upscaler, measured here: it is what the upscale is charged by.
-    videos = {r["id"] for r in schema["refs"] if r["kind"] == "video"} if wf["id"].startswith("upscaler/") else set()
+    # The length of a video the user brought to an upscaler or a lip sync, measured here: it is what the job is charged by.
+    videos = {r["id"] for r in schema["refs"] if r["kind"] == "video"} if by_source(wf) else set()
     settings.pop("source_seconds", None)
 
     async def measure(slot, data, filename):
         if slot in videos:
             settings["source_seconds"] = await _video_seconds(state, data, filename) or settings.get("source_seconds")
+
+    # @names of the project's kit in the prompt ("@Violet at @Bonfire Clearing") go into the free slots that fit them,
+    # and the prompt calls them by the words the model ties to those slots.
+    prompt_id = next((c["id"] for c in schema["controls"] if c["role"] == "prompt"), None)
+    values = settings.get("values") if isinstance(settings.get("values"), dict) else {}
+    if prompt_id and "@" in str(values.get(prompt_id) or ""):
+        given = {s for s, r in (settings.get("refs") or {}).items() if r} | {k[4:] for k in form.keys() if k.startswith("ref:")}
+        values[prompt_id], placed = kit.mentions(schema, values[prompt_id], kit.entries(state.db, user["id"], project_id), given, slots)
+        settings["refs"] = {**(settings.get("refs") or {}), **{slot: {"asset_id": asset} for slot, asset in placed.items()}}
 
     refs = {}
     for slot, ref in (settings.get("refs") or {}).items():
@@ -243,7 +274,7 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     values = settings.get("values") or {}
     if "prompt" in roles:
         settings["prompt"] = str(values.get(roles["prompt"]["id"], roles["prompt"]["default"]) or "")
-        await _write_caption(state, wf, settings, roles["prompt"]["id"])
+        needs_caption(wf, settings, roles["prompt"]["id"])
     settings["details"] = [[c["label"].split(" (")[0], values.get(c["id"], c["default"])] for c in schema["controls"] if not c["role"]]
     settings["workflow_title"] = schema["title"]
     quote = await price(state, wf, settings, user["id"])
@@ -251,6 +282,11 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     over = state.credits.cap_problem(user["id"], quote["credits"])
     if over:
         raise HTTPException(429, over)
+    run_of = settings.get("run_of") if isinstance(settings.get("run_of"), str) and runs.RUN.match(settings["run_of"]) else ""
+    settings["run_of"] = run_of
+    over = runs.budget_problem(state.db, user["id"], run_of, quote["credits"])
+    if over:
+        raise HTTPException(402, over)
     if not state.credits.charge(user["id"], quote["credits"], "generation"):
         raise HTTPException(402, "This needs {} credits and you have {}. Ask an admin for more.".format(
             quote["credits"], state.credits.balance(user["id"])))
@@ -293,7 +329,7 @@ async def events(ws: WebSocket):
         await ws.close(code=4401)
         return
     await ws.accept()
-    state.hub.add(user["id"], ws, admin=user["role"] == "admin")
+    state.hub.add(user["id"], ws)
     try:
         await ws.send_text(state.live_message(user["id"]))
         while True:

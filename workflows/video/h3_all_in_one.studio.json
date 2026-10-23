@@ -1,0 +1,305 @@
+{
+  "title": "H3 All In One",
+  "description": "Every MiniMax H3 job in one workflow: reference mode, first and last frame, keyframes built by Qwen Image Edit, a voice track, and an optional SeedVR2 upscale.",
+  "output_name": "16.filename_prefix",
+  "labels": {
+    "100:value": "Describe the action, camera and sound. Say \"the main character\", \"the background\" for the references.",
+    "405:value": "Opening keyframe prompt (Qwen Image Edit)",
+    "406:value": "End keyframe prompt (edits the opening frame)",
+    "462:value": "Upscale: short edge"
+  },
+  "defaults": {
+    "100:value": ""
+  },
+  "hide": [
+    "107",
+    "109",
+    "113",
+    "114",
+    "403",
+    "404",
+    "407",
+    "408",
+    "409",
+    "421",
+    "424",
+    "431",
+    "434",
+    "452",
+    "463",
+    "500",
+    "502",
+    "506",
+    "507"
+  ],
+  "options": [
+    {
+      "id": "engine",
+      "label": "Mode",
+      "default": "reference",
+      "top": true,
+      "choices": [
+        {
+          "id": "reference",
+          "label": "Reference mode",
+          "hint": "a new scene built from your references"
+        },
+        {
+          "id": "first_frame",
+          "label": "First-frame mode",
+          "hint": "animates the FIRST FRAME exactly as it is (to the LAST FRAME if given); text to video with none"
+        }
+      ]
+    },
+    {
+      "id": "quality",
+      "label": "Quality",
+      "default": "high",
+      "choices": [
+        {
+          "id": "low",
+          "label": "Low",
+          "hint": "a fast turbo draft"
+        },
+        {
+          "id": "medium",
+          "label": "Medium",
+          "hint": "the full model, 20 steps"
+        },
+        {
+          "id": "high",
+          "label": "High",
+          "hint": "the full model, 40 steps"
+        }
+      ]
+    },
+    {
+      "id": "shape",
+      "label": "Shape",
+      "default": "landscape",
+      "choices": [
+        {
+          "id": "landscape",
+          "label": "16:9",
+          "hint": "landscape"
+        },
+        {
+          "id": "portrait",
+          "label": "9:16",
+          "hint": "vertical"
+        }
+      ]
+    },
+    {
+      "id": "sound",
+      "label": "Sound",
+      "default": "on",
+      "choices": [
+        {
+          "id": "on",
+          "label": "With sound",
+          "hint": "voices, effects and music"
+        },
+        {
+          "id": "off",
+          "label": "Silent",
+          "hint": "no audio"
+        },
+        {
+          "id": "own_voice",
+          "label": "Keep my voice track",
+          "hint": "the lips follow the VOICE TRACK, which stays in the saved video"
+        }
+      ]
+    },
+    {
+      "id": "keyframes",
+      "label": "Keyframes",
+      "default": "off",
+      "choices": [
+        {
+          "id": "off",
+          "label": "Off",
+          "hint": "use the frames you give, if any"
+        },
+        {
+          "id": "opening",
+          "label": "Build the opening frame",
+          "hint": "Qwen Image Edit makes it from the subject and style images"
+        },
+        {
+          "id": "both",
+          "label": "Build opening and end frames",
+          "hint": "and an end frame from a new camera angle"
+        }
+      ]
+    },
+    {
+      "id": "upscale",
+      "label": "Upscale",
+      "default": "off",
+      "choices": [
+        {
+          "id": "off",
+          "label": "Off",
+          "hint": "the native size"
+        },
+        {
+          "id": "on",
+          "label": "On",
+          "hint": "SeedVR2, to the short edge below (slow)"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "engine": "reference"
+      },
+      "set": {
+        "107.value": true
+      }
+    },
+    {
+      "when": {
+        "engine": "first_frame"
+      },
+      "set": {
+        "107.value": false
+      }
+    },
+    {
+      "when": {
+        "quality": "low"
+      },
+      "set": {
+        "500.value": 1
+      }
+    },
+    {
+      "when": {
+        "quality": "medium"
+      },
+      "set": {
+        "500.value": 2
+      }
+    },
+    {
+      "when": {
+        "quality": "high"
+      },
+      "set": {
+        "500.value": 3
+      }
+    },
+    {
+      "when": {
+        "shape": "landscape"
+      },
+      "set": {
+        "502.value": false
+      }
+    },
+    {
+      "when": {
+        "shape": "portrait"
+      },
+      "set": {
+        "502.value": true
+      }
+    },
+    {
+      "when": {
+        "sound": "on"
+      },
+      "set": {
+        "506.value": true,
+        "408.value": false
+      }
+    },
+    {
+      "when": {
+        "sound": "off"
+      },
+      "set": {
+        "506.value": false,
+        "408.value": false
+      }
+    },
+    {
+      "when": {
+        "sound": "own_voice"
+      },
+      "set": {
+        "506.value": true,
+        "408.value": true
+      }
+    },
+    {
+      "when": {
+        "keyframes": "off"
+      },
+      "set": {
+        "403.value": false,
+        "404.value": false
+      }
+    },
+    {
+      "when": {
+        "keyframes": "opening"
+      },
+      "set": {
+        "403.value": true,
+        "404.value": false
+      }
+    },
+    {
+      "when": {
+        "keyframes": "both"
+      },
+      "set": {
+        "403.value": true,
+        "404.value": true
+      }
+    },
+    {
+      "when": {
+        "upscale": "off"
+      },
+      "set": {
+        "409.value": false
+      }
+    },
+    {
+      "when": {
+        "upscale": "on"
+      },
+      "set": {
+        "409.value": true
+      }
+    }
+  ],
+  "refs_when": [
+    {
+      "when": {
+        "engine": "reference"
+      },
+      "refs": [
+        "201:image",
+        "202:image",
+        "203:image",
+        "204:image",
+        "205:image",
+        "206:image",
+        "207:video",
+        "208:audio"
+      ]
+    }
+  ],
+  "hints": [
+    "Reference mode builds a new scene from your references; first-frame mode keeps the first frame exactly.",
+    "Best results come from 5-6 s clips, one action each. Durations from 3 to 15 s work.",
+    "For speech put the words in quotes after \"Audio:\". With a VOICE TRACK the lips follow your own audio."
+  ]
+}

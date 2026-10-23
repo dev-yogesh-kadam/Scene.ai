@@ -22,7 +22,9 @@ export async function apiLines(path, { json, signal } = {}, onLine = () => {}) {
     while ((cut = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, cut).trim();
       buffer = buffer.slice(cut + 1);
-      if (line) onLine(JSON.parse(line));
+      if (!line) continue;
+      const event = JSON.parse(line);
+      if (event.type !== 'ping') onLine(event);   // a sign of life while the server is quiet, nothing to show
     }
     if (done) break;
   }
@@ -38,10 +40,11 @@ export async function api(path, options = {}) {
   if (response.status === 401 && !path.startsWith('/api/auth/')) {
     window.dispatchEvent(new Event('scene:signed-out'));
   }
-  if (!response.ok) {
+  // A slow answer (a local model loading) is sent late, after its status: an error then says its status as "failed".
+  if (!response.ok || (body && body.failed)) {
     const detail = Array.isArray(body.detail) ? 'Some fields are missing or wrong.' : body.detail;
     const error = new Error(detail || `Request failed (${response.status})`);
-    error.status = response.status;
+    error.status = response.ok ? body.failed : response.status;
     error.data = body;   // the whole answer, for a page that needs more than the message (the sign-in's second step)
     throw error;
   }

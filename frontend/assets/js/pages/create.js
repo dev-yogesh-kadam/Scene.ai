@@ -1,11 +1,11 @@
 // The Create page: pick a workflow, fill its form, queue a generation.
 
 import { api } from '../api.js';
-import { el, field, segmented } from '../dom.js';
+import { creditsText, el, field, segmented } from '../dom.js';
 import { store, subscribe, refreshJobs } from '../store.js';
 import { jobList } from '../components/jobs.js';
 import { mediaCard } from '../components/media.js';
-import { pickAsset, saveAssetDialog } from '../components/assets.js';
+import { KIT, addToKitDialog, keepField, pickFromKit, typeForSlot } from '../components/kit.js';
 
 const ACCEPT = { image: 'image/*', video: 'video/*', audio: 'audio/*,video/*' };
 const KIND_LABEL = { video: 'Video', image: 'Image', audio: 'Audio' };
@@ -14,7 +14,7 @@ export function render(view) {
   const form = {
     kind: localStorage.getItem('scene.kind') || 'video',
     catalog: [], kinds: ['video', 'image'], fallback: '',
-    wf: null, values: {}, options: {}, resolution: null, orientation: null, seedMode: 'fixed', name: '',
+    wf: null, values: {}, options: {}, resolution: null, orientation: null, seed: '', name: '',   // seed: empty = a new random one on every Generate
     clips: 1,        // more than 1 = a long video made of chained clips
     projectId: Number(localStorage.getItem('scene.project')) || null, projects: [],
     refs: {},        // slot id -> {file}, {existing: name on the render server} or {assetId}, plus {name, url}
@@ -34,7 +34,8 @@ export function render(view) {
   const generateLabel = el('span', {}, 'Generate');
   const cost = el('span', { class: 'cost' });
   const generateButton = el('button', { class: 'btn generate', onclick: () => generate(false) }, generateLabel, cost);
-  const body = el('div', {}, fields, refsBlock, tips, error, el('div', { class: 'generate-bar' }, estimate, generateButton));
+  const keep = keepField();   // what is made can go into the project's kit under a name
+  const body = el('div', {}, fields, refsBlock, tips, keep.node, error, el('div', { class: 'generate-bar' }, estimate, generateButton));
   const queue = el('div');
   const recent = el('div', { class: 'media-grid compact' });
 
@@ -43,7 +44,7 @@ export function render(view) {
   store.from = null;
   view.replaceChildren(
     el('div', { class: 'page-head' },
-      from === '#/canvas' && el('a', { class: 'btn', href: '#/canvas', title: 'Back to the canvas of this project' }, '← Canvas'),
+      from === '/canvas' && el('a', { class: 'btn', href: '/canvas', title: 'Back to the canvas of this project' }, '← Canvas'),
       el('h1', {}, 'Create'), tabs),
     el('div', { class: 'create' },
       el('div', { class: 'card create-form' },
@@ -51,10 +52,9 @@ export function render(view) {
           el('button', { class: 'btn small quiet', title: 'Look for new workflow files', onclick: () => loadCatalog().catch(showError) }, 'Refresh')),
         note, body),
       el('div', {},
-        el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Queue'),
-          el('a', { class: 'btn small quiet', href: '#/queue' }, 'View all')), queue),
+        el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Queue')), queue),
         el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', {}, 'Latest'),
-          el('a', { class: 'btn small quiet', href: '#/library' }, 'Open library')), recent))));
+          el('a', { class: 'btn small quiet', href: '/library' }, 'Open library')), recent))));
 
   const byRole = (role) => form.wf.controls.find((c) => c.role === role);
   const showError = (e) => { error.textContent = e.message || String(e); };
@@ -100,12 +100,13 @@ export function render(view) {
   async function selectWorkflow(id, saved) {
     const wf = await api('/api/workflows/' + id);
     form.wf = wf;
+    keep.show(wf.id.split('/')[0], !!form.projectId);
     localStorage.setItem('scene.workflow.' + form.kind, id);
     form.values = Object.fromEntries(wf.controls.map((c) => [c.id, c.default]));
     form.options = Object.fromEntries(wf.options.map((o) => [o.id, o.default]));
     form.resolution = wf.size && wf.size.resolution;
     form.orientation = wf.size && wf.size.orientation;
-    form.seedMode = 'fixed';
+    form.seed = '';
     form.name = wf.id.split('/')[1];
     form.clips = 1;
     form.refs = {};
@@ -121,7 +122,7 @@ export function render(view) {
         form.resolution = saved.resolution || form.resolution;
         form.orientation = saved.orientation || form.orientation;
       }
-      form.seedMode = saved.seed_mode || 'fixed';
+      form.seed = saved.seed_mode === 'fixed' && saved.seed != null ? String(saved.seed) : '';   // set by "Reuse seed" only
       form.name = saved.name || form.name;
       form.clips = wf.chain ? Number(saved.clips) || 1 : 1;
       for (const r of wf.refs) {
@@ -230,11 +231,11 @@ export function render(view) {
           : 'Make a longer video as several chained clips. Faster and steadier than one long clip.')));
     }
     const seed = byRole('seed');
-    if (seed) {
-      special.add(seed.id);
-      groups.push(field('Seed', el('div', { class: 'row' },
-        seg([{ id: 'random', label: 'Random' }, { id: 'fixed', label: 'Fixed' }], form.seedMode, (m) => { form.seedMode = m; }),
-        form.seedMode === 'fixed' && numberInput(seed))));
+    if (seed) special.add(seed.id);
+    if (form.wf.seeded) {
+      groups.push(field('Seed', el('input', { type: 'number', min: 0, max: 4294967295, step: 1, placeholder: 'Random', value: form.seed,
+        oninput: (e) => { form.seed = e.target.value; } }),
+      el('div', { class: 'hint' }, 'Empty: a new random seed on every Generate. A number: that seed again, so the same settings give the same picture.')));
     }
     parts.push(el('div', { class: 'grid2' }, groups));
 
@@ -284,7 +285,7 @@ export function render(view) {
   }
 
   async function chooseSaved(slot) {
-    const asset = await pickAsset(slot.kind);
+    const asset = await pickFromKit(slot.kind, form.projectId);
     if (asset) setRef(slot, { assetId: asset.id, name: asset.name, kind: asset.kind, url: `/api/assets/${asset.id}/file` });
   }
 
@@ -300,7 +301,7 @@ export function render(view) {
     refsBlock.className = 'form-section';
     refsBlock.replaceChildren(
       el('h2', {}, 'References'),
-      el('p', { class: 'muted' }, 'All optional unless marked with *. Drop a file on a box, click it, or pick one of your saved assets.'),
+      el('p', { class: 'muted' }, `All optional unless marked with *. Drop a file on a box, click it, or pick one from this project's ${KIT}.`),
       el('div', { class: 'refs' }, shown.map((slot) => {
         const current = form.refs[slot.id];
         const file = el('input', { type: 'file', accept: ACCEPT[slot.kind], hidden: true,
@@ -328,9 +329,9 @@ export function render(view) {
           el('div', { class: 'ref-body' }, content),
           current && el('div', { class: 'ref-name' }, current.name),
           el('div', { class: 'ref-actions' },
-            !current && el('button', { type: 'button', class: 'btn small quiet', title: 'Pick one of your saved assets', onclick: stop(() => chooseSaved(slot)) }, 'Saved'),
-            current && current.file && el('button', { type: 'button', class: 'btn small quiet', title: 'Keep this file in your assets to reuse it',
-              onclick: stop(() => saveAssetDialog({ file: current.file })) }, 'Save')),
+            !current && el('button', { type: 'button', class: 'btn small quiet', title: `Pick from this project's ${KIT}`, onclick: stop(() => chooseSaved(slot)) }, KIT),
+            current && current.file && el('button', { type: 'button', class: 'btn small quiet', title: `Keep this file in this project's ${KIT} under a name`,
+              onclick: stop(() => addToKitDialog({ project: form.projectId, file: current.file, type: typeForSlot(slot.label) })) }, `Add to ${KIT}`)),
           current && el('button', { type: 'button', class: 'remove', title: 'Remove', onclick: stop(() => setRef(slot, null)) }, '×'),
           file);
       })));
@@ -345,8 +346,9 @@ export function render(view) {
       else if (r.assetId) refs[id] = { asset_id: r.assetId };
     }
     return { workflow: form.wf.id, name: form.name, values: form.values, options: form.options,
-      resolution: form.resolution, orientation: form.orientation, seed_mode: form.seedMode,
-      clips: form.wf.chain ? form.clips : 1, project_id: form.projectId, parent: form.parent, refs };
+      resolution: form.resolution, orientation: form.orientation, seed_mode: String(form.seed).trim() ? 'fixed' : 'random',
+      seed: String(form.seed).trim() ? Number(form.seed) : null,
+      clips: form.wf.chain ? form.clips : 1, project_id: form.projectId, parent: form.parent, refs, keep: keep.value() };
   }
 
   let estimateTimer;
@@ -359,9 +361,9 @@ export function render(view) {
         form.estimate = quote.text;
         form.cost = quote.credits;
         const short = quote.credits > quote.balance;
-        cost.textContent = quote.credits + ' cr';
+        cost.textContent = creditsText(quote.credits);
         estimate.replaceChildren(el('b', {}, quote.text),
-          el('span', { class: short ? 'error' : '' }, short ? ` · this needs ${quote.credits} cr and you have ${quote.balance} cr` : ` · you have ${quote.balance} cr`));
+          el('span', { class: short ? 'error' : '' }, short ? ` · this needs ${creditsText(quote.credits)} and you have ${creditsText(quote.balance)}` : ` · you have ${creditsText(quote.balance)}`));
       } catch (e) { estimate.textContent = e.message; }
     }, 150);
   }
@@ -410,6 +412,7 @@ export function render(view) {
     generateLabel.textContent = 'Uploading…';
     try {
       await api('/api/jobs', { method: 'POST', body: data });
+      keep.reset();   // kept once: the next one is not kept unless asked again
       refreshJobs();
     } catch (e) { showError(e); }
     generateButton.disabled = false;
@@ -434,10 +437,12 @@ export function render(view) {
   // ------------------------------------------------------------ start
 
   const rerun = store.rerun;
-  store.rerun = null;
+  const reused = store.reuseSeed;
+  store.rerun = store.reuseSeed = null;
   if (rerun) { form.kind = rerun.workflow.split('/')[0]; form.parent = rerun.id; }
   if (store.prefill) form.kind = 'video';
-  loadCatalog(rerun && rerun.workflow, rerun && rerun.settings).catch(showError);
+  // Re-run: a new seed. Reuse seed: the result's own seed, so the picture stays the same with the settings changed.
+  loadCatalog(rerun && rerun.workflow, rerun && { ...rerun.settings, seed_mode: reused != null ? 'fixed' : 'random', seed: reused }).catch(showError);
   drawQueue();
   drawRecent().catch(() => {});
   return unsubscribe;

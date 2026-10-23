@@ -1,4 +1,5 @@
-"""Storage: users, sessions, jobs, finished generations, projects, boards, assets, credits, pricing and settings.
+"""Storage: users, sessions, jobs, finished generations, projects, boards, assets, credits, pricing, settings and the
+state of long runs (runs.py).
 
 Two databases with the same interface (run, change, all, one, setting, backup): PostgreSQL when `database_url` is set,
 otherwise SQLite in one file. The app's SQL is written once, with ? for each value; the PostgreSQL side translates it.
@@ -105,6 +106,53 @@ CREATE TABLE IF NOT EXISTS uploads (
     created REAL NOT NULL,
     PRIMARY KEY (user_id, name)
 );
+-- Each version of each workflow file and its presets, kept in storage/workflow_versions/<hash>.json.gz (versions.py).
+CREATE TABLE IF NOT EXISTS workflow_versions (
+    id INTEGER PRIMARY KEY,
+    workflow TEXT NOT NULL,
+    hash TEXT NOT NULL,
+    change TEXT NOT NULL,
+    seen REAL NOT NULL
+);
+-- Each call to the agent's models (traces.py): what it was for, which model, how long, what it cost, what it chose.
+CREATE TABLE IF NOT EXISTS agent_calls (
+    id INTEGER PRIMARY KEY,
+    run TEXT NOT NULL DEFAULT '',
+    user_id INTEGER,
+    purpose TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    asked TEXT NOT NULL DEFAULT '',
+    started REAL NOT NULL,
+    seconds REAL NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    answer_tokens INTEGER NOT NULL DEFAULT 0,
+    tool TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    chars INTEGER NOT NULL DEFAULT 0
+);
+-- Moderation (moderation.py): a verdict on an item ("fine", "removed"), or a prompt refused before it was made.
+CREATE TABLE IF NOT EXISTS moderation (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    generation_id INTEGER,
+    user_id INTEGER,
+    verdict TEXT NOT NULL,
+    words TEXT NOT NULL DEFAULT '',
+    prompt TEXT NOT NULL DEFAULT '',
+    by_name TEXT NOT NULL DEFAULT '',
+    created REAL NOT NULL
+);
+-- What the watcher (health.py) found wrong, from when it was sent until it was gone (`ended` NULL while it lasts).
+CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY,
+    key TEXT NOT NULL,
+    level TEXT NOT NULL,
+    text TEXT NOT NULL,
+    tab TEXT NOT NULL DEFAULT '',
+    started REAL NOT NULL,
+    ended REAL
+);
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY,
     actor_id INTEGER,
@@ -138,6 +186,15 @@ CREATE TABLE IF NOT EXISTS credit_packages (
     bonus_credits INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
     created REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_state (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    run TEXT NOT NULL,
+    path TEXT NOT NULL,
+    value TEXT NOT NULL,
+    writer TEXT NOT NULL DEFAULT '',
+    updated REAL NOT NULL,
+    PRIMARY KEY (user_id, run, path)
 );
 CREATE TABLE IF NOT EXISTS servers (
     id INTEGER PRIMARY KEY,
@@ -199,10 +256,46 @@ COLUMNS = [
     # (origin "upload"), beside the ones saved on purpose (origin "saved", which belong to no one project).
     ("assets", "origin", "TEXT NOT NULL DEFAULT 'saved'"),
     ("assets", "project_id", "INTEGER"),
+    # An asset the agent made for reuse (a character, a place, a voice): the library item it was kept from. A retake of
+    # the same name replaces it, where an asset the user saved is never replaced.
+    ("assets", "made_from", "INTEGER"),
     # Review: the agent's verdict on a library item it looked at after it was made (JSON, see review.py).
     ("generations", "review", "TEXT NOT NULL DEFAULT ''"),
     # The user's thumbs on a result: 1 up, -1 down, 0 not rated. The agent reuses what was liked and avoids the rest.
     ("generations", "rating", "INTEGER NOT NULL DEFAULT 0"),
+    # The run (of a long skill such as Pocket Motion) a working file belongs to: its slices, trims and references. The
+    # library leaves them out unless that run is asked for; "" for everything else.
+    ("generations", "run", "TEXT NOT NULL DEFAULT ''"),
+    # The run a job was made for: what a long run has spent is counted from it (runs.spent).
+    ("jobs", "run", "TEXT NOT NULL DEFAULT ''"),
+    # The kit of a project (kit.py): its assets in order, the ones always attached to its shots (what the cast was),
+    # and the ones attached without a name yet, which the agent asks about.
+    ("assets", "always", "INTEGER NOT NULL DEFAULT 0"),
+    ("assets", "position", "REAL NOT NULL DEFAULT 0"),
+    ("assets", "named", "INTEGER NOT NULL DEFAULT 1"),
+    # A module: a project inside a project, with a canvas, a timeline and agent tabs of its own, sharing the kit of the
+    # project it is in. NULL for a project.
+    ("projects", "parent_id", "INTEGER"),
+    # The name of a project's own canvas, the first of its modules; empty = "Main canvas".
+    ("projects", "canvas_name", "TEXT NOT NULL DEFAULT ''"),
+    # A sign-in to the admin console (1) or to the studio (0). Neither one's cookie opens the other.
+    ("sessions", "console", "INTEGER NOT NULL DEFAULT 0"),
+    # Where a session was started (the address, the browser) and when it was last used (written every few minutes).
+    ("sessions", "ip", "TEXT NOT NULL DEFAULT ''"),
+    ("sessions", "agent", "TEXT NOT NULL DEFAULT ''"),
+    ("sessions", "seen", "REAL"),
+    # The seal of an audit entry: a hash of it and the entry before it (audit.py). '' for entries from before seals.
+    ("audit_log", "seal", "TEXT NOT NULL DEFAULT ''"),
+    # A session in which an admin views the studio as this user, read only: the admin's id (api/admin.view_as).
+    ("sessions", "view_as", "INTEGER"),
+    # The project an agent message was charged in (a job's spend is found through its job): for a project's analytics.
+    ("credit_events", "project_id", "INTEGER"),
+    # A workflow's own resolution and quality factors over the studio's (credits.Credits.factors), as JSON.
+    ("workflow_pricing", "factors", "TEXT NOT NULL DEFAULT ''"),
+    # How many times a render was put back in the queue because the render server went away while it ran (jobs.RESUMES).
+    ("jobs", "resumes", "INTEGER NOT NULL DEFAULT 0"),
+    # A workflow offered to admins alone, to try it before users see it (with `enabled` still 1).
+    ("workflow_pricing", "admins_only", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # The studio's two machines, added to an installation that has no servers yet. Every value can be changed in the
@@ -345,7 +438,7 @@ ID_TABLES = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+) \(\s*id INTEGER PR
 # and writes only that user's rows, even if its SQL forgot to say so. Tables of the whole installation (settings,
 # pricing, servers, the audit log) have no owner.
 OWNED = {"users": "id", "sessions": "user_id", "jobs": "user_id", "generations": "user_id", "projects": "user_id",
-         "boards": "user_id", "assets": "user_id", "credit_events": "user_id", "uploads": "user_id"}
+         "boards": "user_id", "assets": "user_id", "credit_events": "user_id", "uploads": "user_id", "run_state": "user_id"}
 ACTING_SQL = "current_setting('app.user_id', true)"
 OWN_ROWS = ("{acting} = 'all' OR {column} = (CASE WHEN {acting} ~ '^[0-9]+$' THEN {acting}::bigint END)")
 

@@ -41,11 +41,60 @@ function inline(text, chips, onPick) {
 }
 
 const LIST = /^\s*([-*•]|\d+[.)])\s+/;
+const FENCE = /```csv[ \t]*\n([\s\S]*?)\n```/g;
+const LIBRARY_LINK = /^\/api\/(library|assets)\/(\d+)\/file$/;
 
-// A reply as paragraphs and lists. chips: {"item:12": {name, kind}} for the items it may name.
+// One row of CSV: commas split cells, a cell in double quotes may hold commas ("" is a quote mark).
+function csvRow(line) {
+  const cells = [];
+  let cell = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line[i];
+    if (quoted && c === '"' && line[i + 1] === '"') { cell += '"'; i += 1; }
+    else if (c === '"') quoted = !quoted;
+    else if (c === ',' && !quoted) { cells.push(cell.trim()); cell = ''; }
+    else cell += c;
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+// A cell of a table: a link to one of the user's library items (or kit entries) shows its picture — a video its
+// poster, found when the file itself is not a picture; anything else is text. Only the studio's own links are shown.
+function tableCell(text) {
+  const found = LIBRARY_LINK.exec(text);
+  if (!found) return el('td', {}, text);
+  const img = el('img', { src: text, alt: '', loading: 'lazy' });
+  img.addEventListener('error', () => {
+    if (found[1] === 'library' && !img.dataset.poster) { img.dataset.poster = '1'; img.src = `/api/library/${found[2]}/poster`; }
+    else img.replaceWith(el('a', { href: text, target: '_blank', rel: 'noopener' }, 'open'));
+  });
+  return el('td', { class: 'md-cell-media' }, el('a', { href: text, target: '_blank', rel: 'noopener', title: text }, img));
+}
+
+function table(csv) {
+  const [head, ...rows] = csv.split('\n').filter((line) => line.trim()).map(csvRow);
+  return el('div', { class: 'md-table' }, el('table', {},
+    el('thead', {}, el('tr', {}, (head || []).map((h) => el('th', {}, h)))),
+    el('tbody', {}, rows.map((cells) => el('tr', {}, cells.map(tableCell))))));
+}
+
+// A reply as paragraphs, lists and ```csv tables. chips: {"item:12": {name, kind}} for the items it may name.
 export function markdown(text, chips = {}, onPick = () => {}) {
   const out = [];
-  for (const block of String(text || '').replace(/\r/g, '').split(/\n{2,}/)) {
+  const source = String(text || '').replace(/\r/g, '');
+  let at = 0;
+  for (const found of source.matchAll(FENCE)) {
+    out.push(...prose(source.slice(at, found.index), chips, onPick), table(found[1]));
+    at = found.index + found[0].length;
+  }
+  return [...out, ...prose(source.slice(at), chips, onPick)];
+}
+
+function prose(text, chips, onPick) {
+  const out = [];
+  for (const block of text.split(/\n{2,}/)) {
     let list = null;
     let paragraph = null;
     for (const line of block.split('\n')) {

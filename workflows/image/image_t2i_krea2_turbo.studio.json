@@ -1,0 +1,103 @@
+{
+  "title": "Text to Image: Krea 2 Turbo",
+  "description": "Krea 2 Turbo text-to-image (Krea 2 Community License). 8-step turbo with prompt enhancer.",
+  "output_name": "9.filename_prefix",
+  "labels": {
+    "200:image": "REFERENCE 1 (style)"
+  },
+  "required_refs": [],
+  "optional_refs": [
+    "200:image"
+  ],
+  "controls": [
+    {
+      "node": "37",
+      "input": "aspect_ratio",
+      "type": "choice",
+      "choices": [
+        "1:1",
+        "16:9",
+        "9:16",
+        "4:3"
+      ],
+      "label": "Aspect ratio",
+      "primary": true
+    }
+  ],
+  "options": [
+    {
+      "id": "quality",
+      "label": "Quality",
+      "default": "draft",
+      "choices": [
+        {
+          "id": "draft",
+          "label": "Draft",
+          "hint": "fewer steps, fast upscale"
+        },
+        {
+          "id": "final",
+          "label": "Final",
+          "hint": "full steps + SeedVR2 upscale"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "quality": "draft"
+      },
+      "set": {
+        "500.steps": 8,
+        "45.switch": false
+      }
+    },
+    {
+      "when": {
+        "quality": "final"
+      },
+      "set": {
+        "500.steps": 10,
+        "45.switch": true
+      }
+    }
+  ],
+  "hide": [
+    "220",
+    "221",
+    "222",
+    "223",
+    "224",
+    "225",
+    "38",
+    "39",
+    "40",
+    "41",
+    "42",
+    "43",
+    "44",
+    "45",
+    "47",
+    "500",
+    "501",
+    "502",
+    "503",
+    "504",
+    "505",
+    "506",
+    "507",
+    "508",
+    "509",
+    "510",
+    "511",
+    "512",
+    "513"
+  ],
+  "pricing": {},
+  "hints": [
+    "8-step turbo with prompt enhancer.",
+    "Optional reference 1 is a style image: the picture takes its look (colours, medium, mood), not its content.",
+    "Sizes: 1:1 1536x1536, 16:9 2752x1536, 9:16 1536x2752, 4:3 2048x1536 (rendered at the model's native size, then upscaled)."
+  ]
+}

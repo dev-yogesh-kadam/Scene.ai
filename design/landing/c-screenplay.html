@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option C · The Screenplay — Scene.ai</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Inter+Tight:wght@400;500;600;800&display=swap" rel="stylesheet">
+<style>
+  :root { --desk: #171411; --desk2: #201c18; --page: #fbf9f3; --type: #1b1916; --soft: #8a8174; --hi: #ffe45c; --red: #c8382b; --line: rgba(251, 249, 243, .12);
+    --courier: 'Courier Prime', 'Courier New', monospace; --sans: 'Inter Tight', system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  html { background: var(--desk); color: var(--page); }
+  body { margin: 0; font: 400 16px/1.55 var(--sans); -webkit-font-smoothing: antialiased;
+    background: radial-gradient(1200px 700px at 30% 10%, #2a241e, transparent 70%), var(--desk); }
+  a { color: inherit; text-decoration: none; }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 0 40px; }
+
+  .top { display: flex; justify-content: space-between; align-items: center; padding: 26px 0; }
+  .brand { display: flex; gap: 10px; align-items: center; font: 700 17px/1 var(--courier); letter-spacing: .02em; }
+  .brand svg { width: 24px; height: 24px; }
+  .top nav { display: flex; gap: 12px; }
+  .key { font: 700 14px/1 var(--courier); padding: 12px 18px; border: 1.5px solid var(--page); border-radius: 4px; box-shadow: 0 3px 0 rgba(251, 249, 243, .35); }
+  .key.on { background: var(--page); color: var(--type); }
+  .key:active { transform: translateY(2px); box-shadow: 0 1px 0 rgba(251, 249, 243, .35); }
+
+  .page { background: var(--page); color: var(--type); font: 400 17px/1.5 var(--courier); padding: 64px 72px 72px 96px; position: relative;
+    box-shadow: 0 2px 0 #e9e4d8, 0 4px 0 #ddd6c6, 0 40px 80px -30px rgba(0, 0, 0, .7); }
+  .page .no { position: absolute; top: 26px; right: 40px; }
+  .page .draft { position: absolute; top: 26px; left: 96px; color: var(--soft); }
+  .page p { margin: 0 0 18px; }
+  .page .slug { font-weight: 700; text-transform: uppercase; }
+  .page .trans { text-align: right; text-transform: uppercase; }
+  .page .char { margin: 26px 0 0 34%; text-transform: uppercase; }
+  .page .paren { margin: 0 0 0 27%; }
+  .page .line { margin: 0 18% 18px 20%; }
+  .page mark { background: linear-gradient(transparent 12%, var(--hi) 12% 88%, transparent 88%); color: inherit; padding: 0 2px; }
+  .page .rev { position: absolute; right: 26px; color: var(--red); font-weight: 700; }
+  .caret::after { content: '█'; animation: blink 1s steps(2) infinite; color: var(--type); }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .hero { display: grid; grid-template-columns: 1.05fr 1fr; gap: 56px; align-items: center; padding: 20px 0 100px; }
+  .hero .page { transform: rotate(-.6deg); min-height: 640px; }
+  .say { font: 700 clamp(44px, 5vw, 76px)/1 var(--courier); letter-spacing: -.02em; }
+  .dailies { position: relative; }
+  .dailies .screen { aspect-ratio: 16 / 9; overflow: hidden; border-radius: 6px; position: relative; background: #000; box-shadow: 0 40px 80px -30px rgba(0, 0, 0, .8); }
+  .dailies .screen svg { width: 100%; height: 100%; display: block; transition: filter 3.6s ease, transform 6s ease; }
+  .dailies .screen.raw svg { filter: blur(14px) brightness(.5) saturate(.3); transform: scale(1.08); }
+  .dailies .tag { position: absolute; left: 14px; top: 14px; font: 700 12px/1 var(--courier); padding: 7px 9px; background: rgba(0, 0, 0, .55); color: var(--page); border-radius: 3px; }
+  .dailies .tag.ready { background: var(--hi); color: var(--type); }
+  .dailies h1 { margin: 30px 0 14px; font: 800 clamp(38px, 3.9vw, 60px)/.98 var(--sans); letter-spacing: -.035em; }
+  .dailies h1 span { color: var(--hi); }
+  .dailies p { margin: 0 0 28px; color: rgba(251, 249, 243, .72); font-size: 18px; max-width: 520px; }
+  .dailies .row { display: flex; gap: 12px; align-items: center; }
+  .dailies .note { font: 400 italic 15px/1.4 var(--courier); color: var(--soft); }
+
+  .scene { display: grid; grid-template-columns: 1fr 1.1fr; gap: 56px; align-items: center; padding: 70px 0; border-top: 1px dashed var(--line); }
+  .scene.flip { grid-template-columns: 1.1fr 1fr; }
+  .scene.flip .page { order: 2; }
+  .scene .page { padding: 48px 56px 40px 72px; transform: rotate(.4deg); }
+  .scene.flip .page { transform: rotate(-.5deg); }
+
+  .board { background: var(--desk2); border: 1px solid var(--line); border-radius: 8px; padding: 18px; }
+  .board .label { font: 700 12px/1 var(--courier); color: var(--soft); margin: 4px 0 12px; display: flex; justify-content: space-between; }
+  .board .shotrow { display: grid; grid-template-columns: 110px repeat(3, 1fr); gap: 8px; align-items: center; margin-bottom: 8px; }
+  .board .shotrow b { font: 700 12px/1.3 var(--courier); color: rgba(251, 249, 243, .8); }
+  .board .t { aspect-ratio: 16 / 9; border-radius: 4px; overflow: hidden; position: relative; } .board .t svg { width: 100%; height: 100%; display: block; }
+  .board .t.kept { outline: 2px solid var(--hi); outline-offset: 2px; }
+  .board .t.kept::after { content: 'KEPT'; position: absolute; left: 6px; top: 6px; font: 700 9px/1 var(--courier); background: var(--hi); color: var(--type); padding: 3px 5px; }
+  .board .t.dim svg { opacity: .4; }
+  .poster svg { width: 100%; height: 100%; display: block; }
+
+  .suite { background: var(--desk2); border: 1px solid var(--line); border-radius: 8px; padding: 18px; }
+  .suite .view { aspect-ratio: 16 / 9; border-radius: 4px; overflow: hidden; margin-bottom: 16px; } .suite .view svg { width: 100%; height: 100%; display: block; }
+  .track { display: flex; gap: 3px; height: 46px; margin-bottom: 6px; position: relative; }
+  .track i { border-radius: 3px; overflow: hidden; position: relative; } .track i svg { width: 100%; height: 100%; display: block; }
+  .track.music { height: 26px; background: repeating-linear-gradient(90deg, rgba(255, 228, 92, .55) 0 2px, transparent 2px 5px); border-radius: 3px; }
+  .track.title { height: 22px; } .track.title i { background: #c8382b; font: 700 10px/22px var(--courier); padding: 0 8px; color: #fff; }
+  .playhead { position: absolute; top: -6px; bottom: -40px; width: 2px; background: var(--page); left: 30%; animation: play 8s linear infinite; }
+  @keyframes play { from { left: 0; } to { left: 100%; } }
+
+  .cast { columns: 1; }
+  .cast div { display: flex; gap: 8px; margin-bottom: 14px; }
+  .cast div b { white-space: nowrap; }
+  .cast div span.dots { flex: 1; border-bottom: 2px dotted #b8b0a2; transform: translateY(-6px); }
+  .cast div span:last-child { text-align: right; max-width: 52%; }
+  .castnote { color: var(--soft); font-size: 15px; margin-top: 22px; }
+
+  .end { text-align: center; padding: 120px 0 80px; border-top: 1px dashed var(--line); }
+  .end .fade { font: 700 18px/1 var(--courier); letter-spacing: .3em; color: var(--soft); }
+  .end h2 { margin: 34px 0 20px; font: 800 clamp(56px, 8vw, 132px)/.92 var(--sans); letter-spacing: -.04em; }
+  .end h2 span { color: var(--hi); }
+  .end p { color: rgba(251, 249, 243, .7); font-size: 18px; margin: 0 0 34px; }
+  .end nav { display: flex; gap: 12px; justify-content: center; }
+  .foot { display: flex; justify-content: space-between; padding: 24px 0 34px; color: var(--soft); font: 400 13px/1 var(--courier); border-top: 1px solid var(--line); }
+
+  @media (max-width: 900px) {
+    .wrap { padding: 0 16px; } .hero, .scene, .scene.flip { grid-template-columns: 1fr; } .scene.flip .page { order: 0; }
+    .page { padding: 48px 24px 40px 32px; font-size: 15px; } .page .draft { left: 32px; }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<script src="scenes.js"></script>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="#"><img src="../../frontend/assets/img/logo.svg" alt="" style="width:30px;height:30px;border-radius:8px;display:block">SCENE.AI</a>
+    <nav><a class="key" href="#">Sign in</a><a class="key on" href="#">Create an account</a></nav>
+  </header>
+
+  <section class="hero">
+    <div class="page" aria-label="The opening of a script">
+      <span class="draft">YOUR FIRST DRAFT</span><span class="no">1.</span>
+      <div id="script"></div>
+    </div>
+    <div class="dailies">
+      <div class="screen raw" id="screen"><span class="tag" id="tag">SHOT 1 · TAKE 1 · DEVELOPING</span></div>
+      <h1>Write it like a script. <span>Watch it come back as film.</span></h1>
+      <p>Scene.ai reads what you write, makes every shot as takes, keeps the same faces from shot to shot, and cuts the keepers together.</p>
+      <div class="row"><a class="key on" href="#">Create an account</a><span class="note">(no node graphs were harmed)</span></div>
+    </div>
+  </section>
+
+  <section class="scene">
+    <div class="page">
+      <span class="no">2.</span>
+      <p class="slug">INT. THE CANVAS — DAY</p>
+      <p>Every shot of the script lands on a board, <mark>one row per shot</mark>. Each take sits beside the last.</p>
+      <p>YOU keep the take you like. The next clip starts on its last frame. A bad one? Roll it again.</p>
+      <p>The CAST is pinned to the project: the same face, outfit and place carry into every shot.</p>
+      <p class="trans">CUT TO:</p>
+    </div>
+    <div class="board" aria-hidden="true">
+      <div class="label"><span>THE CANVAS · SNEAKER DROP</span><span>3 SHOTS · 9 TAKES</span></div>
+      <div id="rows"></div>
+    </div>
+  </section>
+
+  <section class="scene flip">
+    <div class="page">
+      <span class="no">3.</span>
+      <p class="slug">INT. THE AGENT'S OFFICE — CONTINUOUS</p>
+      <p class="char">YOU</p>
+      <p class="line">A 20 second ad for our sneaker drop. Rooftop, golden hour, the same runner in every shot.</p>
+      <p class="char">THE AGENT</p>
+      <p class="paren">(pricing it up)</p>
+      <p class="line">Three shots. Storyboard stills first, then the clips. <mark>180 credits.</mark> Nothing is made until you approve.</p>
+      <p class="char">YOU</p>
+      <p class="line">Approve.</p>
+      <p>The agent checks every take against the script. A take that drifts gets <mark>one retake</mark>, priced first.</p>
+    </div>
+    <div class="suite" aria-hidden="true" style="padding:28px">
+      <p class="say" style="margin:0 0 18px">“Nothing is made until you approve.”</p>
+      <p style="margin:0;color:rgba(251,249,243,.65);font-size:18px">The agent plans, prices and checks. It never spends a credit you did not see first.</p>
+    </div>
+  </section>
+
+  <section class="scene">
+    <div class="page">
+      <span class="no">4.</span>
+      <p class="slug">INT. EDIT SUITE — NIGHT</p>
+      <p>The keepers fall into order on the TIMELINE. YOU trim a head, lay music under the cut and drop a title card on top.</p>
+      <p>One export. One video.</p>
+      <p class="trans">MATCH CUT TO:</p>
+    </div>
+    <div class="suite" aria-hidden="true">
+      <div class="view" id="view"></div>
+      <div style="position:relative">
+        <div class="track title"><i style="width:22%">TITLE</i></div>
+        <div class="track" id="track"></div>
+        <div class="track music"></div>
+        <div class="playhead"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene flip">
+    <div class="page">
+      <span class="no">5.</span>
+      <p class="slug">CAST, IN ORDER OF APPEARANCE</p>
+      <div class="cast">
+        <div><b>MINIMAX H3</b><span class="dots"></span><span>the video, with sound</span></div>
+        <div><b>Z-IMAGE TURBO</b><span class="dots"></span><span>the quick stills</span></div>
+        <div><b>SDXL</b><span class="dots"></span><span>the painter</span></div>
+        <div><b>IDEOGRAM 4</b><span class="dots"></span><span>the poster, lettering that reads</span></div>
+        <div><b>MINIMAX MUSIC 3</b><span class="dots"></span><span>the score</span></div>
+        <div><b>SEEDVR2</b><span class="dots"></span><span>the finishing, up to 4×</span></div>
+        <div><b>THE STUDIO</b><span class="dots"></span><span>titles &amp; motion graphics</span></div>
+      </div>
+      <p class="castnote">Clips of 5 to 15 seconds from a prompt and up to eight references. Songs from 30 seconds to 5 minutes.</p>
+    </div>
+    <div class="board poster" aria-hidden="true" style="padding:0;overflow:hidden"><div id="poster" style="aspect-ratio:4/3"></div></div>
+  </section>
+
+  <section class="end">
+    <div class="fade">FADE OUT.</div>
+    <h2>Your first scene<br>is <span>one line away.</span></h2>
+    <p>Write it. The studio does the rest, and asks before it spends.</p>
+    <nav><a class="key on" href="#">Create an account</a><a class="key" href="#">Sign in</a></nav>
+  </section>
+  <footer class="foot"><span>SCENE.AI</span><span>A STUDIO FOR VIDEO, PICTURES AND MUSIC</span></footer>
+</div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  // the opening scene types itself; the shot it describes develops beside it, and is ready when the page is
+  const SCRIPT = [
+    ['trans', 'FADE IN:'], ['slug', 'EXT. ROOFTOP — DUSK'],
+    ['', 'The sun sinks into the city. MAYA (28), red jacket, steps up to the ledge and looks out over the skyline.'],
+    ['char', 'MAYA'], ['paren', '(turning to camera)'], ['line say', 'Direct your scene.'], ['trans', 'CUT TO:'],
+  ];
+  const script = $('script');
+  let block = 0, char = 0, el = null;
+  const screen = $('screen');
+  screen.insertAdjacentHTML('afterbegin', Scenes.svg('rooftop'));
+  setTimeout(() => screen.classList.remove('raw'), 400);
+  (function typeOn() {
+    if (block >= SCRIPT.length) {
+      el && el.classList.remove('caret');
+      $('tag').textContent = 'SHOT 1 · TAKE 1 · READY'; $('tag').classList.add('ready');
+      return;
+    }
+    const [cls, text] = SCRIPT[block];
+    if (!el) { el = document.createElement('p'); el.className = cls + ' caret'; script.append(el); }
+    el.textContent = text.slice(0, ++char);
+    if (char >= text.length) { el.classList.remove('caret'); el = null; block += 1; char = 0; setTimeout(typeOn, 260); }
+    else setTimeout(typeOn, cls.includes('say') ? 70 : 24);
+  })();
+  // the canvas: three shots, three takes each, one kept per row
+  const shots = [['1 · WIDE', 'rooftop', 1], ['2 · CLOSE-UP', 'neon', 2], ['3 · PUSH IN', 'desert', 0]];
+  $('rows').innerHTML = shots.map(([label, scene, kept]) => `<div class="shotrow"><b>SHOT ${label}</b>${[0, 1, 2].map((i) =>
+    `<div class="t${i === kept ? ' kept' : i < kept ? ' dim' : ''}">${Scenes.svg(scene)}</div>`).join('')}</div>`).join('');
+  $('view').innerHTML = Scenes.svg('rooftop');
+  $('track').innerHTML = [['rooftop', 30], ['neon', 22], ['desert', 26], ['deep', 22]].map(([s, w]) => `<i style="width:${w}%">${Scenes.svg(s)}</i>`).join('');
+  $('poster').innerHTML = Scenes.svg('deep');
+</script>
+</body>
+</html>

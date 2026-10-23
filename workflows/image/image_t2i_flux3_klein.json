@@ -1,0 +1,471 @@
+{
+ "100": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "A candid photo of a young Indian woman laughing at a street-food stall in Mumbai at dusk, holding a plate of pani puri, warm string lights, a hand-painted sign that reads \"MUMBAI CHAAT HOUSE\", shallow depth of field, 35mm film look, natural skin texture."
+  },
+  "_meta": {
+   "title": "PROMPT"
+  }
+ },
+ "106": {
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 42
+  },
+  "_meta": {
+   "title": "SEED"
+  }
+ },
+ "37": {
+  "class_type": "SceneAspectSize",
+  "inputs": {
+   "aspect_ratio": "16:9"
+  },
+  "_meta": {
+   "title": "Aspect ratio"
+  }
+ },
+ "38": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(a * 1.0 / 16) * 16",
+   "values.a": [
+    "37",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "render width"
+  }
+ },
+ "39": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(a * 1.0 / 16) * 16",
+   "values.a": [
+    "37",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "render height"
+  }
+ },
+ "510": {
+  "class_type": "PreviewAny",
+  "inputs": {
+   "source": [
+    "512",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Preview as Text"
+  }
+ },
+ "503": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": [
+    "510",
+    0
+   ],
+   "clip": [
+    "501",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Positive Prompt"
+  }
+ },
+ "500": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "flux3-image-klein-bf16.safetensors",
+   "weight_dtype": "default"
+  },
+  "_meta": {
+   "title": "Load Diffusion Model"
+  }
+ },
+ "504": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "",
+   "clip": [
+    "501",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Negative Prompt (empty = reference default)"
+  }
+ },
+ "501": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3vl_4b_bf16.safetensors",
+   "type": "flux3",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "Load CLIP"
+  }
+ },
+ "508": {
+  "class_type": "TextGenerate",
+  "inputs": {
+   "max_length": 3584,
+   "sampling_mode": "on",
+   "thinking": false,
+   "use_default_template": true,
+   "mtp": "off",
+   "clip": [
+    "509",
+    0
+   ],
+   "prompt": [
+    "100",
+    0
+   ],
+   "system_prompt": [
+    "511",
+    0
+   ],
+   "sampling_mode.temperature": 1,
+   "sampling_mode.top_k": 1,
+   "sampling_mode.top_p": 0.95,
+   "sampling_mode.min_p": 0,
+   "sampling_mode.repetition_penalty": 1.05,
+   "sampling_mode.seed": [
+    "106",
+    0
+   ],
+   "sampling_mode.presence_penalty": 1.5
+  },
+  "_meta": {
+   "title": "Generate Text"
+  }
+ },
+ "509": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3.5_9b_flux3_prompt_upsampler_int8_convrot.safetensors",
+   "type": "flux3",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "Load CLIP"
+  }
+ },
+ "512": {
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "switch": true,
+   "on_false": [
+    "100",
+    0
+   ],
+   "on_true": [
+    "508",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "If/Else Switch"
+  }
+ },
+ "506": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": [
+    "106",
+    0
+   ],
+   "steps": 16,
+   "cfg": 1,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 1,
+   "model": [
+    "500",
+    0
+   ],
+   "positive": [
+    "210",
+    0
+   ],
+   "negative": [
+    "210",
+    1
+   ],
+   "latent_image": [
+    "505",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "KSampler"
+  }
+ },
+ "505": {
+  "class_type": "EmptyFlux2LatentImage",
+  "inputs": {
+   "batch_size": 1,
+   "width": [
+    "38",
+    1
+   ],
+   "height": [
+    "39",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Empty Flux 2 Latent"
+  }
+ },
+ "507": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "506",
+    0
+   ],
+   "vae": [
+    "502",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "VAE Decode"
+  }
+ },
+ "511": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "You are the prompt upsampler of a text-to-image model. Expand the user's short request into ONE detailed, self-contained caption: the exact text the image model receives. Output only the caption, with no greetings, explanations, refusals, questions, Markdown, headings, JSON, coordinates, ids or angle-bracket tokens, and no quotes around it. If the input is not clearly an image request, caption a visualization of its concept. The request may begin with a \"TARGET CANVAS: W:H\" line: compose for that canvas (wide spreads content sideways, tall stacks it) and never mention the ratio or the canvas.\n\nFidelity and planning: keep every explicit subject, attribute, count, spatial constraint, style cue and piece of wording; never contradict, substitute, drop or narrow the request, and keep an abstract concept abstract. Decide everything left open as ONE concrete, consistent plan; never offer alternatives or hedge. Never re-express a stated constraint through another mechanism; add camera optics (depth of field, bokeh, blur) only when asked for or implied. Without a stated style, plan an actual photograph and open with the medium convention (\"Full-color outdoor photograph, ...\", \"Full-color indoor photograph, ...\", \"Studio photograph, ...\", \"Close-up photograph, ...\"); keep \"Photorealistic\" for renders, and turn \"photorealistic\" or \"realistic\" requests for photos into the photograph convention. Give a photograph a few ordinary, non-ideal specifics drawn from the scene's own objects instead of the stock-photo ideal. Do not invent names, brands, logos or celebrities; keep user-named ones. A long request keeps its content but not its wording: drop appraisal and sales vocabulary, turn moods into observable physical facts, and add only new concrete content with positions. Time of day is lighting, not rendered text.\n\nCaption format: one continuous prose block in the generative voice, never \"this image shows\", \"we can see\" or \"is visible\". Lead with medium and style, then scene, lighting and camera, then the subjects with concrete colors, materials and state. Every person in focus gets an observable profile: ethnicity, gender, age range, skin tone (\"fair skin\", \"brown skin\"), hair and clothing. Make the layout reconstructable from words: frame-relative positions (frame-left, frame-right, upper, lower, foreground, midground, background), sentence-initial anchors (\"On the left, ...\", \"In the background, ...\"), relations (holds, faces, behind) and a consistent order; describe up to about ten instances one by one, beyond that give the exact count and arrangement. Out-of-focus or distant planes are shapes, colors and silhouettes, never identities or readable text, and the background takes about a sixth of the caption. Be definite: no hedging adverbs, no quality or emotion judgments, no closing sentence about mood; state negations as what is present. Rendered text: transcribe every wording verbatim inside double quotes in its original language and script, keep the line breaks of multi-line text, and give its typography, color and placement; author concrete, domain-correct wording when the request needs text it does not supply, and name canonical structures (calendar, keyboard, periodic table) exactly with their full layout. All prose is English; only quoted text keeps its language. Typical length is 100 to 350 words, more for complex scenes.\n\nOutput only the caption.\n"
+  },
+  "_meta": {
+   "title": "Text (System prompt)"
+  }
+ },
+ "502": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "flux2-vae.safetensors"
+  },
+  "_meta": {
+   "title": "Load VAE"
+  }
+ },
+ "200": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "sa_sheet_elena.png"
+  },
+  "_meta": {
+   "title": "REFERENCE 1 (character, product, outfit, style or location) - optional"
+  }
+ },
+ "201": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "sa_sheet_elena.png"
+  },
+  "_meta": {
+   "title": "REFERENCE 2 (character, product, outfit, style or location) - optional"
+  }
+ },
+ "202": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "sa_sheet_elena.png"
+  },
+  "_meta": {
+   "title": "REFERENCE 3 (character, product, outfit, style or location) - optional"
+  }
+ },
+ "203": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "sa_sheet_elena.png"
+  },
+  "_meta": {
+   "title": "REFERENCE 4 (character, product, outfit, style or location) - optional"
+  }
+ },
+ "210": {
+  "class_type": "ReferenceMultiLatent",
+  "inputs": {
+   "positive": [
+    "503",
+    0
+   ],
+   "vae": [
+    "502",
+    0
+   ],
+   "resolution": "resize",
+   "resolution.megapixels": 1.0,
+   "negative": [
+    "504",
+    0
+   ],
+   "images.image0": [
+    "200",
+    0
+   ],
+   "images.image1": [
+    "201",
+    0
+   ],
+   "images.image2": [
+    "202",
+    0
+   ],
+   "images.image3": [
+    "203",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Add reference images (skipped when empty)"
+  }
+ },
+ "40": {
+  "class_type": "UpscaleModelLoader",
+  "inputs": {
+   "model_name": "RealESRGAN_x2plus.pth"
+  },
+  "_meta": {
+   "title": "RealESRGAN x2"
+  }
+ },
+ "41": {
+  "class_type": "ImageUpscaleWithModel",
+  "inputs": {
+   "upscale_model": [
+    "40",
+    0
+   ],
+   "image": [
+    "507",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Draft upscale"
+  }
+ },
+ "42": {
+  "class_type": "SeedVR2LoadDiTModel",
+  "inputs": {
+   "model": "seedvr2_ema_7b_sharp_fp16.safetensors",
+   "device": "cuda:0",
+   "offload_device": "cpu"
+  },
+  "_meta": {
+   "title": "SeedVR2 7B"
+  }
+ },
+ "43": {
+  "class_type": "SeedVR2LoadVAEModel",
+  "inputs": {
+   "model": "ema_vae_fp16.safetensors",
+   "device": "cuda:0",
+   "decode_tiled": true,
+   "offload_device": "cpu"
+  },
+  "_meta": {
+   "title": "SeedVR2 VAE"
+  }
+ },
+ "44": {
+  "class_type": "SeedVR2VideoUpscaler",
+  "inputs": {
+   "image": [
+    "507",
+    0
+   ],
+   "dit": [
+    "42",
+    0
+   ],
+   "vae": [
+    "43",
+    0
+   ],
+   "seed": [
+    "106",
+    0
+   ],
+   "resolution": [
+    "37",
+    4
+   ],
+   "max_resolution": 0,
+   "batch_size": 1,
+   "uniform_batch_size": false,
+   "color_correction": "wavelet",
+   "temporal_overlap": 0
+  },
+  "_meta": {
+   "title": "Final upscale"
+  }
+ },
+ "45": {
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "switch": false,
+   "on_false": [
+    "41",
+    0
+   ],
+   "on_true": [
+    "44",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Upscaler (false = draft, true = final)"
+  }
+ },
+ "47": {
+  "class_type": "ImageScale",
+  "inputs": {
+   "image": [
+    "45",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": [
+    "37",
+    2
+   ],
+   "height": [
+    "37",
+    3
+   ],
+   "crop": "center"
+  },
+  "_meta": {
+   "title": "Exact output size"
+  }
+ },
+ "9": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "47",
+    0
+   ],
+   "filename_prefix": "scene_ai/t2i_flux3_klein"
+  },
+  "_meta": {
+   "title": "Save Image"
+  }
+ }
+}

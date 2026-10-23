@@ -65,8 +65,9 @@ def test_a_failed_shot_is_kept_with_its_verdict_and_comes_with_a_priced_retake(c
     me = register(client)
     before = made(client, me["id"], "Lane")
     shot = made(client, me["id"], "Walk home")
-    client.post("/api/assets", files={"file": ("meera.png", PNG, "image/png")}, data={"name": "Meera", "tag": "character"})
-    meera = client.get("/api/assets").json()["assets"][0]["id"]
+    film = client.post("/api/projects", json={"name": "Film"}).json()["id"]
+    meera = client.post("/api/kit", files={"file": ("meera.png", PNG, "image/png")},
+                        data={"name": "Meera", "type": "character", "project_id": str(film)}).json()["id"]
     seen = {}
     model_says(monkeypatch, client, FAILED, seen)
     found = client.post("/api/agent/review", json={"item": shot, "prompt": "The girl walks home in the rain.",

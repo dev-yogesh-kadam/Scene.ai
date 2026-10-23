@@ -1,0 +1,129 @@
+{
+  "title": "H3 Chunk",
+  "description": "One 4-15 s MiniMax H3 clip of a scene: the anchor keeps the place and positions, up to 5 character sheets and 2 props keep the faces.",
+  "output_name": "16.filename_prefix",
+  "labels": {
+    "205:image": "Background / location: the scene anchor (<Picture 1>)",
+    "201:image": "Character 1",
+    "202:image": "Character 2",
+    "203:image": "Character 3",
+    "204:image": "Character 4",
+    "212:image": "Character 5",
+    "206:image": "Prop",
+    "213:image": "Prop 2",
+    "214:image": "Extra Reference (Outfit, Detail Or Style)",
+    "207:video": "Motion / camera reference video",
+    "208:audio": "Voice sample (voice of character 1)",
+    "211:audio": "Voice track (this chunk's slice of the episode audio)",
+    "311:image": "Shot 1 keyframe",
+    "312:image": "Shot 2 keyframe",
+    "313:image": "Shot 3 keyframe",
+    "314:image": "Shot 4 keyframe",
+    "315:image": "Shot 5 keyframe",
+    "316:image": "Shot 6 keyframe"
+  },
+  "required_refs": [
+    "205:image"
+  ],
+  "optional_refs": [
+    "201:image",
+    "202:image",
+    "203:image",
+    "204:image",
+    "212:image",
+    "206:image",
+    "213:image",
+    "214:image",
+    "207:video",
+    "208:audio",
+    "211:audio",
+    "311:image",
+    "312:image",
+    "313:image",
+    "314:image",
+    "315:image",
+    "316:image"
+  ],
+  "controls": [],
+  "options": [
+    {
+      "id": "quality",
+      "label": "Quality",
+      "default": "draft",
+      "choices": [
+        {
+          "id": "draft",
+          "label": "Draft",
+          "hint": "4-step turbo"
+        },
+        {
+          "id": "final",
+          "label": "Final",
+          "hint": "20 full steps"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "quality": "draft"
+      },
+      "set": {
+        "108.value": false
+      }
+    },
+    {
+      "when": {
+        "quality": "final"
+      },
+      "set": {
+        "108.value": true
+      }
+    }
+  ],
+  "hide": [
+    "1",
+    "2",
+    "4",
+    "5",
+    "6",
+    "8",
+    "9",
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+    "15",
+    "19",
+    "27",
+    "28",
+    "29",
+    "30",
+    "61",
+    "62",
+    "105",
+    "108",
+    "109",
+    "113",
+    "142",
+    "143",
+    "144",
+    "217",
+    "300",
+    "400",
+    "401",
+    "403"
+  ],
+  "pricing": {
+    "seconds": "102:value"
+  },
+  "hints": [
+    "Output length is exactly round(24 x DURATION) frames at 24 fps (6.3 s -> 151 frames). H3 renders the next 17k+5 frame count (6.3 s -> 158) and the workflow trims it.",
+    "The anchor is <Picture 1>; filled character slots follow in slot order as <Picture 2>, <Picture 3> ... The workflow writes this list in front of the prompt, so call people 'character 1', 'character 2' and describe them by look.",
+    "Multi-shot in one clip: write the shots in the prompt and, for frame-exact cuts, give one keyframe per shot plus SHOT CUT FRAMES. Without keyframes H3 makes clean hard cuts but places them up to ~1.5 s off the asked times.",
+    "With a voice track and LIPS FOLLOW AUDIO on, write who speaks and when, e.g. \"Maya speaks 'line' at 3.2-5.0 s; nobody else's lips move\". The clip's sound is then the voice track itself.",
+    "The size comes from the studio's resolution and shape: 480p or 768p, landscape, portrait or square."
+  ]
+}

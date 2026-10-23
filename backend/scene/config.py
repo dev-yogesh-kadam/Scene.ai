@@ -14,6 +14,18 @@ class Settings:
     ollama_url: str = "http://127.0.0.1:11434"  # the language model server the agent uses
     agent_model: str = ""         # the model the agent uses unless the user picks another; empty = the first one there is
     ollama_models: str = ""       # the local models to offer, comma separated, for example "qwen3.6:35b"; empty = all of them
+    # How the local models are run. One context size for every call (a change makes Ollama load the model again); a skill
+    # longer than a model can hold is read in parts with read_skill, never cut.
+    ollama_context: int = 32768   # tokens a local model reads at once, the same for every call; 262144 for 256k
+    ollama_timeout: int = 600     # seconds one call to a local model may take (reading a long skill takes a while)
+    ollama_keep_alive: str = "2h" # how long Ollama keeps a model loaded between calls: a run waits on renders
+    ollama_vision_model: str = "" # the local model that looks at pictures; empty = the first local model that can see
+    ollama_fast_model: str = ""   # a quicker local model for the small jobs (prompts, captions, notes, checks); empty = the chosen one
+    ollama_think: bool = False    # let a local model think before it plans (slower, often better on long skills)
+    local_tools: bool = True      # local models work in the loop of tool calls, as hosted ones do
+    # Whether the agent's model and the renders take turns on one GPU: "auto" when Ollama and ComfyUI are on the same
+    # machine, "on" or "off". Taking turns, a render waits while the agent thinks and the agent waits while a render runs.
+    gpu_shared: str = "auto"
     # Hosted models beside the local ones. Each service is offered once its key is set. Keep keys in config.json
     # (which git ignores) or in SCENE_API_KEY / SCENE_GEMINI_KEY, never in a file that is committed.
     api_name: str = "Kimi"        # what the first service is called in the model picker
@@ -25,6 +37,13 @@ class Settings:
     gemini_models: str = ""       # for example "gemini-3.8-flash"; empty = ask Google and offer its Pro and Flash models
     host: str = "0.0.0.0"
     port: int = 8080
+    # The admin console is a site of its own, on its own port, with its own sign-in. It listens only where console_host
+    # says: 127.0.0.1 is this machine alone; a Tailscale address (100.x.y.z) lets your other machines in. Never point a
+    # public tunnel at it. console_port 0 turns it off.
+    console_host: str = "127.0.0.1"
+    console_port: int = 8090
+    console_url: str = ""         # the console's address as an admin's browser reaches it, for the studio's link; empty = this host, console_port
+    console_hours: int = 12       # how long a sign-in to the console lasts
     workflows_dir: str = "workflows"
     storage_dir: str = "storage"
     # PostgreSQL, as postgresql://<account>:<password>@localhost:5432/scene; empty = SQLite in storage_dir. The owner
@@ -41,6 +60,10 @@ class Settings:
     allow_signup: bool = True
     first_account_local: bool = True   # the first account (the admin) can only be made from the machine the app runs on
     session_days: int = 30
+    # While the render server does not answer, renders wait in the queue instead of failing one after another, and a
+    # render cut off by it going away goes back to the front of the queue (at most RESUMES times). Off only where there
+    # is no render server at all (the tests).
+    hold_queue_offline: bool = True
     secure_cookies: bool = False  # set true when the app is served over https
     signup_credits: int = 1000    # credits a new account starts with
     signups_per_day: int = 3      # new accounts one visitor address may make in a day; 0 = no limit

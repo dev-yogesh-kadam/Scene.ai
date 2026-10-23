@@ -1,0 +1,38 @@
+{
+  "title": "Transcribe Video",
+  "description": "Timestamped transcript with speakers: JSON (segments + words, seconds with 3 decimals) and SRT.",
+  "output_name": "12.filename_prefix",
+  "labels": {
+    "1:file": "Video (its sound is transcribed)"
+  },
+  "required_refs": [
+    "1:file"
+  ],
+  "optional_refs": [],
+  "controls": [
+    {
+      "node": "12",
+      "input": "language",
+      "type": "choice",
+      "choices": [
+        "auto",
+        "en",
+        "hi"
+      ],
+      "label": "Language",
+      "primary": false
+    }
+  ],
+  "options": [],
+  "rules": [],
+  "hide": [
+    "2"
+  ],
+  "pricing": {},
+  "hints": [
+    "Outputs are in /history under outputs['12']['transcripts']: one .json and one .srt item {filename, subfolder, type: output}.",
+    "Word times come only from forced alignment. Words the aligner cannot spell (digits, symbols) have start/end null.",
+    "Paste the episode script into SCRIPT so names are spelled right.",
+    "Speaker labels are off (every word SPEAKER_00) until the pyannote model is installed; then set 12.diarize = true."
+  ]
+}

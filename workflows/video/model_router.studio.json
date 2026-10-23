@@ -1,0 +1,97 @@
+{
+  "title": "Model Router (H3 / LTX / Wan)",
+  "description": "The same start image, prompt and length through the video model you pick: MiniMax H3 (people, dialogue, lip sync), LTX-2.3 (cinematic camera moves) or Wan 2.2 (physical motion, silent). Only that model runs.",
+  "output_name": "2035.filename_prefix",
+  "labels": {
+    "2008:value": "Describe the motion, camera and sound. Call the start image <Picture 1>.",
+    "2009:image": "Start image",
+    "2010:image": "Last frame (H3 only, optional)",
+    "2014:value": "Turbo (H3 8-step / Wan 4-step LoRAs)",
+    "2015:value": "LTX prompt enhance (Gemma-3 expands the prompt)",
+    "2016:value": "Upscale with SeedVR2 7B sharp",
+    "2017:value": "Upscale: short edge"
+  },
+  "defaults": {
+    "2008:value": ""
+  },
+  "required_refs": [
+    "2009:image"
+  ],
+  "hide": [
+    "1001:300",
+    "1001:302",
+    "1001:276",
+    "1001:282",
+    "1001:313",
+    "1001:314",
+    "1002:128",
+    "1002:127",
+    "1002:126",
+    "1002:122",
+    "1002:124",
+    "1002:118",
+    "1002:162",
+    "1002:89",
+    "1002:85",
+    "1003:2003",
+    "1003:2004",
+    "2012",
+    "2032"
+  ],
+  "controls": [
+    {
+      "node": "2007",
+      "input": "choice",
+      "type": "choice",
+      "primary": true,
+      "label": "Video model",
+      "choices": [
+        "MiniMax H3 (24fps, native audio)",
+        "LTX-2.3 (25fps, native audio)",
+        "Wan 2.2 14B (16fps, silent)"
+      ]
+    }
+  ],
+  "options": [
+    {
+      "id": "shape",
+      "label": "Shape",
+      "default": "landscape",
+      "top": true,
+      "choices": [
+        {
+          "id": "landscape",
+          "label": "16:9",
+          "hint": "each model at its landscape size"
+        },
+        {
+          "id": "portrait",
+          "label": "9:16",
+          "hint": "each model at its portrait size"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "shape": "landscape"
+      },
+      "set": {
+        "2012.value": false
+      }
+    },
+    {
+      "when": {
+        "shape": "portrait"
+      },
+      "set": {
+        "2012.value": true
+      }
+    }
+  ],
+  "hints": [
+    "Use it to try the same shot on different models, then keep the one that worked.",
+    "<Picture 1> is taken out of the prompt for LTX and Wan, which do not use it."
+  ]
+}

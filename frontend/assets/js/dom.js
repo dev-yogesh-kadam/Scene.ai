@@ -81,12 +81,50 @@ export function icon(name) {
   return svg;
 }
 
-// A still of a made item, for a thumbnail: an image as it is, a video as its poster, a sound as a mark and its name.
+// The credit mark: the studio's Clapper Gate on its own, drawn in the colour of the text around it, so it is white on
+// the dark canvas and black inside a light button.
+export function creditMark(label = '') {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  for (const [k, v] of Object.entries({ viewBox: '0 0 48 48', fill: 'none', class: 'credit-token',
+    ...(label ? { role: 'img', 'aria-label': label } : { 'aria-hidden': 'true' }) })) svg.setAttribute(k, v);
+  svg.innerHTML = '<path d="M5.5 12.5l35-7.2" stroke="currentColor" stroke-width="5.6" stroke-linecap="round"/>'
+    + '<rect x="5.5" y="19" width="37" height="24" rx="5" stroke="currentColor" stroke-width="5.2"/>'
+    + '<rect x="17.5" y="24.5" width="13" height="13" rx="2.2" fill="currentColor"/>';
+  return svg;
+}
+
+// An amount of credits in words, outside the agent panel (which keeps its short "cr"): "1 credit", "1,250 credits".
+export const creditsText = (n) => `${Number(n ?? 0).toLocaleString()} ${Number(n) === 1 ? 'credit' : 'credits'}`;
+
+// A reel of film frames that fill in as a job is made, in place of a step count; the frame being made glows.
+// Returns {node, set(share)}, share from 0 to 1, so a reel kept between updates only changes which frames are lit.
+export function reel(count = 24) {
+  const frames = Array.from({ length: count }, () => el('i'));
+  const node = el('div', { class: 'reel', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100' }, frames);
+  const set = (share) => {
+    const lit = Math.max(0, Math.min(count, Math.floor((share || 0) * count)));
+    frames.forEach((f, i) => { f.className = i < lit ? 'lit' : i === lit ? 'next' : ''; });
+    node.setAttribute('aria-valuenow', String(Math.round((share || 0) * 100)));
+  };
+  set(0);
+  return { node, set };
+}
+
+// What a running job is doing, in words of a film set, from how far it is.
+export const phaseOf = (share) => (share < 0.02 ? 'Setting up the shot' : share < 0.35 ? 'Blocking the scene'
+  : share < 0.7 ? 'Rolling camera' : share < 0.95 ? 'Developing frames' : 'Final touches');
+
+// A still of a made item, for a thumbnail: an image as it is, a video as its poster, a sound or a text (a transcript,
+// a list of times) as a mark and its name.
 // The poster is a small picture the server makes from the video, so a page of thumbnails doesn't start loading every video.
+// A picture of the library has one too (960 wide, made once and kept): a canvas of full-size pictures, each several
+// megabytes, would load slowly. The viewer shows the picture itself.
+const HAS_POSTER = /^\/api\/(admin\/)?library\/\d+\/file$/;
 export function still(url, kind, name = '') {
-  if (kind === 'video') return el('img', { src: url.replace(/\/file$/, '/poster'), alt: name, loading: 'lazy', draggable: 'false' });
+  if (kind === 'video') return el('img', { src: url.replace(/\/file$/, '/poster'), alt: name, loading: 'lazy', decoding: 'async', draggable: 'false' });
   if (kind === 'audio') return el('div', { class: 'sound' }, icon('audio'), el('span', {}, name));
-  return el('img', { src: url, alt: name, loading: 'lazy', draggable: 'false' });
+  if (kind === 'text') return el('div', { class: 'sound' }, icon('book'), el('span', {}, name));
+  return el('img', { src: HAS_POSTER.test(url) ? url.replace(/\/file$/, '/poster') : url, alt: name, loading: 'lazy', decoding: 'async', draggable: 'false' });
 }
 
 // The spill: a made item, far out of focus, lighting the top of a page. show() takes a library item id and kind,
@@ -110,12 +148,11 @@ export function spill() {
 }
 
 // The running Gate: two brackets circling a frame while it is being made.
+// A light that circles a frame while it is being made: an arc of a ring that follows the frame's own rounded corners.
+// It turns at an even pace whatever the frame's size or the canvas's zoom (a dashed outline did not: its dashes sped
+// up and jumped at the corners).
 export function runningGate() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('class', 'run');
-  svg.setAttribute('aria-hidden', 'true');
-  svg.innerHTML = '<rect width="100%" height="100%" pathLength="100"/>';
-  return svg;
+  return el('span', { class: 'run', 'aria-hidden': 'true' });
 }
 
 // Seconds as HH:MM:SS:FF at 24 frames a second.
@@ -157,4 +194,24 @@ export function segmented(choices, current, onPick) {
 
 export function field(label, ...content) {
   return el('div', { class: 'field' }, el('div', { class: 'label' }, label), ...content);
+}
+
+// A question before something that can't be undone, in the studio's own window instead of the browser's grey box.
+// Resolves true for the confirming button, false for Cancel, Escape or a click beside it.
+// ask({ title, message, confirm: 'Delete', danger: true })
+export function ask({ title, message = '', confirm = 'OK', cancel = 'Cancel', danger = false }) {
+  return new Promise((resolve) => {
+    let answer = false;
+    const yes = el('button', { class: 'btn ' + (danger ? 'danger-solid' : 'primary'), onclick: () => { answer = true; dialog.close(); } }, confirm);
+    const no = el('button', { class: 'btn', onclick: () => dialog.close() }, cancel);
+    const dialog = el('dialog', { class: 'ask-dialog' + (danger ? ' danger' : ''), 'aria-label': title },
+      el('h2', {}, title),
+      message && el('p', { class: 'ask-message' }, message),
+      el('div', { class: 'dialog-buttons' }, no, yes));
+    dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });   // a click beside it
+    dialog.addEventListener('close', () => { dialog.remove(); resolve(answer); });
+    document.body.append(dialog);
+    dialog.showModal();
+    (danger ? no : yes).focus();   // Enter on a dangerous question does nothing harmful
+  });
 }

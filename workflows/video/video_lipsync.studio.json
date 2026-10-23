@@ -1,0 +1,49 @@
+{
+  "title": "Lip Sync",
+  "description": "Makes one person's lips in an existing clip follow a voice track; same size, fps and frame count, only the mouth area changes.",
+  "output_name": "6.filename_prefix",
+  "labels": {
+    "1:file": "Video",
+    "3:audio": "Voice track"
+  },
+  "required_refs": [
+    "1:file",
+    "3:audio"
+  ],
+  "optional_refs": [],
+  "controls": [
+    {
+      "node": "4",
+      "input": "face",
+      "type": "choice",
+      "choices": [
+        "largest",
+        "left",
+        "right",
+        "index"
+      ],
+      "label": "Face",
+      "primary": true
+    },
+    {
+      "node": "4",
+      "input": "face_index",
+      "type": "int",
+      "label": "Face index (0 = leftmost, used when Face = index)"
+    }
+  ],
+  "options": [],
+  "rules": [],
+  "hide": [
+    "2",
+    "5"
+  ],
+  "pricing": {
+    "source": "video"
+  },
+  "hints": [
+    "The chosen face is tracked through the clip; frames where it is not found reuse the nearest found frame's position.",
+    "A voice track shorter than the video is padded with silence (mouth closed); a longer one is cut to the video's length.",
+    "The saved clip's sound is the voice track."
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "title": "Wan Animate 2 (fast)",
+  "description": "Character animation, distilled for speed: your character (a picture) performs the motion of a driving video. One part of the driving video at a time.",
+  "output_name": "292.filename_prefix",
+  "labels": {
+    "604:value": "Describe the motion and the scene",
+    "605:value": "Describe the character's appearance",
+    "189:image": "Character (a picture of who moves)",
+    "240:file": "Driving video (the motion to copy)"
+  },
+  "required_refs": [
+    "189:image",
+    "240:file"
+  ],
+  "hide": [
+    "261:297",
+    "261:4"
+  ],
+  "pricing": {
+    "source": "video"
+  },
+  "hints": [
+    "Makes one part of the driving video. For a longer video, use Wan Animate 2."
+  ]
+}

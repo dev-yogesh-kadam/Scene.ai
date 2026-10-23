@@ -1,0 +1,77 @@
+{
+  "title": "H3 15 s (720p)",
+  "description": "One 15-second MiniMax H3 video at 720p with sound: three 5-second parts from three prompts, each starting where the last ended, joined. About 9 minutes at 30 steps.",
+  "output_name": "306.filename_prefix",
+  "labels": {
+    "101:value": "Prompt for seconds 0-5",
+    "102:value": "Prompt for seconds 5-10",
+    "103:value": "Prompt for seconds 10-15",
+    "110:image": "First frame: the video starts on this exact image",
+    "116:value": "Steps (30 recommended, 20 faster)",
+    "117:value": "Fast attention (about twice as fast)",
+    "120:value": "Sharpen the first frame with SeedVR2 (turn off with no first frame)"
+  },
+  "defaults": {
+    "101:value": "",
+    "102:value": "",
+    "103:value": ""
+  },
+  "hide": [
+    "111",
+    "112",
+    "113",
+    "114",
+    "133"
+  ],
+  "options": [
+    {
+      "id": "shape",
+      "label": "Shape",
+      "default": "landscape",
+      "top": true,
+      "choices": [
+        {
+          "id": "landscape",
+          "label": "16:9",
+          "hint": "1280 x 720"
+        },
+        {
+          "id": "portrait",
+          "label": "9:16",
+          "hint": "720 x 1280"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "shape": "landscape"
+      },
+      "set": {
+        "111.value": 1280,
+        "112.value": 736,
+        "113.value": 1280,
+        "114.value": 720
+      }
+    },
+    {
+      "when": {
+        "shape": "portrait"
+      },
+      "set": {
+        "111.value": 736,
+        "112.value": 1280,
+        "113.value": 720,
+        "114.value": 1280
+      }
+    }
+  ],
+  "pricing": {
+    "fixed_seconds": 15
+  },
+  "hints": [
+    "Repeat the same scene description in all three prompts (who, where, camera) and change only the one small action and the line of each part.",
+    "The first frame decides the look of the whole video: give a good one."
+  ]
+}

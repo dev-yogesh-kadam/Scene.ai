@@ -1,0 +1,304 @@
+{
+ "100": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "A candid photo of a young Indian woman laughing at a street-food stall in Mumbai at dusk, holding a plate of pani puri, warm string lights, a hand-painted sign that reads \"MUMBAI CHAAT HOUSE\", shallow depth of field, 35mm film look, natural skin texture."
+  },
+  "_meta": {
+   "title": "PROMPT"
+  }
+ },
+ "101": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "blurry, lowres, watermark, extra fingers, deformed hands, cartoon, oversaturated"
+  },
+  "_meta": {
+   "title": "NEGATIVE PROMPT (optional)"
+  }
+ },
+ "106": {
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 42
+  },
+  "_meta": {
+   "title": "SEED"
+  }
+ },
+ "37": {
+  "class_type": "SceneAspectSize",
+  "inputs": {
+   "aspect_ratio": "16:9"
+  },
+  "_meta": {
+   "title": "Aspect ratio"
+  }
+ },
+ "1": {
+  "class_type": "CheckpointLoaderSimple",
+  "inputs": {
+   "ckpt_name": "sd_xl_base_1.0.safetensors"
+  },
+  "_meta": {
+   "title": "SDXL base 1.0"
+  }
+ },
+ "10": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "1",
+    1
+   ],
+   "text": [
+    "100",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Prompt"
+  }
+ },
+ "11": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "1",
+    1
+   ],
+   "text": [
+    "101",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Negative"
+  }
+ },
+ "38": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(a * 0.78 / 64) * 64",
+   "values.a": [
+    "37",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "render width"
+  }
+ },
+ "39": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(a * 0.78 / 64) * 64",
+   "values.a": [
+    "37",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "render height"
+  }
+ },
+ "14": {
+  "class_type": "EmptyLatentImage",
+  "inputs": {
+   "width": [
+    "38",
+    1
+   ],
+   "height": [
+    "39",
+    1
+   ],
+   "batch_size": 1
+  },
+  "_meta": {
+   "title": "Render size (~1 MP)"
+  }
+ },
+ "15": {
+  "class_type": "KSampler",
+  "inputs": {
+   "model": [
+    "1",
+    0
+   ],
+   "seed": [
+    "106",
+    0
+   ],
+   "steps": 30,
+   "cfg": 6.5,
+   "sampler_name": "dpmpp_2m",
+   "scheduler": "karras",
+   "denoise": 1.0,
+   "positive": [
+    "10",
+    0
+   ],
+   "negative": [
+    "11",
+    0
+   ],
+   "latent_image": [
+    "14",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Sampler"
+  }
+ },
+ "16": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "15",
+    0
+   ],
+   "vae": [
+    "1",
+    2
+   ]
+  },
+  "_meta": {
+   "title": "Decode"
+  }
+ },
+ "40": {
+  "class_type": "UpscaleModelLoader",
+  "inputs": {
+   "model_name": "RealESRGAN_x2plus.pth"
+  },
+  "_meta": {
+   "title": "RealESRGAN x2"
+  }
+ },
+ "41": {
+  "class_type": "ImageUpscaleWithModel",
+  "inputs": {
+   "upscale_model": [
+    "40",
+    0
+   ],
+   "image": [
+    "16",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Draft upscale"
+  }
+ },
+ "42": {
+  "class_type": "SeedVR2LoadDiTModel",
+  "inputs": {
+   "model": "seedvr2_ema_7b_sharp_fp16.safetensors",
+   "device": "cuda:0",
+   "offload_device": "cpu"
+  },
+  "_meta": {
+   "title": "SeedVR2 7B"
+  }
+ },
+ "43": {
+  "class_type": "SeedVR2LoadVAEModel",
+  "inputs": {
+   "model": "ema_vae_fp16.safetensors",
+   "device": "cuda:0",
+   "decode_tiled": true,
+   "offload_device": "cpu"
+  },
+  "_meta": {
+   "title": "SeedVR2 VAE"
+  }
+ },
+ "44": {
+  "class_type": "SeedVR2VideoUpscaler",
+  "inputs": {
+   "image": [
+    "16",
+    0
+   ],
+   "dit": [
+    "42",
+    0
+   ],
+   "vae": [
+    "43",
+    0
+   ],
+   "seed": [
+    "106",
+    0
+   ],
+   "resolution": [
+    "37",
+    4
+   ],
+   "max_resolution": 0,
+   "batch_size": 1,
+   "uniform_batch_size": false,
+   "color_correction": "wavelet",
+   "temporal_overlap": 0
+  },
+  "_meta": {
+   "title": "Final upscale"
+  }
+ },
+ "45": {
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "switch": false,
+   "on_false": [
+    "41",
+    0
+   ],
+   "on_true": [
+    "44",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Upscaler (false = draft, true = final)"
+  }
+ },
+ "47": {
+  "class_type": "ImageScale",
+  "inputs": {
+   "image": [
+    "45",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": [
+    "37",
+    2
+   ],
+   "height": [
+    "37",
+    3
+   ],
+   "crop": "center"
+  },
+  "_meta": {
+   "title": "Exact output size"
+  }
+ },
+ "9": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "47",
+    0
+   ],
+   "filename_prefix": "scene_ai/t2i_sdxl"
+  },
+  "_meta": {
+   "title": "Save Image"
+  }
+ }
+}

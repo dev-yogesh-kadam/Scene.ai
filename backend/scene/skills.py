@@ -18,21 +18,89 @@ from pathlib import Path
 
 FOLDER = Path(__file__).parent / "skills"
 MAX_GIVEN = 2   # skills given with one message, the best matches first
+MAX_CHARS = 150_000   # the most of one skill that goes to a hosted model (about 40,000 tokens); a longer one is cut here, and the agent says so
+
+
+def _pairs(block):
+    """The "key: value" lines of a header, keys lower-cased, values without the quotes a YAML header puts round them."""
+    meta = {}
+    for line in block.splitlines():
+        key, colon, value = line.partition(":")
+        if colon and key.strip() and " " not in key.strip():
+            value = value.strip()
+            if len(value) > 1 and value[0] == value[-1] and value[0] in "'\"":
+                value = value[1:-1]
+            meta[key.strip().lower()] = value
+    return meta
+
+
+def parse(raw):
+    """A skill file as (meta, steps). The header is "key: value" lines, then a line of three dashes. Skills written for
+    other tools come as a YAML header between two lines of dashes, sometimes twice in a row; every header is read, the
+    first value of a key wins (name, label, description, user_description are understood as id, title and desc)."""
+    text = raw.replace("\r\n", "\n").lstrip("\ufeff")
+    meta = {}
+    if text.startswith("---\n"):
+        text = text[4:]
+    head, sep, rest = text.partition("\n---\n")
+    if sep and all(":" in line or not line.strip() for line in head.splitlines()):
+        meta = _pairs(head)
+        text = rest
+    elif not sep:
+        return {}, text.strip()
+    # more headers straight after the first (a nested "---" block), or a lone separator
+    while True:
+        text = text.lstrip("\n")
+        if text.startswith("---\n"):
+            body = text[4:]
+            block, sep, rest = body.partition("\n---\n")
+            if sep and all(":" in line or not line.strip() for line in block.splitlines()) and block.strip():
+                for key, value in _pairs(block).items():
+                    meta.setdefault(key, value)
+                text = rest
+                continue
+            text = body
+            continue
+        break
+    return meta, text.strip()
+
+
+QUOTED = re.compile(r"[\"“]([^\"”]{4,60})[\"”]")
+
+
+def triggers_from(description):
+    """A pattern for the phrases a description puts in quotes ('when the user says "pocket motion v2"'), or "" when it has none."""
+    phrases = []
+    for phrase in QUOTED.findall(description or ""):
+        phrase = " ".join(phrase.split()).strip(" .")
+        if len(phrase.split()) >= 2 and phrase.lower() not in (p.lower() for p in phrases):
+            phrases.append(phrase)
+    return r"\b(" + "|".join(r"\s+".join(re.escape(w) for w in p.split()) for p in phrases) + r")\b" if phrases else ""
+
+
+def _short(text, limit=160):
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0].rstrip(",;:. ") + "…"
 
 
 def load(folder=FOLDER):
-    """Every skill in the folder: [{"id", "title", "version", "words", "text"}], in file-name order."""
+    """Every skill in the folder: [{"id", "title", "version", "desc", "words", "text"}], in file-name order."""
     found = []
     for path in sorted(Path(folder).glob("*.md")):
-        head, _, text = path.read_text(encoding="utf-8").partition("\n---\n")
-        meta = dict(line.split(":", 1) for line in head.splitlines() if ":" in line)
-        meta = {key.strip(): value.strip() for key, value in meta.items()}
+        meta, text = parse(path.read_text(encoding="utf-8"))
+        slug = re.sub(r"[^a-z0-9]+", "-", (meta.get("id") or meta.get("name") or path.stem).lower()).strip("-") or path.stem
+        title = meta.get("title") or meta.get("label") or path.stem
+        if title == slug and meta.get("label"):
+            title = meta["label"]
+        pattern = meta.get("words") or ""
+        if not pattern.strip() or pattern.strip() == "(?!)":
+            pattern = triggers_from(meta.get("description") or "")   # a skill that says when it applies, in quotes, is found by those words
         try:
-            words = re.compile(meta.get("words") or r"(?!)", re.IGNORECASE)
+            words = re.compile(pattern or r"(?!)", re.IGNORECASE)
         except re.error:
             continue   # a skill whose words can't be read is left out rather than breaking the agent
-        found.append({"id": meta.get("id") or path.stem, "title": meta.get("title") or path.stem,
-                      "version": meta.get("version") or "1", "desc": meta.get("desc") or "", "words": words, "text": text.strip()})
+        found.append({"id": slug, "title": title, "version": meta.get("version") or "1",
+                      "desc": meta.get("desc") or _short(meta.get("user_description") or meta.get("description")), "words": words, "text": text})
     return found
 
 
@@ -103,6 +171,70 @@ def pick(instruction, history=(), folder=FOLDER, force=()):
     return (chosen + matched)[:max(MAX_GIVEN, len(chosen))]
 
 
-def guide(picked):
-    """The picked skills as one text for the model, or "" when none fits."""
-    return "\n\n".join("{} (skill {} v{}):\n{}".format(s["title"], s["id"], s["version"], s["text"]) for s in picked)
+PART = re.compile(r"(?m)^#{2,3} \S")   # a part of a skill begins at a heading of the second or third level
+PAGE = 12_000                          # characters of a part read at a time
+OPENING_SHARE = 0.75                   # of the room a model has for a skill, what its opening may take
+
+
+def parts(text):
+    """A skill as its parts: [(heading, text)], the opening first (heading "", everything before the first ## heading)."""
+    starts = [m.start() for m in PART.finditer(text)]
+    if not starts or starts[0] > 0:
+        starts = [0] + starts
+    found = []
+    for a, b in zip(starts, starts[1:] + [len(text)]):
+        chunk = text[a:b].strip("\n")
+        heading = chunk.splitlines()[0].lstrip("#").strip() if PART.match(chunk) else ""
+        found.append((heading, chunk))
+    return found
+
+
+def guide(picked, limit=MAX_CHARS):
+    """The picked skills as one text for the model, or "" when none fits. A skill longer than `limit` characters is never
+    cut: the model is given its opening and a list of its parts, and reads each part with the read_skill tool when it comes
+    to it (read_part). limit None: every skill whole."""
+    out = []
+    for s in picked:
+        text = s["text"]
+        if limit is not None and len(text) > limit:
+            text = outline(s, limit)
+        out.append("{} (skill {} v{}):\n{}".format(s["title"], s["id"], s["version"], text))
+    return "\n\n".join(out)
+
+
+def outline(skill, limit):
+    """A long skill as a model with `limit` characters of room is given it: its opening (whole, or as much as fits, the
+    rest to be read as part 0), then every part by number, heading and size."""
+    found = parts(skill["text"])
+    opening = found[0][1] if not found[0][0] else ""
+    room = int(limit * OPENING_SHARE)
+    shown = opening if len(opening) <= room else opening[:room].rsplit("\n", 1)[0]
+    listed = ["  {}. {} ({:,} characters)".format(n, heading or "The opening, continued", len(chunk))
+              for n, (heading, chunk) in enumerate(found) if heading or len(opening) > room]
+    return "{}\n\n[This skill is {:,} characters, more than you are given at once, so above is its opening and below its parts. " \
+           "Read each part with read_skill (op: \"{}\", query: its number or heading) when you come to that step, before you act on " \
+           "it; a long part comes a page at a time. Never guess a part you have not read.]\nParts:\n{}".format(
+               shown, len(skill["text"]), skill["id"], "\n".join(listed))
+
+
+def read_part(skill, query, offset=0):
+    """One part of a skill, by its number (0 is the opening) or words of its heading, a page at a time from `offset`.
+    Returns (text, None) or (None, why not)."""
+    found = parts(skill["text"])
+    query = " ".join(str(query or "").split()).lower()
+    pick = None
+    if query.isdigit() and int(query) < len(found):
+        pick = int(query)
+    elif query:
+        pick = next((n for n, (heading, _) in enumerate(found) if heading and query in heading.lower()), None)
+        if pick is None:   # "5" for "## 5 — Generate", or the heading's first words
+            pick = next((n for n, (heading, _) in enumerate(found) if heading and heading.lower().split(" ")[0].strip(".") == query), None)
+    if pick is None:
+        return None, "No part of “{}” is called “{}”. Its parts: {}.".format(
+            skill["title"], query, "; ".join("{} {}".format(n, h or "the opening") for n, (h, _) in enumerate(found)))
+    heading, chunk = found[pick]
+    offset = max(0, int(offset or 0))
+    page = chunk[offset:offset + PAGE]
+    more = "" if offset + len(page) >= len(chunk) else "\n[{:,} of {:,} characters of this part: read_skill again with offset {}.]".format(
+        offset + len(page), len(chunk), offset + len(page))
+    return page + more, None

@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option A · The Monitor — Scene.ai</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,200..800&family=Martian+Mono:wght@300..600&display=swap" rel="stylesheet">
+<style>
+  :root { --ink: #0a0a0a; --paper: #f2efea; --dim: #8b8781; --line: rgba(242, 239, 234, .14); --rec: #ff3b30; --amber: #ffa51f;
+    --sans: 'Archivo', system-ui, sans-serif; --mono: 'Martian Mono', ui-monospace, monospace; }
+  * { box-sizing: border-box; }
+  html { background: var(--ink); color: var(--paper); }
+  body { margin: 0; font: 400 16px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
+  a { color: inherit; text-decoration: none; }
+  .mono { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 0 32px; }
+
+  /* the viewfinder: the whole first screen */
+  .monitor { position: relative; height: 100vh; min-height: 680px; overflow: hidden; background: #000; }
+  .frame { position: absolute; inset: 0; transition: opacity .9s ease; }
+  .frame svg { width: 100%; height: 100%; display: block; }
+  .frame.out { opacity: 0; }
+  .grade { position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(90deg, rgba(6, 3, 10, .78) 0%, rgba(6, 3, 10, .45) 34%, transparent 58%),
+      radial-gradient(120% 90% at 50% 45%, transparent 55%, rgba(0, 0, 0, .55) 100%), linear-gradient(transparent 60%, rgba(0, 0, 0, .6)); }
+  .grain { position: absolute; inset: -50%; pointer-events: none; opacity: .14; mix-blend-mode: overlay; animation: grain 1s steps(6) infinite;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  @keyframes grain { 0% { transform: translate(0, 0); } 33% { transform: translate(-3%, 2%); } 66% { transform: translate(2%, -3%); } 100% { transform: translate(0, 0); } }
+
+  .hud { position: absolute; inset: 28px; pointer-events: none; }
+  .hud .corner { position: absolute; width: 46px; height: 46px; border: 2px solid var(--paper); opacity: .9; }
+  .hud .tl { left: 0; top: 0; border-right: 0; border-bottom: 0; } .hud .br { right: 0; bottom: 0; border-left: 0; border-top: 0; }
+  .hud .tr { right: 0; top: 0; border-left: 0; border-bottom: 0; opacity: .35; } .hud .bl { left: 0; bottom: 0; border-right: 0; border-top: 0; opacity: .35; }
+  .thirds { position: absolute; inset: 64px; border: 1px solid rgba(242, 239, 234, .08);
+    background: linear-gradient(90deg, transparent calc(33.33% - .5px), rgba(242, 239, 234, .08) 0, rgba(242, 239, 234, .08) calc(33.33% + .5px), transparent 0, transparent calc(66.66% - .5px), rgba(242, 239, 234, .08) 0, rgba(242, 239, 234, .08) calc(66.66% + .5px), transparent 0),
+      linear-gradient(transparent calc(33.33% - .5px), rgba(242, 239, 234, .08) 0, rgba(242, 239, 234, .08) calc(33.33% + .5px), transparent 0, transparent calc(66.66% - .5px), rgba(242, 239, 234, .08) 0, rgba(242, 239, 234, .08) calc(66.66% + .5px), transparent 0); }
+  .cross { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); opacity: .55;
+    background: linear-gradient(var(--paper), var(--paper)) center/1px 100% no-repeat, linear-gradient(var(--paper), var(--paper)) center/100% 1px no-repeat; }
+
+  .top { position: absolute; left: 28px; right: 28px; top: 28px; display: flex; align-items: center; justify-content: space-between; padding: 14px 64px; z-index: 3; }
+  .brand { display: flex; align-items: center; gap: 12px; font: 600 15px/1 var(--sans); letter-spacing: .02em; }
+  .brand svg { width: 26px; height: 26px; }
+  .readout { display: flex; gap: 22px; color: rgba(242, 239, 234, .82); }
+  .rec { display: inline-flex; align-items: center; gap: 8px; color: var(--paper); }
+  .rec::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--rec); box-shadow: 0 0 12px var(--rec); animation: blink 1.2s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: .15; } }
+  .doors { display: flex; gap: 10px; }
+  .btn { display: inline-flex; align-items: center; gap: 10px; height: 44px; padding: 0 20px; white-space: nowrap; border: 1px solid var(--paper); font: 600 14px/1 var(--sans); cursor: pointer; background: transparent; color: var(--paper); }
+  .btn.solid { background: var(--paper); color: var(--ink); }
+  .btn:hover { background: rgba(242, 239, 234, .12); } .btn.solid:hover { background: #fff; }
+
+  .lower { position: absolute; left: 92px; right: 92px; bottom: 92px; z-index: 3; display: grid; grid-template-columns: 1fr auto; gap: 40px; align-items: end; }
+  h1 { margin: 0; font: 250 clamp(64px, 9.2vw, 152px)/.88 var(--sans); font-stretch: 85%; letter-spacing: -.035em; text-shadow: 0 2px 40px rgba(0, 0, 0, .35); }
+  h1 b { font-weight: 700; font-stretch: 100%; }
+  .sub { max-width: 520px; margin: 22px 0 28px; color: rgba(242, 239, 234, .82); font-size: 18px; }
+  .slate { width: 380px; background: rgba(8, 8, 8, .66); backdrop-filter: blur(14px); border: 1px solid var(--line); }
+  .slate header { display: flex; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); color: var(--dim); }
+  .slate .typed { padding: 16px; min-height: 84px; font: 500 15px/1.5 var(--sans); }
+  .slate .typed::after { content: '▍'; color: var(--amber); animation: blink 1s steps(2) infinite; }
+  .slate ol { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  .slate li { display: grid; grid-template-columns: 26px 1fr auto; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 13px; color: rgba(242, 239, 234, .85); }
+  .slate li span:first-child, .slate li span:last-child { font: 400 11px/1.6 var(--mono); color: var(--dim); }
+  .slate footer { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; }
+  .slate footer .btn { height: 34px; padding: 0 14px; font-size: 13px; }
+
+  .scenes { position: absolute; left: 92px; bottom: 40px; z-index: 3; display: flex; gap: 6px; align-items: center; }
+  .scenes span { color: var(--dim); margin-right: 8px; }
+  .scenes button { font: 400 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: rgba(242, 239, 234, .7); background: transparent; border: 1px solid transparent; padding: 7px 10px; cursor: pointer; }
+  .scenes button[aria-pressed=true] { color: var(--ink); background: var(--paper); }
+  .scenes button:hover:not([aria-pressed=true]) { border-color: var(--line); color: var(--paper); }
+  .meters { position: absolute; right: 52px; top: 50%; transform: translateY(-50%); display: flex; gap: 4px; height: 160px; z-index: 3; }
+  .meters i { width: 5px; background: linear-gradient(to top, #39d98a 0 60%, var(--amber) 60% 85%, var(--rec) 85%); transform-origin: bottom; animation: meter .5s ease-in-out infinite alternate; }
+  .meters i:nth-child(2) { animation-duration: .37s; } .meters i:nth-child(3) { animation-duration: .61s; }
+  @keyframes meter { from { transform: scaleY(.25); } to { transform: scaleY(.85); } }
+
+  /* below the monitor */
+  section { border-top: 1px solid var(--line); }
+  .label { display: flex; justify-content: space-between; padding: 22px 0; color: var(--dim); }
+  .manifesto { padding: 120px 0 130px; }
+  .manifesto p { margin: 0; max-width: 1100px; font: 300 clamp(34px, 4.4vw, 64px)/1.08 var(--sans); letter-spacing: -.025em; }
+  .manifesto p em { font-style: normal; color: var(--dim); }
+
+  .report { padding-bottom: 110px; }
+  .strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; background: var(--line); border: 1px solid var(--line); }
+  .take { background: var(--ink); }
+  .take .pic { position: relative; aspect-ratio: 16 / 9; overflow: hidden; }
+  .take .pic svg { width: 100%; height: 100%; display: block; }
+  .take:nth-child(1) .pic svg { filter: saturate(.55) brightness(.85); } .take:nth-child(2) .pic svg { filter: blur(2px); }
+  .take.circled .pic::after { content: 'CIRCLED'; position: absolute; top: 10px; left: 10px; font: 500 10px/1 var(--mono); letter-spacing: .1em; padding: 6px 8px; background: var(--amber); color: var(--ink); }
+  .take dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; padding: 14px 16px 18px; font: 400 11px/1.4 var(--mono); }
+  .take dt { color: var(--dim); } .take dd { margin: 0; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 70px; }
+  .steps div { padding: 0 32px 0 0; }
+  .steps b { display: block; font: 400 12px/1 var(--mono); color: var(--amber); margin-bottom: 18px; }
+  .steps h3 { margin: 0 0 12px; font: 600 26px/1.1 var(--sans); letter-spacing: -.01em; }
+  .steps p { margin: 0; color: rgba(242, 239, 234, .7); }
+
+  .agent { padding-bottom: 120px; }
+  .agent .grid { display: grid; grid-template-columns: 5fr 7fr; gap: 64px; align-items: center; }
+  .agent h2, .bag h2 { margin: 0 0 18px; font: 300 clamp(40px, 4.6vw, 72px)/1 var(--sans); letter-spacing: -.03em; }
+  .agent .grid > div > p { color: rgba(242, 239, 234, .72); font-size: 18px; max-width: 460px; }
+  .screen { border: 1px solid var(--line); background: #0f0f0f; }
+  .screen .bar { display: flex; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid var(--line); color: var(--dim); }
+  .screen .you { margin: 22px 22px 0 auto; max-width: 74%; padding: 14px 18px; background: #1d1d1d; font-size: 15px; }
+  .screen .plan { margin: 18px 22px 22px; border: 1px solid var(--line); }
+  .screen .plan header { padding: 14px 18px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: baseline; }
+  .screen .plan header b { font-weight: 600; } .screen .plan header span { color: var(--dim); font-size: 13px; }
+  .screen .row { display: grid; grid-template-columns: 96px 1fr auto; gap: 16px; align-items: center; padding: 10px 18px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .screen .row .thumb { aspect-ratio: 16 / 9; overflow: hidden; } .screen .row .thumb svg { width: 100%; height: 100%; display: block; }
+  .screen .row em { font: 400 11px/1 var(--mono); font-style: normal; color: var(--dim); }
+  .screen .plan footer { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; }
+
+  .bag { padding-bottom: 120px; }
+  .manifest { width: 100%; border-collapse: collapse; margin-top: 40px; }
+  .manifest td { padding: 22px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .manifest td:first-child { width: 90px; font: 400 11px/1.9 var(--mono); color: var(--dim); }
+  .manifest td:nth-child(2) { width: 280px; font: 600 22px/1.2 var(--sans); }
+  .manifest td:nth-child(3) { width: 260px; font: 400 12px/1.9 var(--mono); color: var(--amber); text-transform: uppercase; letter-spacing: .06em; }
+  .manifest td:last-child { color: rgba(242, 239, 234, .72); }
+
+  .cut { padding: 140px 0 60px; text-align: center; }
+  .cut h2 { margin: 0; font: 800 clamp(120px, 22vw, 340px)/.8 var(--sans); font-stretch: 70%; letter-spacing: -.04em; }
+  .cut p { color: rgba(242, 239, 234, .72); font-size: 18px; margin: 34px 0 30px; }
+  footer.end { display: flex; justify-content: space-between; padding: 28px 32px; border-top: 1px solid var(--line); color: var(--dim); }
+
+  @media (max-width: 900px) {
+    .top { padding: 10px 16px; } .readout { display: none; } .top .doors .btn:not(.solid) { display: none; } .top .btn { height: 38px; padding: 0 14px; }
+    .lower { left: 40px; right: 40px; bottom: 150px; grid-template-columns: 1fr; } .slate { display: none; } .sub { font-size: 16px; }
+    .scenes { left: 40px; flex-wrap: wrap; } .meters { display: none; }
+    .strip { grid-template-columns: 1fr 1fr; } .steps, .agent .grid { grid-template-columns: 1fr; gap: 40px; }
+    .manifest td:nth-child(3) { display: none; } .wrap { padding: 0 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<script src="scenes.js"></script>
+
+<div class="monitor">
+  <div class="frame" id="frameA"></div><div class="frame out" id="frameB"></div>
+  <div class="grade"></div><div class="grain"></div>
+  <div class="hud"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i><div class="thirds"></div><div class="cross"></div></div>
+
+  <div class="top">
+    <a class="brand" href="#"><img src="../../frontend/assets/img/logo.svg" alt="" style="width:30px;height:30px;border-radius:8px;display:block">Scene.ai</a>
+    <div class="readout mono"><span class="rec" id="tc">00:00:00:00</span><span id="lens">35mm · T2.0</span><span id="iso">ISO 800 · 1/48</span><span id="wb">3200K</span></div>
+    <div class="doors"><a class="btn" href="#">Sign in</a><a class="btn solid" href="#">Create an account</a></div>
+  </div>
+
+  <div class="lower">
+    <div>
+      <h1>Direct<br>your <b>scene.</b></h1>
+      <p class="sub">Write the shot. The studio makes the takes, keeps the same faces from shot to shot, and cuts them together, without a node graph in sight.</p>
+      <a class="btn solid" href="#">Create an account →</a>
+    </div>
+    <div class="slate" aria-hidden="true">
+      <header class="mono"><span id="slateScene">Scene 01 · Rooftop at dusk</span><span>Plan</span></header>
+      <div class="typed" id="typed"></div>
+      <ol id="rows"></ol>
+      <footer><span class="mono" style="color:var(--dim)">Nothing is made until you approve</span><span class="btn solid">Approve · 180</span></footer>
+    </div>
+  </div>
+  <div class="scenes"><span class="mono">Scene</span></div>
+  <div class="meters" aria-hidden="true"><i></i><i></i><i></i></div>
+</div>
+
+<section class="wrap manifesto">
+  <div class="label mono"><span>01 · Why</span><span>Scene.ai</span></div>
+  <p>Most AI video tools give you a slot machine. <em>Scene.ai gives you a set:</em> a cast that stays the same, takes you can keep or roll again, and a cut you can trust.</p>
+</section>
+
+<section class="wrap report">
+  <div class="label mono"><span>02 · The take report</span><span>Shot 1 · Rooftop at dusk</span></div>
+  <div class="strip" id="strip"></div>
+  <div class="steps">
+    <div><b>01</b><h3>Describe the shot</h3><p>Write what happens and add reference pictures. Pin a cast to the project, and the same face, outfit and place carry from shot to shot.</p></div>
+    <div><b>02</b><h3>Make takes on the canvas</h3><p>Every result lands on a board, one row per shot. Start the next clip from the last frame of one you like, or roll it again.</p></div>
+    <div><b>03</b><h3>Cut it together</h3><p>Put clips in order on the timeline, trim them, add music, and export one video.</p></div>
+  </div>
+</section>
+
+<section class="wrap agent">
+  <div class="label mono"><span>03 · The agent</span><span>Plans first, makes later</span></div>
+  <div class="grid">
+    <div><h2>An assistant director that asks before it spends.</h2><p>Tell it what you are making. It plans the shots, prices them and waits for your nod; then it checks every take against what you asked for.</p></div>
+    <div class="screen" aria-hidden="true">
+      <div class="bar mono"><span>Agent 1</span><span>Gemini 3.6 Flash</span></div>
+      <div class="you">A 20 second ad for our sneaker drop. Rooftop, golden hour, the same runner in every shot.</div>
+      <div class="plan"><header><b>Plan · 3 shots</b><span>Nothing is made until you approve</span></header>
+        <div id="planRows"></div>
+        <footer><span class="mono" style="color:var(--dim)">Storyboard first</span><span class="btn solid" style="height:36px">Approve · 180</span></footer></div>
+    </div>
+  </div>
+</section>
+
+<section class="wrap bag">
+  <div class="label mono"><span>04 · In the bag</span><span>The models</span></div>
+  <h2>Everything on the cart.</h2>
+  <table class="manifest">
+    <tr><td>Video</td><td>Clips with sound</td><td>MiniMax H3</td><td>5 to 15 seconds from a prompt and up to eight references: a character, an outfit, a place, a motion to copy, a voice.</td></tr>
+    <tr><td>Images</td><td>Stills and posters</td><td>Z-Image Turbo · SDXL · Ideogram 4</td><td>Stills in a few seconds, and posters with lettering that reads right.</td></tr>
+    <tr><td>Music</td><td>Songs and scores</td><td>MiniMax Music 3</td><td>From 30 seconds to 5 minutes, with your lyrics or without.</td></tr>
+    <tr><td>Titles</td><td>Motion graphics</td><td>Drawn in the studio</td><td>Title cards, lower thirds and whole videos of animated words.</td></tr>
+    <tr><td>Finish</td><td>Upscale</td><td>SeedVR2</td><td>A finished video made larger and sharper, up to four times its size.</td></tr>
+  </table>
+</section>
+
+<section class="cut">
+  <h2>CUT.</h2>
+  <p>Your first scene is a sentence away.</p>
+  <div class="doors" style="justify-content:center"><a class="btn solid" href="#">Create an account</a><a class="btn" href="#">Sign in</a></div>
+</section>
+<footer class="end mono"><span>Scene.ai</span><span>A studio for video, pictures and music</span></footer>
+
+<script>
+  const NAMES = Scenes.names;
+  const READ = { rooftop: ['35mm · T2.0', 'ISO 800 · 1/48', '3200K'], neon: ['24mm · T1.4', 'ISO 1600 · 1/48', '5600K'],
+    desert: ['85mm · T5.6', 'ISO 100 · 1/96', '6500K'], deep: ['18mm · T2.8', 'ISO 3200 · 1/48', '4300K'] };
+  let current = 0, shown = 'A', typing = null;
+  const $ = (id) => document.getElementById(id);
+  const cutTo = (i) => {
+    current = i;
+    const next = shown === 'A' ? 'B' : 'A';
+    $('frame' + next).innerHTML = Scenes.svg(NAMES[i]);
+    $('frame' + next).classList.remove('out');
+    $('frame' + shown).classList.add('out');
+    shown = next;
+    const info = Scenes.info(NAMES[i]);
+    [$('lens').textContent, $('iso').textContent, $('wb').textContent] = READ[NAMES[i]];
+    $('slateScene').textContent = `Scene 0${i + 1} · ${info.title}`;
+    $('rows').innerHTML = info.shots.map((s, n) => `<li><span>0${n + 1}</span><span>${s}</span><span>60 cr</span></li>`).join('');
+    document.querySelectorAll('.scenes button').forEach((b, n) => b.setAttribute('aria-pressed', String(n === i)));
+    type(`${info.shots[0]}. The same runner in every shot.`);
+  };
+  function type(text) {
+    clearInterval(typing);
+    let n = 0;
+    typing = setInterval(() => { $('typed').textContent = text.slice(0, ++n); if (n >= text.length) clearInterval(typing); }, 32);
+  }
+  NAMES.forEach((name, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = `${i + 1} · ${Scenes.info(name).title}`; b.onclick = () => cutTo(i);
+    document.querySelector('.scenes').append(b);
+  });
+  $('frameA').innerHTML = Scenes.svg(NAMES[0]);
+  cutTo(0);
+  // the timecode runs at 24 frames a second, as the camera's would
+  const started = performance.now();
+  (function tick() {
+    const f = Math.floor((performance.now() - started) / (1000 / 24)) + 24 * 3600;
+    const p = (n) => String(n).padStart(2, '0');
+    $('tc').textContent = `${p(Math.floor(f / 86400) % 24)}:${p(Math.floor(f / 1440) % 60)}:${p(Math.floor(f / 24) % 60)}:${p(f % 24)}`;
+    requestAnimationFrame(tick);
+  })();
+  // the take report: four takes of one shot, one circled
+  const takes = [['rooftop', 'Take 1', '6.0 s', 'Rejected · face'], ['rooftop', 'Take 2', '6.0 s', 'Soft focus'], ['rooftop', 'Take 3', '6.0 s', 'Kept'], ['neon', 'Take 4', '5.0 s', 'New seed']];
+  $('strip').innerHTML = takes.map(([s, t, d, note], i) => `<div class="take${i === 2 ? ' circled' : ''}"><div class="pic">${Scenes.svg(s)}</div>
+    <dl><dt>Shot</dt><dd>01 · ${t}</dd><dt>Model</dt><dd>MiniMax H3</dd><dt>Length</dt><dd>${d}</dd><dt>Note</dt><dd>${note}</dd></dl></div>`).join('');
+  $('planRows').innerHTML = Scenes.info('rooftop').shots.map((s) => `<div class="row"><div class="thumb">${Scenes.svg('rooftop')}</div><span>${s}</span><em>60 cr</em></div>`).join('');
+</script>
+</body>
+</html>

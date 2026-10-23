@@ -15,9 +15,10 @@ import base64
 import hashlib
 import json
 import re
+import shutil
 import time
 
-from . import cast, media, review
+from . import kit, media, review
 from .references import safe_name
 
 BOOK_ASSETS = 40        # saved assets in the agent's book
@@ -29,8 +30,7 @@ DESCRIBE_AT_ONCE = 4    # pictures described at once, while the user waits
 DESCRIBE_SECONDS = 25   # how long a plan waits for descriptions before it goes on without the rest
 
 # What each tag of an asset is called in the book.
-TYPES = {"character": "character", "outfit": "outfit", "background": "location", "prop": "prop", "voice": "voice",
-         "style": "style", "other": "other"}
+TYPES = kit.TYPES
 # The tag an uploaded file gets from the reference slot it was dropped into.
 ROLE_TAGS = {"character_1": "character", "character_2": "character", "character_3": "character", "outfit": "outfit",
              "background": "background", "prop": "prop", "voice": "voice"}
@@ -47,25 +47,158 @@ def _prompt(settings):
 # ---------------------------------------------------------------- uploads
 
 def tag_for_slot(label):
-    """The tag of an asset made from a file dropped into a reference slot with this label."""
-    for rid, _, _, words in cast.ROLES:
-        if re.search(words, label or "", re.IGNORECASE):
-            return ROLE_TAGS.get(rid, "other")
-    return "other"
+    """The type of a kit entry made from a file dropped into a reference slot with this label."""
+    return next((tag for tag, words in kit.SLOT_WORDS if re.search(words, label or "", re.IGNORECASE)), "other")
 
 
 def keep_upload(db, folder, user_id, project, filename, data, kind, label):
-    """Keep a reference file the user dropped into a job as an upload of the project, once per file.
-    folder: the user's assets folder. Returns the asset id, or None when the file is kept already."""
-    stored = "{}_{}".format(hashlib.sha1(data).hexdigest()[:10], safe_name(filename))
-    if db.one("SELECT 1 FROM assets WHERE user_id = ? AND filename = ?", (user_id, stored)):
-        return None   # this very file is kept already: saved on purpose, or dropped in before
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / stored).write_bytes(data)
+    """Keep a reference file the user dropped into a job in the project's kit, typed by the slot it went into, once
+    per file. folder: the user's assets folder. Returns the entry's id (the one it already was, for a file kept before)."""
     name = re.sub(r"[_\-]+", " ", filename.rsplit(".", 1)[0]).strip()[:60] or "Upload"
-    return db.run("INSERT INTO assets (user_id, name, tag, kind, filename, size, created, origin, project_id) "
-                  "VALUES (?, ?, ?, ?, ?, ?, ?, 'upload', ?)",
-                  (user_id, name, tag_for_slot(label), kind, stored, len(data), time.time(), project or None))
+    return kit.add(db, folder, user_id, project, data, filename, kind, name, tag_for_slot(label), origin="upload")
+
+
+# ---------------------------------------------------------------- what the agent makes for reuse
+
+# What the agent may say a step's result is kept as, and the tag that gets. Only a voice is a sound; the rest are pictures.
+KEEP_AS = {"character": "character", "outfit": "outfit", "location": "background", "prop": "prop", "voice": "voice", "style": "style"}
+
+
+def clean_keep(keep, kind=None):
+    """{"tag", "name"} of a step's result to keep in shared memory, or None. kind: what the step makes, when known."""
+    if not isinstance(keep, dict):
+        return None
+    tag = KEEP_AS.get(str(keep.get("as") or "").strip().lower()) or (keep.get("tag") if keep.get("tag") in KEEP_AS.values() else None)
+    name = " ".join(str(keep.get("name") or "").split())[:60]
+    if not tag or not name or (kind and kind != ("audio" if tag == "voice" else "image")):
+        return None
+    return {"tag": tag, "name": name}
+
+
+def clean_shot(shot):
+    """{"id", "take"} naming the shot a job belongs to and which try at it this is, or None."""
+    if not isinstance(shot, dict):
+        return None
+    ident = re.sub(r"[^a-z0-9-]", "", str(shot.get("id") or "").lower())[:24]
+    take = shot.get("take")
+    return {"id": ident, "take": take if isinstance(take, int) and 1 <= take <= 9 else 1} if ident else None
+
+
+def keep_made(db, folder, user_id, item_id, source, kind, keep):
+    """Keep what a step made in its project's kit under the name it was planned with ("Maya", a character), so every
+    agent tab and the user's pickers know it. The file is copied, so deleting either leaves the other. A retake under
+    the same name and type replaces the entry the agent made before. Returns the entry's id."""
+    keep = clean_keep(keep, kind)
+    if not keep:
+        return None
+    made = db.one("SELECT project_id FROM generations WHERE id = ? AND user_id = ?", (item_id, user_id))
+    project = kit.root(db, made["project_id"]) if made else None
+    if not project:
+        return None   # made outside a project: there is no kit to keep it in
+    where, params = ("project_id = ?", (project,))
+    before = db.one("SELECT id, filename FROM assets WHERE user_id = ? AND tag = ? AND lower(name) = lower(?) AND made_from IS NOT NULL AND "
+                    + where, (user_id, keep["tag"], keep["name"], *params))
+    if before:
+        stored = "made_{}_{}".format(item_id, safe_name(source.name))
+        folder.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, folder / stored)
+        db.run("UPDATE assets SET kind = ?, filename = ?, size = ?, made_from = ?, about = '', created = ? WHERE id = ?",
+               (kind, stored, (folder / stored).stat().st_size, item_id, time.time(), before["id"]))
+        if before["filename"] != stored and not db.one("SELECT 1 FROM assets WHERE user_id = ? AND filename = ?", (user_id, before["filename"])):
+            (folder / before["filename"]).unlink(missing_ok=True)
+        return before["id"]
+    return kit.add(db, folder, user_id, project, source.read_bytes(), source.name, kind, keep["name"], keep["tag"], made_from=item_id)
+
+
+# ---------------------------------------------------------------- what the user names in a message
+
+# The words that start a part of a message about one type of file ("characters-", "props:"), or one line of it
+# ("location - Bonfire Clearing - @10").
+NAMED_TYPES = (("location", r"locations?|backgrounds?|places?|sets?|settings?"), ("prop", r"props?|objects?"),
+               ("outfit", r"outfits?|costumes?|wardrobe"), ("character", r"characters?|cast|people|persons?"))
+HEADER = re.compile(r"^\s*({})\s*[-:–—=]\s*".format("|".join(w for _, w in NAMED_TYPES)), re.IGNORECASE)
+TAG = re.compile(r"@(\d+)\b")
+SEPARATORS = " \t-:–—=,.;"
+# A picture named like an object, or described without a person in it, is not a character, whatever part of the
+# message it was named in (unless its own line says so).
+OBJECT = re.compile(r"\b(camera|phone|mic|microphone|bag|car|bike|motorbike|sword|gun|cup|mug|book|laptop|guitar|ball|hat|"
+                    r"glasses|bottle|watch|ring|necklace|drone|tripod|lamp|chair|table|box|key|umbrella|knife|torch|letter)s?\b", re.IGNORECASE)
+PERSON = re.compile(r"\b(woman|man|girl|boy|person|people|lady|guy|child|kid|teen|she|he|her|his|face|hair|wearing|character)\b", re.IGNORECASE)
+
+
+def _named_type(word):
+    return next(t for t, words in NAMED_TYPES if re.fullmatch(words, word, re.IGNORECASE))
+
+
+def named_in(instruction, selection):
+    """The attached pictures the user names in a message, as [{"item", "name", "type", "said"}]: "Maya - @3",
+    "@3 = Maya", "location - Bonfire Clearing - @10", or a name under a "characters-" / "props:" line. selection: the
+    message's attachments, each with its "tag" (@1, @2, …), "id", "kind" and maybe "shows". "said": whether its own
+    line said the type; a part of the message ("characters-") only suggests it, as an object can be listed there too."""
+    tags = {s["tag"]: s for s in selection if s.get("kind") == "image"}
+    found, section, seen = [], None, set()
+    for segment in re.split(r"[\n,]", str(instruction or "")):
+        header = HEADER.match(segment)
+        kind = _named_type(header.group(1)) if header else None
+        rest = segment[header.end():] if header else segment
+        marks = TAG.findall(rest)
+        if header and not marks and not rest.strip(SEPARATORS):
+            section = kind   # "characters-": the lines after it are characters
+            continue
+        if len(marks) != 1:
+            continue
+        before, _, after = rest.partition("@" + marks[0])
+        name = " ".join(before.strip(SEPARATORS).split()) or " ".join(after.strip(SEPARATORS).split())
+        item = tags.get("@" + marks[0])
+        if not item or item["id"] in seen or not re.search(r"[^\W\d_]", name) or len(name.split()) > 6:
+            continue
+        seen.add(item["id"])
+        found.append({"item": item["id"], "name": name[:60], "type": kind or section or "character", "said": bool(kind)})
+    return found
+
+
+def keep_named(db, folder, outputs, user_id, named, project=None):
+    """Keep the pictures the user named (named_in) in the project's kit under those names, so every agent tab knows
+    them and the panel shows them. A picture named like an object, or with no person in what was seen of it, is a prop
+    unless its own line said otherwise. Returns [{"asset", "name", "type"}] of the ones kept now (not those kept already
+    under the same name and type)."""
+    kept = []
+    project = kit.root(db, project)
+    if not project:
+        return kept
+    for entry in named:
+        row = db.one("SELECT id, filename, about FROM generations WHERE id = ? AND user_id = ? AND kind = 'image'", (entry["item"], user_id))
+        source = outputs / row["filename"] if row else None
+        if not source or not source.is_file():
+            continue
+        kind = entry["type"]
+        if not entry["said"] and kind == "character" and (OBJECT.search(entry["name"]) or (row["about"] and not PERSON.search(row["about"]))):
+            kind = "prop"
+        tag = KEEP_AS[kind]
+        where, params = ("project_id = ?", (project,))
+        if db.one("SELECT 1 FROM assets WHERE user_id = ? AND made_from = ? AND tag = ? AND lower(name) = lower(?) AND " + where,
+                  (user_id, row["id"], tag, entry["name"], *params)):
+            continue   # kept already, as it is
+        asset = kit.add_item(db, folder, outputs, user_id, project, row["id"], entry["name"], tag)
+        if asset:
+            kept.append({"asset": asset, "name": entry["name"], "type": kind})
+    return kept
+
+
+def keep_unnamed(db, folder, outputs, user_id, project, items):
+    """Keep attached pictures nobody named in the project's kit, as entries without a name: the agent asks the user who
+    or what they are. Returns the ids of the ones new to the kit."""
+    made = []
+    project = kit.root(db, project)
+    if not project:
+        return made
+    for item_id in items:
+        if db.one("SELECT 1 FROM assets WHERE user_id = ? AND made_from = ? AND project_id = ?", (user_id, item_id, project)):
+            continue
+        asset = kit.add_item(db, folder, outputs, user_id, project, item_id, named=False)
+        if asset:
+            made.append(asset)
+    return made
 
 
 # ---------------------------------------------------------------- the book and the panel
@@ -73,8 +206,12 @@ def keep_upload(db, folder, user_id, project, filename, data, kind, label):
 def _asset_entry(row):
     entry = {"asset": row["id"], "name": row["name"], "type": TYPES.get(row["tag"], "other"), "kind": row["kind"],
              "shows": row["about"] or "", "_file": ("asset", row["filename"]), "_table": "assets"}
-    if row["origin"] == "upload":
-        entry["uploaded"] = True
+    if row.get("made_from"):   # its library item too: a long run names files by their library id
+        entry["item"] = row["made_from"]
+    if row.get("always"):      # attached to every shot of the project
+        entry["always"] = True
+    if row.get("named") == 0:  # attached without a name: ask the user who or what it is
+        entry["unnamed"] = True
     if row["use_note"]:
         entry["use"] = row["use_note"]
     return entry
@@ -97,41 +234,33 @@ def _item_entry(row, in_cast):
 
 
 def _project_items(db, user_id, project, limit, kinds=("image", "video")):
+    """The project's newest pictures and clips. A long run's working files (its slices, trims, references) are left
+    out: there are hundreds of them, and the run's own state names them."""
     where, params = ("project_id = ?", (user_id, project)) if project else ("project_id IS NULL", (user_id,))
     marks = ", ".join("?" for _ in kinds)
     return db.all("SELECT id, name, kind, filename, about, settings, workflow, created, review, rating FROM generations WHERE user_id = ? AND "
-                  + where + " AND kind IN (" + marks + ") ORDER BY created DESC LIMIT ?", (*params, *kinds, limit))
+                  + where + " AND run = '' AND kind IN (" + marks + ") ORDER BY created DESC LIMIT ?", (*params, *kinds, limit))
 
 
 def _uploads(db, user_id, project, limit):
-    where, params = ("project_id = ?", (user_id, project)) if project else ("project_id IS NULL", (user_id,))
-    return db.all("SELECT id, name, tag, kind, filename, about, use_note, origin, created FROM assets WHERE user_id = ? "
-                  "AND origin = 'upload' AND " + where + " ORDER BY created DESC LIMIT ?", (*params, limit))
+    """The project's kit (kept for the callers of before: every entry of it, not only uploads)."""
+    return kit.entries(db, user_id, project)[:limit]
 
 
 def book(db, user_id, project, pinned=None):
-    """The agent's asset book for a project: [entry], saved assets first, then the project's uploads, then its items.
+    """The agent's asset book for a project: [entry], the project's kit first (its always-on entries first), then the
+    project's items. pinned: unused (the always-on entries of the kit are the cast now).
 
-    pinned: the project's cast, from cast.load(); its items are marked "in_cast" (they go into every shot already).
-    Each entry: {"asset" or "item": id, "name", "type", "kind", "shows", "use"?, "uploaded"?, "in_cast"?}. Items past the
-    latest few have only their id, name and kind, and "brief": True. The private keys "_file" and "_table" say where
-    the file is and where its description is kept; book_for_model() drops them."""
-    pinned = pinned or {}
-    in_cast = {pin["id"] for pin in pinned.values()}
-    entries = [_asset_entry(row) for row in db.all(
-        "SELECT id, name, tag, kind, filename, about, use_note, origin FROM assets WHERE user_id = ? AND origin = 'saved' "
-        "ORDER BY tag, lower(name) LIMIT ?", (user_id, BOOK_ASSETS))]
-    entries += [_asset_entry(row) for row in _uploads(db, user_id, project, BOOK_UPLOADS)]
-    rows = _project_items(db, user_id, project, BOOK_ITEMS)
-    listed = {row["id"] for row in rows}
-    for item_id in in_cast - listed:   # a cast picture from another project is in the book too
-        row = db.one("SELECT id, name, kind, filename, about, settings, workflow, created, review, rating FROM generations "
-                     "WHERE id = ? AND user_id = ?", (item_id, user_id))
-        if row:
-            rows.insert(0, row)
+    Each entry: {"asset" or "item": id, "name", "type", "kind", "shows", "use"?, "always"?, "unnamed"?}; a kit entry kept
+    from a library item has its "item" too. Items past the latest few have only their id, name and kind, and "brief":
+    True. The private keys "_file" and "_table" say where the file is and where its description is kept;
+    book_for_model() drops them."""
+    entries = [_asset_entry(row) for row in kit.entries(db, user_id, project)[:BOOK_ASSETS + BOOK_UPLOADS]]
+    named = {e["item"] for e in entries if e.get("item")}   # a picture in the kit is in the book once, by its name there
+    rows = [row for row in _project_items(db, user_id, project, BOOK_ITEMS) if row["id"] not in named]
     for number, row in enumerate(rows):
-        entry = _item_entry(row, in_cast)
-        if number >= BOOK_FULL_ITEMS and not entry.get("in_cast"):
+        entry = _item_entry(row, set())
+        if number >= BOOK_FULL_ITEMS:
             entry = {"item": entry["item"], "name": entry["name"], "kind": entry["kind"], "brief": True,
                      "shows": entry["shows"][:90], "_file": entry["_file"], "_table": entry["_table"]}
         entries.append(entry)
@@ -151,14 +280,16 @@ def lookup(entries):
 
 
 def panel(db, user_id, project, pinned=None):
-    """Everything the Shared memory tab shows for a project: {"assets", "uploads"}."""
-    def asset(row):
-        return {"id": row["id"], "name": row["name"], "tag": row["tag"], "type": TYPES.get(row["tag"], "other"), "kind": row["kind"],
-                "about": row["about"], "use_note": row["use_note"], "origin": row["origin"], "created": row["created"],
-                "url": "/api/assets/{}/file".format(row["id"])}
-    saved = db.all("SELECT id, name, tag, kind, about, use_note, origin, created FROM assets WHERE user_id = ? AND origin = 'saved' "
-                   "ORDER BY tag, lower(name) LIMIT ?", (user_id, PANEL_ITEMS))
-    return {"assets": [asset(r) for r in saved], "uploads": [asset(r) for r in _uploads(db, user_id, project, PANEL_ITEMS)]}
+    """What the panel shows for a project: {"assets": its kit, "uploads": []} (the panel of before had two parts)."""
+    return {"assets": [kit_row(row) for row in kit.entries(db, user_id, project)], "uploads": []}
+
+
+def kit_row(row):
+    """A kit entry as the panel and the API give it."""
+    return {"id": row["id"], "name": row["name"], "tag": row["tag"], "type": TYPES.get(row["tag"], "other"), "kind": row["kind"],
+            "about": row["about"], "use_note": row["use_note"], "origin": row["origin"], "created": row["created"],
+            "always": bool(row["always"]), "named": bool(row["named"]), "position": row["position"], "item": row["made_from"],
+            "url": "/api/assets/{}/file".format(row["id"])}
 
 
 # ---------------------------------------------------------------- looking at pictures

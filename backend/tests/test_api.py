@@ -2,8 +2,9 @@ ADMIN = {"name": "Ada", "email": "ada@example.com", "password": "correct horse"}
 
 
 def test_everything_needs_a_sign_in(client):
-    for path in ("/api/workflows", "/api/jobs", "/api/library", "/api/status", "/api/admin/users"):
+    for path in ("/api/workflows", "/api/jobs", "/api/library", "/api/status"):
         assert client.get(path).status_code == 401
+    assert client.console.get("/api/admin/users").status_code == 401
 
 
 def test_page_files_are_never_served_stale(client):
@@ -15,7 +16,7 @@ def test_page_files_are_never_served_stale(client):
     script = re.search(r'src="(/v/\d+/assets/js/main\.js)"', page.text).group(1)
     assert page.headers["cache-control"] == "no-cache" and re.search(r'href="/v/\d+/assets/css/app\.css"', page.text)
     assert client.get(script).text == client.get("/assets/js/main.js").text
-    assert client.get(script.replace("main.js", "pages/admin/sections.js")).status_code == 200      # what main.js imports, relatively
+    assert client.get(script.replace("main.js", "pages/home.js")).status_code == 200      # what main.js imports, relatively
     assert client.get(script.replace("assets/js/main.js", "assets/../index.html")).status_code == 404
 
 
@@ -25,7 +26,7 @@ def test_first_account_is_admin_and_later_ones_are_users(client):
     client.post("/api/auth/logout")
     second = client.post("/api/auth/register", json={"email": "bob@example.com", "password": "another one"})
     assert second.json()["role"] == "user"
-    assert client.get("/api/admin/users").status_code == 403
+    assert client.console.post("/api/console/login", json={"email": "bob@example.com", "password": "another one"}).status_code == 403
 
 
 def test_login_logout_and_wrong_password(client):
@@ -46,7 +47,7 @@ def test_weak_or_duplicate_registration_is_refused(client):
 
 def test_admin_can_close_signups(client):
     client.post("/api/auth/register", json=ADMIN)
-    assert client.put("/api/admin/settings", json={"allow_signup": False}).json()["allow_signup"] is False
+    assert console(client).put("/api/admin/settings", json={"allow_signup": False}).json()["allow_signup"] is False
     client.post("/api/auth/logout")
     assert client.post("/api/auth/register", json={"email": "bob@example.com", "password": "another one"}).status_code == 403
 
@@ -87,6 +88,16 @@ def register(client, **extra):
     return client.post("/api/auth/register", json={**ADMIN, **extra}).json()
 
 
+def console(client, who=ADMIN):
+    """The admin console, signed in as `who` (the admin, unless said otherwise). It has its own sign-in: the studio's
+    does not open it."""
+    desk = client.console
+    me = desk.get("/api/console/me")
+    if me.status_code != 200 or me.json()["email"] != who["email"]:
+        desk.post("/api/console/login", json={"email": who["email"], "password": who["password"]})
+    return desk
+
+
 def after(client, job_id):
     """A job, once it is no longer waiting or running."""
     import time
@@ -105,7 +116,7 @@ def made_by(client, response):
     return next(i for i in client.get("/api/library").json()["items"] if i["job_id"] == job["id"])
 
 
-JOB = {"workflow": "video/h3_master", "values": {"100:value": "She waves."}, "options": {"mode": "fast", "quality": "low"}}
+JOB = {"workflow": "video/h3_master", "values": {"100:value": "She waves."}, "options": {"mode": "fast", "quality": "high"}}   # high: priced at the rate itself (credits.FACTORS)
 
 
 def post_job(client, **extra):
@@ -123,10 +134,10 @@ def test_new_accounts_get_credits_and_jobs_cost_them(client):
 
 def test_a_job_is_refused_without_enough_credits_and_admin_can_add_more(client):
     me = register(client)
-    client.put("/api/admin/users/%d" % me["id"], json={"add_credits": -495})
+    console(client).put("/api/admin/users/%d" % me["id"], json={"add_credits": -495})
     response = post_job(client)
     assert response.status_code == 402 and "100 credits and you have 5" in response.json()["detail"]
-    assert client.put("/api/admin/users/%d" % me["id"], json={"add_credits": 100}).json()["credits"] == 105
+    assert console(client).put("/api/admin/users/%d" % me["id"], json={"add_credits": 100}).json()["credits"] == 105
     assert post_job(client).status_code == 200
 
 
@@ -170,52 +181,100 @@ def test_projects_and_search(client):
     client.put("/api/library/%d" % cafe, json={"project_id": project["id"]})
     assert client.get("/api/projects").json()["projects"][0]["items"] == 2
     client.delete("/api/projects/%d" % project["id"])
-    assert sorted(names("?project=none")) == ["cafe", "street"]
+    assert names("") == []   # what was in the project is deleted with it
 
 
-def test_assets_are_saved_listed_and_private(client):
+def test_neuralcore_entries_belong_to_a_project_and_are_private(client):
     register(client)
     png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
-    asset = client.post("/api/assets", files={"file": ("anna.png", png, "image/png")}, data={"name": "Anna", "tag": "character"}).json()
-    listed = client.get("/api/assets?kind=image").json()["assets"]
-    assert [(a["name"], a["tag"], a["kind"]) for a in listed] == [("Anna", "character", "image")]
-    assert client.get("/api/assets/%d/file" % asset["id"]).content == png
-    assert client.post("/api/assets", files={"file": ("notes.txt", b"hi", "text/plain")}).status_code == 400
+    film = client.post("/api/projects", json={"name": "Film"}).json()["id"]
+    other = client.post("/api/projects", json={"name": "Other"}).json()["id"]
+    entry = client.post("/api/kit", files={"file": ("anna.png", png, "image/png")}, data={"name": "Anna", "type": "character", "project_id": str(film)}).json()
+    assert [(e["name"], e["type"]) for e in client.get("/api/kit?project=%d" % film).json()["entries"]] == [("Anna", "character")]
+    assert client.get("/api/kit?project=%d" % other).json()["entries"] == []   # one project's NeuralCore is not another's
+    assert client.get("/api/kit").json()["entries"] == []                       # and there is none outside a project
+    assert client.post("/api/kit", files={"file": ("anna.png", png, "image/png")}, data={"name": "Anna"}).status_code == 400
+    assert client.get("/api/assets/%d/file" % entry["id"]).content == png
+    assert client.get("/api/assets").status_code in (404, 405)                  # no saved assets of their own any more
     client.post("/api/auth/logout")
     client.post("/api/auth/register", json={"email": "bob@example.com", "password": "another one"})
-    assert client.get("/api/assets").json()["assets"] == []
-    assert client.get("/api/assets/%d/file" % asset["id"]).status_code == 404
+    assert client.get("/api/assets/%d/file" % entry["id"]).status_code == 404
 
 
-def test_admin_console_is_admin_only(client):
-    register(client)
+def test_the_admin_console_is_a_site_of_its_own_for_admins_only(client):
+    sections = ("overview", "users", "users/1", "jobs", "library", "credits", "pricing", "economics", "workflows", "system",
+                "audit", "settings", "announcement", "export/users.csv")
+    me = register(client)
+    assert me["console"] == {"url": "", "port": 8090}    # where the studio's link to it leads
+    desk = client.console
+    # The studio has no admin routes and does not serve the console's page; its sign-in does not open the console.
+    assert client.get("/api/admin/users").status_code == 404
+    for path in ("/console.html", "/assets/js/console/main.js", "/v/1/assets/js/console/main.js", "/assets/js/CONSOLE/main.js"):
+        assert client.get(path).status_code == 404, path
+    desk.cookies.set("scene_console", client.cookies.get("scene_session"))
+    assert desk.get("/api/admin/users").status_code == 401
+    desk.cookies.clear()
+
+    # Someone who is not an admin can't sign in to it, even with their right password.
     client.post("/api/auth/logout")
-    client.post("/api/auth/register", json={"email": "bob@example.com", "password": "another one"})
-    for path in ("overview", "users", "users/1", "jobs", "library", "credits", "pricing", "economics", "workflows", "system", "audit", "settings", "export/users.csv"):
-        assert client.get("/api/admin/" + path).status_code == 403
+    bob = client.post("/api/auth/register", json={"email": "bob@example.com", "password": "another one"}).json()
+    assert "console" not in bob and "console" not in client.get("/api/auth/me").json()
+    refused = desk.post("/api/console/login", json={"email": "bob@example.com", "password": "another one"})
+    assert refused.status_code == 403 and refused.json()["detail"] == "This account is not an admin." and "scene_console" not in refused.cookies
+    assert desk.post("/api/console/login", json={"email": ADMIN["email"], "password": "nope"}).status_code == 401
+    for path in sections:
+        assert desk.get("/api/admin/" + path).status_code == 401
+
+    # The admin can, with their email and password. The console's sign-in does not open the studio.
+    signed = desk.post("/api/console/login", json={"email": ADMIN["email"], "password": ADMIN["password"]})
+    assert signed.status_code == 200 and signed.json()["studio"] == {"port": 8080} and "scene_console" in signed.cookies
+    for path in sections:
+        assert desk.get("/api/admin/" + path).status_code == 200, path
+    client.cookies.clear()
+    client.cookies.set("scene_session", desk.cookies.get("scene_console"))
+    assert client.get("/api/auth/me").status_code == 401
+    actions = [a["action"] for a in desk.get("/api/admin/audit").json()["entries"]]
+    assert "Signed in to the admin console" in actions and "Failed sign-in to the admin console" in actions
+    assert "Refused the admin console" in actions
+
+    # Its page answers at each section's address; one who stops being an admin is shut out at once.
+    assert "console/main.js" in desk.get("/").text and "console/main.js" in desk.get("/users").text
+    client.app.state.db.run("UPDATE users SET role = 'user' WHERE id = ?", (me["id"],))
+    assert desk.get("/api/admin/overview").status_code == 403
+    client.app.state.db.run("UPDATE users SET role = 'admin' WHERE id = ?", (me["id"],))
+    assert desk.post("/api/console/logout").status_code == 200 and desk.get("/api/console/me").status_code == 401
+
+
+def test_one_server_sends_each_port_to_its_site(client):
+    from fastapi.testclient import TestClient
+    from scene.main import Doors
+    doors = Doors(client.app)
+    assert "console/main.js" in TestClient(doors, base_url="http://testserver:8090").get("/").text
+    assert "assets/js/main.js" in TestClient(doors, base_url="http://testserver:8080").get("/").text
+    assert TestClient(doors, base_url="http://testserver:8080").get("/api/admin/users").status_code == 404
 
 
 def test_admin_overview_jobs_credit_log_and_workflows(client):
     register(client)
     post_job(client)
-    overview = client.get("/api/admin/overview?days=7").json()
+    overview = console(client).get("/api/admin/overview?days=7").json()
     assert overview["days"] == 7 and len(overview["calendar"]) == 7 and len(overview["series"]["done"]) == 7
     assert overview["current"]["jobs"] == 1 and overview["previous"]["jobs"] == 0 and overview["totals"]["users"] == 1
     assert overview["server"]["online"] is False and overview["attention"][0]["level"] == "critical"
-    listing = client.get("/api/admin/jobs?q=ada").json()
+    listing = console(client).get("/api/admin/jobs?q=ada").json()
     jobs = listing["jobs"]
     assert listing["total"] == 1 and jobs[0]["user_email"] == ADMIN["email"] and jobs[0]["cost"] == 100
-    assert client.get("/api/admin/jobs?q=nobody").json()["total"] == 0
-    detail = client.get("/api/admin/jobs/" + jobs[0]["id"]).json()
-    assert detail["settings"]["options"]["quality"] == "low" and detail["user_name"] == "Ada"
-    person = client.get("/api/admin/users/1").json()
+    assert console(client).get("/api/admin/jobs?q=nobody").json()["total"] == 0
+    detail = console(client).get("/api/admin/jobs/" + jobs[0]["id"]).json()
+    assert detail["settings"]["options"]["quality"] == "high" and detail["user_name"] == "Ada"
+    person = console(client).get("/api/admin/users/1").json()
     assert person["user"]["email"] == ADMIN["email"] and len(person["jobs"]) == 1 and person["credits"]
-    assert client.get("/api/admin/credits").json()["summary"]["welcome"] == 500
-    system = client.get("/api/admin/system").json()
+    assert console(client).get("/api/admin/credits").json()["summary"]["welcome"] == 500
+    system = console(client).get("/api/admin/system").json()
     assert system["server"]["online"] is False and system["counts"]["users"] == 1 and system["storage"]["disk_total"] > 0
-    reasons = [e["reason"] for e in client.get("/api/admin/credits").json()["events"]]
+    reasons = [e["reason"] for e in console(client).get("/api/admin/credits").json()["events"]]
     assert "welcome" in reasons and "generation" in reasons
-    report = {w["id"]: w for w in client.get("/api/admin/workflows").json()["workflows"]}
+    report = {w["id"]: w for w in console(client).get("/api/admin/workflows").json()["workflows"]}
     assert report["video/h3_master"]["presets"] is True and report["video/h3_master"]["jobs"] == 1
 
 
@@ -229,15 +288,15 @@ def test_admin_can_disable_a_user_reset_a_password_and_cancel_their_job(client):
     client.post("/api/auth/logout")
     client.post("/api/auth/login", json={"email": ADMIN["email"], "password": ADMIN["password"]})
 
-    assert client.delete("/api/admin/jobs/" + job).status_code in (200, 400)   # 400 if the worker already failed it
-    assert client.put("/api/admin/users/%d" % bob["id"], json={"password": "brand new pass"}).status_code == 200
-    assert client.put("/api/admin/users/%d" % bob["id"], json={"disabled": True}).status_code == 200
-    assert client.put("/api/admin/users/1", json={"disabled": True}).status_code == 400   # not yourself
+    assert console(client).delete("/api/admin/jobs/" + job).status_code in (200, 400)   # 400 if the worker already failed it
+    assert console(client).put("/api/admin/users/%d" % bob["id"], json={"password": "brand new pass"}).status_code == 200
+    assert console(client).put("/api/admin/users/%d" % bob["id"], json={"disabled": True}).status_code == 200
+    assert console(client).put("/api/admin/users/1", json={"disabled": True}).status_code == 400   # not yourself
     client.post("/api/auth/logout")
     login = lambda: client.post("/api/auth/login", json={"email": "bob@example.com", "password": "brand new pass"})
     assert login().status_code == 403
     client.post("/api/auth/login", json={"email": ADMIN["email"], "password": ADMIN["password"]})
-    client.put("/api/admin/users/%d" % bob["id"], json={"disabled": False})
+    console(client).put("/api/admin/users/%d" % bob["id"], json={"disabled": False})
     client.post("/api/auth/logout")
     assert login().status_code == 200
 
@@ -245,12 +304,12 @@ def test_admin_can_disable_a_user_reset_a_password_and_cancel_their_job(client):
 def test_audit_log_records_sign_ins_and_admin_actions(client):
     me = register(client)
     client.post("/api/auth/login", json={"email": ADMIN["email"], "password": "wrong password"})
-    client.put("/api/admin/users/%d" % me["id"], json={"add_credits": 25})
-    client.put("/api/admin/settings", json={"signup_credits": 100})
-    actions = [(e["action"], e["detail"]) for e in client.get("/api/admin/audit").json()["entries"]]
+    console(client).put("/api/admin/users/%d" % me["id"], json={"add_credits": 25})
+    console(client).put("/api/admin/settings", json={"signup_credits": 100})
+    actions = [(e["action"], e["detail"]) for e in console(client).get("/api/admin/audit").json()["entries"]]
     assert ("Gave credits", "+25") in actions and ("Failed sign-in", "") in actions and ("Created account", "") in actions
     assert any(a == "Changed settings" and "signup credits: 500 to 100" in d for a, d in actions)
-    assert client.get("/api/admin/audit?q=credits").json()["entries"][0]["action"] == "Gave credits"
+    assert console(client).get("/api/admin/audit?q=credits").json()["entries"][0]["action"] == "Gave credits"
 
 
 def test_admin_library_and_csv_export(client):
@@ -261,26 +320,26 @@ def test_admin_library_and_csv_export(client):
     item = client.app.state.db.run(
         "INSERT INTO generations (user_id, workflow, kind, name, filename, settings, context, size, created) "
         "VALUES (?, 'video/h3_master', 'video', '=street', 'x.mp4', '{}', '{}', 5, 1)", (me["id"],))
-    listing = client.get("/api/admin/library?q=ada").json()
+    listing = console(client).get("/api/admin/library?q=ada").json()
     assert listing["total"] == 1 and listing["items"][0]["user_email"] == ADMIN["email"]
-    assert client.get("/api/admin/library/%d/file" % item).content == b"video"
-    assert client.delete("/api/admin/library/%d" % item).status_code == 200
-    assert not (folder / "x.mp4").exists() and client.get("/api/admin/library").json()["total"] == 0
-    export = client.get("/api/admin/export/users.csv")
+    assert console(client).get("/api/admin/library/%d/file" % item).content == b"video"
+    assert console(client).delete("/api/admin/library/%d" % item).status_code == 200
+    assert not (folder / "x.mp4").exists() and console(client).get("/api/admin/library").json()["total"] == 0
+    export = console(client).get("/api/admin/export/users.csv")
     assert export.headers["content-type"].startswith("text/csv") and "ada@example.com" in export.text
-    assert client.get("/api/admin/export/secrets.csv").status_code == 404
+    assert console(client).get("/api/admin/export/secrets.csv").status_code == 404
 
 
 def test_admin_gives_and_takes_credits_with_a_note(client):
     me = register(client)
-    put = lambda **body: client.put("/api/admin/users/%d" % me["id"], json=body)
+    put = lambda **body: console(client).put("/api/admin/users/%d" % me["id"], json=body)
     assert put(add_credits=250, note="Launch bonus").json()["credits"] == 750
     assert put(add_credits=-100, note="Correction").json()["credits"] == 650
     assert put(add_credits=-5000).json()["credits"] == 0          # a balance never goes below zero
     assert put(add_credits=0).status_code == 400 and put(add_credits="lots").status_code == 400
-    events = client.get("/api/admin/credits?reason=admin+grant").json()["events"]
+    events = console(client).get("/api/admin/credits?reason=admin+grant").json()["events"]
     assert [(e["amount"], e["note"]) for e in events] == [(-650, ""), (-100, "Correction"), (250, "Launch bonus")]
-    audit = [(e["action"], e["detail"]) for e in client.get("/api/admin/audit?q=credits").json()["entries"]]
+    audit = [(e["action"], e["detail"]) for e in console(client).get("/api/admin/audit?q=credits").json()["entries"]]
     assert ("Took credits", "-650") in audit and ("Gave credits", "+250 · Launch bonus") in audit
 
 
@@ -342,7 +401,7 @@ def test_video_thumbnails_are_small_posters_the_browser_keeps(client):
     assert poster.headers["content-type"] == "image/jpeg" and poster.content[:2] == b"\xff\xd8"
     again = client.get("/api/library/%d/poster" % ids[0], headers={"If-None-Match": poster.headers["etag"]})
     assert again.status_code == 304 and not again.content
-    assert client.get("/api/admin/library/%d/poster" % ids[0]).content == poster.content
+    assert console(client).get("/api/admin/library/%d/poster" % ids[0]).content == poster.content
     assert client.get("/api/library/%d/poster" % ids[1]).status_code == 404
     assert client.delete("/api/library/%d" % ids[0]).status_code == 200
     assert not media.poster_path(folder / "clip.mp4").exists()
@@ -372,9 +431,12 @@ def test_agent_plans_are_checked_and_priced_and_nothing_is_queued(client, monkey
     assert client.get("/api/jobs").json()["jobs"] == [] and client.get("/api/auth/me").json()["credits"] == 500
 
 
-def test_a_plain_prompt_becomes_a_caption_for_a_model_that_needs_one(tmp_path, monkeypatch):
+def test_a_plain_prompt_becomes_a_caption_just_before_it_renders_with_the_others_waiting(tmp_path, monkeypatch):
+    import asyncio
     import json
     from fastapi.testclient import TestClient
+    from scene.agent import AgentError
+    from scene.comfy.client import ComfyError
     from scene.config import Settings
     from scene.main import create_app
     folder = tmp_path / "workflows" / "image"
@@ -385,30 +447,56 @@ def test_a_plain_prompt_becomes_a_caption_for_a_model_that_needs_one(tmp_path, m
         "9": {"class_type": "SaveImage", "inputs": {"images": ["1", 0], "filename_prefix": "t"}}}))
     (folder / "captioned.studio.json").write_text(json.dumps({"caption": {"template": "5:value", "ratio": "3:shape"}, "hide": ["5:value"]}))
     app = create_app(Settings(comfy_url="http://127.0.0.1:9", first_account_local=False, ollama_url="http://127.0.0.1:9", storage_dir=str(tmp_path / "storage"),
-                              workflows_dir=str(tmp_path / "workflows")))
-    asked = {}
+                              workflows_dir=str(tmp_path / "workflows"), gpu_shared="off"))
+    asked = []
 
-    async def fake_chat(messages, answer_format, context=None):
-        asked.update(system=messages[0]["content"], user=messages[1]["content"], context=context)
-        return {"aspect_ratio": "3:4", "high_level_description": "A fox."}
+    async def fake_chat(messages, answer_format, context=None, model=None, **kwargs):
+        asked.append(messages[1]["content"])
+        idea = messages[1]["content"].rsplit(": ", 1)[1]
+        return {"aspect_ratio": "3:4", "high_level_description": idea.capitalize() + "."}
 
     with TestClient(app) as client:
         register(client)
+        app.state.jobs.pause(True)   # nothing renders while the test looks
         monkeypatch.setattr(app.state.agent, "chat", fake_chat)
         job = {"workflow": "image/captioned", "values": {"1:text": "a fox", "3:shape": "3:4 (Portrait Standard)"}}
-        assert client.post("/api/jobs", data={"settings": json.dumps(job)}).status_code == 200
-        queued = client.get("/api/jobs").json()["jobs"][0]["settings"]
-        assert json.loads(queued["values"]["1:text"])["high_level_description"] == "A fox." and queued["prompt"] == "a fox"
-        assert asked == {"system": "How to write a caption.", "user": "RATIO: 3:4.\nUser idea: a fox", "context": 16384}
-        asked.clear()
-        job["values"]["1:text"] = '{"aspect_ratio": "1:1", "high_level_description": "Ready."}'     # already a caption: used as it is
-        assert client.post("/api/jobs", data={"settings": json.dumps(job)}).status_code == 200 and not asked
-        monkeypatch.undo()                                                                            # the model server is down
-        job["values"]["1:text"] = "a fox"
-        waiting = len(client.get("/api/jobs").json()["jobs"])
-        refused = client.post("/api/jobs", data={"settings": json.dumps(job)})
-        assert refused.status_code == 400 and "Nothing was charged" in refused.json()["detail"]
-        assert len(client.get("/api/jobs").json()["jobs"]) == waiting
+        # Generate queues the job at once: the caption is not written yet, and the model is not asked
+        first = client.post("/api/jobs", data={"settings": json.dumps(job)}).json()["id"]
+        job["values"]["1:text"] = "an owl"
+        second = client.post("/api/jobs", data={"settings": json.dumps(job)}).json()["id"]
+        assert asked == []
+        queued = {j["id"]: j["settings"] for j in client.get("/api/jobs").json()["jobs"]}
+        assert queued[first]["values"]["1:text"] == "a fox" and queued[first]["caption"]["ratio"] == "3:4" and queued[first]["prompt"] == "a fox"
+        # already a caption: used as it is
+        job["values"]["1:text"] = '{"aspect_ratio": "1:1", "high_level_description": "Ready."}'
+        ready = client.post("/api/jobs", data={"settings": json.dumps(job)}).json()["id"]
+        assert "caption" not in {j["id"]: j["settings"] for j in client.get("/api/jobs").json()["jobs"]}[ready]
+
+        # when the first comes to render, its caption and the second's are written together
+        row = app.state.db.one("SELECT * FROM jobs WHERE id = ?", (first,))
+        row["settings"] = json.loads(row["settings"])
+        app.state.jobs.live[first] = {}
+        asyncio.run(app.state.jobs._captions(row))
+        assert asked == ["RATIO: 3:4.\nUser idea: a fox", "RATIO: 3:4.\nUser idea: an owl"]
+        assert json.loads(row["settings"]["values"]["1:text"])["high_level_description"] == "A fox." and "caption" not in row["settings"]
+        later = json.loads(app.state.db.one("SELECT settings FROM jobs WHERE id = ?", (second,))["settings"])
+        assert json.loads(later["values"]["1:text"])["high_level_description"] == "An owl." and "caption" not in later
+
+        # a caption that cannot be written fails its own job, with the reason
+        job["values"]["1:text"] = "a bear"
+        third = client.post("/api/jobs", data={"settings": json.dumps(job)}).json()["id"]
+
+        async def down(*args, **kwargs):
+            raise AgentError("The agent's model server (Ollama) can't be reached.")
+        monkeypatch.setattr(app.state.agent, "chat", down)
+        row = app.state.db.one("SELECT * FROM jobs WHERE id = ?", (third,))
+        row["settings"] = json.loads(row["settings"])
+        app.state.jobs.live[third] = {}
+        try:
+            asyncio.run(app.state.jobs._captions(row))
+            raise AssertionError("a caption that cannot be written must fail the job")
+        except ComfyError as error:
+            assert "structured caption" in str(error) and "can't be reached" in str(error)
 
 
 def test_agent_edits_selected_videos_instead_of_generating(client, monkeypatch):
@@ -484,22 +572,6 @@ def test_agent_puts_attached_items_into_the_slots_named_for_them(client, monkeyp
     assert refused.status_code in (400, 404)
 
 
-def test_agent_improves_a_prompt_in_the_prompt_structure_and_charges_nothing(client, monkeypatch):
-    register(client)
-    asked = {}
-
-    async def fake_chat(messages, answer_format):
-        asked.update(system=messages[0]["content"], message=messages[1]["content"])
-        return {"prompt": ' "A fox sits on a mossy rock in warm evening light." '}
-
-    monkeypatch.setattr(client.app.state.agent, "chat", fake_chat)
-    assert client.post("/api/agent/improve", json={"prompt": " "}).status_code == 400
-    better = client.post("/api/agent/improve", json={"prompt": "a fox", "kind": "image"}).json()
-    assert better == {"prompt": "A fox sits on a mossy rock in warm evening light."}
-    assert "image model" in asked["system"] and "SCENE CONTEXT:" in asked["system"] and "a fox" in asked["message"]
-    assert client.get("/api/auth/me").json()["credits"] == 500
-
-
 def test_a_step_can_start_on_what_an_earlier_step_makes(client, monkeypatch):
     register(client)
     shot = {"tool": "generate", "workflow": "video/h3_master", "prompt": "She waits.", "start_from": 0, "uses": []}
@@ -541,35 +613,6 @@ def test_a_shot_takes_the_shape_of_the_picture_it_starts_on(client, monkeypatch)
     settings = {"values": {"9:aspect_ratio": "16:9 (Widescreen)"}}
     agent.shape_like(schema, settings, [768, 1344])
     assert settings["values"]["9:aspect_ratio"] == "9:16 (Portrait Widescreen)" and agent.shape_of(schema, settings, {})[0] < 1000
-
-
-def test_a_projects_cast_goes_into_every_shot_that_has_slots_for_it(client, monkeypatch):
-    me = register(client)
-    ids = {}
-    for name, kind in (("Mira", "image"), ("Harbour", "image"), ("Narration", "audio"), ("Clip", "video")):
-        ids[name] = client.app.state.db.run(
-            "INSERT INTO generations (user_id, workflow, kind, name, filename, summary, settings, context, seconds, size, created) "
-            "VALUES (?, 'x/y', ?, ?, 'missing', '', '{}', '{}', 1, 1, 1)", (me["id"], kind, name))
-    assert client.get("/api/cast").json()["cast"] == {}
-    client.put("/api/boards/cast", json={"data": {"character_1": ids["Mira"], "background": ids["Harbour"], "voice": ids["Narration"],
-                                                  "outfit": ids["Narration"], "prop": 999}})      # a sound is no outfit; 999 is nobody's
-    found = client.get("/api/cast?workflow=video/h3_master").json()
-    assert sorted(found["cast"]) == ["background", "character_1", "voice"]
-    assert [(f["name"], f["slot"]) for f in found["fills"]] == [("Mira", "201:image"), ("Harbour", "205:image"), ("Narration", "208:audio")]
-    asked = {}
-
-    async def fake_ask(system, message, workflow_ids, history=(), model=None):
-        asked["message"] = message
-        return {"reply": "One shot.", "steps": [{"tool": "generate", "workflow": "video/h3_master", "name": "Walk",
-                                                 "prompt": "The main character walks along the quay.",
-                                                 "uses": [{"item": ids["Clip"], "slot": "205:image"}]}]}
-
-    monkeypatch.setattr(client.app.state.agent, "ask", fake_ask)
-    step = client.post("/api/agent/plan", json={"instruction": "use this as the place: she walks along the quay", "selection": [ids["Clip"]]}).json()["steps"][0]
-    assert 'Main character: "Mira". In prompts call it "the main character".' in asked["message"]
-    # what the user attached keeps its slot; the cast fills the others
-    assert [(u["name"], u["slot"], bool(u.get("cast"))) for u in step["uses"]] == [
-        ("Clip", "205:image", False), ("Mira", "201:image", True), ("Narration", "208:audio", True)]
 
 
 def test_the_agent_uses_the_model_the_user_picked_when_the_server_has_it(client, monkeypatch):
@@ -623,10 +666,11 @@ def test_a_hosted_model_is_listed_beside_the_local_ones_and_asked_over_its_api(m
     asyncio.run(brain.ask("You plan.", "hi", [], model="gemini/gemini-flash"))
     assert sent.pop()["url"] == "https://g.example.com/openai/chat/completions" and sent.pop()["auth"] == "Bearer g-key"
     answer = asyncio.run(brain.ask("You plan.", "hi", ["video/h3_master"], model="kimi/kimi-k2.6"))
-    assert answer == {"thought": "", "reply": "Hello.", "steps": [], "model": "kimi/kimi-k2.6"}
+    assert answer == {"thought": "", "reply": "Hello.", "steps": [], "model": "kimi/kimi-k2.6", "direction": "", "question": None,
+                      "tokens": {"prompt": 0, "cached": 0, "answer": 0}}
     assert [s["url"] for s in sent] == ["https://api.example.com/v1/chat/completions"] * 2 and sent[0]["auth"] == "Bearer secret-key"
     assert sent[1]["body"]["model"] == "kimi-k2.6" and "temperature" not in sent[1]["body"]            # asked again without it
-    assert sent[1]["body"]["response_format"] == {"type": "json_object"} and '"required": ["thought", "reply", "steps"]' in sent[1]["body"]["messages"][0]["content"]
+    assert sent[1]["body"]["response_format"] == {"type": "json_object"} and '"required": ["thought", "reply", "steps", "direction", "question"]' in sent[1]["body"]["messages"][0]["content"]
 
     # a busy service is tried again, and when it stays busy the smallest local model answers and the reply says so
     calls = []
@@ -684,7 +728,8 @@ def test_an_upload_over_the_size_limit_is_refused(client, monkeypatch):
     monkeypatch.setattr(references, "MAX_BYTES", 16)
     register(client)
     png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
-    assert client.post("/api/assets", files={"file": ("anna.png", png, "image/png")}).status_code == 413
+    film = client.post("/api/projects", json={"name": "Film"}).json()["id"]
+    assert client.post("/api/kit", files={"file": ("anna.png", png, "image/png")}, data={"project_id": str(film)}).status_code == 413
     refused = client.post("/api/jobs", data={"settings": __import__("json").dumps(JOB)},
                           files={"ref:201:image": ("anna.png", png, "image/png")})
     assert refused.status_code == 413 and "200 MB" in refused.json()["detail"]
@@ -816,7 +861,7 @@ def test_a_whole_motion_video_is_written_as_scenes_from_what_it_is_about(client,
     register(client)
     asked = {}
 
-    async def fake_chat(messages, answer_format):
+    async def fake_chat(messages, answer_format, **kwargs):
         asked.update(system=messages[0]["content"], message=messages[1]["content"])
         return {"name": " Scene.ai  intro ", "look": "pink", "orientation": "portrait", "scenes": [
             {"kind": "title", "heading": "Scene.ai", "text": "A studio", "items": ["dropped"]},
@@ -832,7 +877,7 @@ def test_a_whole_motion_video_is_written_as_scenes_from_what_it_is_about(client,
     assert [(s["kind"], s["items"]) for s in written["scenes"]] == [("title", []), ("list", ["Images", "Video"])]
     assert "an intro to Scene.ai" in asked["message"]
 
-    async def nothing(messages, answer_format):
+    async def nothing(messages, answer_format, **kwargs):
         return {"name": "", "look": "dark", "orientation": "landscape", "scenes": []}
 
     monkeypatch.setattr(client.app.state.agent, "chat", nothing)
@@ -886,38 +931,38 @@ def test_prices_follow_what_was_asked_for_at_the_rate_of_each_kind(client):
 def test_admin_sets_rates_workflow_pricing_packages_and_servers(client):
     register(client)
     quote = lambda: client.post("/api/estimate", json=JOB)
-    pricing = client.get("/api/admin/pricing").json()
+    pricing = console(client).get("/api/admin/pricing").json()
     assert pricing["rates"] == {"image": 40, "video": 20, "audio": 5, "motion": 30, "overlay": 10, "upscaler": 20}
     assert pricing["inr_per_1000_credits"] == 100 and pricing["electricity_inr_per_kwh"] == 8
     assert [(s["name"], s["generation_power_w"], s["renders"]) for s in pricing["servers"]] == [("Lufi", None, 0), ("Zoro", 950, 1)]
     assert {w["id"]: w["example"] for w in pricing["workflows"]}["edit/motion"] == 150 and pricing["rates"]["overlay"] == 10
 
-    assert client.put("/api/admin/pricing", json={"rates": {"video": 10}, "electricity_inr_per_kwh": 9}).json()["rates"]["video"] == 10
+    assert console(client).put("/api/admin/pricing", json={"rates": {"video": 10}, "electricity_inr_per_kwh": 9}).json()["rates"]["video"] == 10
     assert quote().json()["credits"] == 50
-    assert client.put("/api/admin/pricing", json={"rates": {"video": "lots"}}).status_code == 400
+    assert console(client).put("/api/admin/pricing", json={"rates": {"video": "lots"}}).status_code == 400
 
     own = {"workflow": "video/h3_master", "credits_per_second": 4, "base_credits": 6, "quality_multiplier": 2}
-    listed = {w["id"]: w for w in client.put("/api/admin/pricing/workflow", json=own).json()["workflows"]}
+    listed = {w["id"]: w for w in console(client).put("/api/admin/pricing/workflow", json=own).json()["workflows"]}
     assert listed["video/h3_master"]["example"] == 52 and quote().json()["credits"] == 52            # (6 + 4 × 5) × 2
     assert listed["audio/audio_minimax_music_3"]["per_second"] == 5                                    # the others follow their kind
-    client.put("/api/admin/pricing/workflow", json={"workflow": "video/h3_master", "enabled": False})
+    console(client).put("/api/admin/pricing/workflow", json={"workflow": "video/h3_master", "enabled": False})
     assert quote().status_code == 400 and post_job(client).status_code == 400
     assert "video/h3_master" not in [w["id"] for w in client.get("/api/workflows").json()["workflows"]]
-    client.put("/api/admin/pricing/workflow", json={"workflow": "video/h3_master"})                  # nothing of its own again
+    console(client).put("/api/admin/pricing/workflow", json={"workflow": "video/h3_master"})                  # nothing of its own again
     assert quote().json()["credits"] == 50
-    assert client.put("/api/admin/pricing/workflow", json={"workflow": "video/nope"}).status_code == 404
+    assert console(client).put("/api/admin/pricing/workflow", json={"workflow": "video/nope"}).status_code == 404
 
-    package = client.post("/api/admin/pricing/packages", json={"name": "Starter", "price_inr": 100, "credits": 1000, "active": True}).json()["id"]
-    client.put("/api/admin/pricing/packages/%d" % package, json={"bonus_credits": 50, "active": False})
-    assert client.get("/api/admin/pricing").json()["packages"] == [
+    package = console(client).post("/api/admin/pricing/packages", json={"name": "Starter", "price_inr": 100, "credits": 1000, "active": True}).json()["id"]
+    console(client).put("/api/admin/pricing/packages/%d" % package, json={"bonus_credits": 50, "active": False})
+    assert console(client).get("/api/admin/pricing").json()["packages"] == [
         {"id": package, "name": "Starter", "price_inr": 100, "credits": 1000, "bonus_credits": 50, "active": 0,
-         "created": client.get("/api/admin/pricing").json()["packages"][0]["created"]}]
-    assert client.post("/api/admin/pricing/packages", json={"price_inr": 5}).status_code == 400          # no name
-    assert client.delete("/api/admin/pricing/packages/%d" % package).json() == {"ok": True}
-    zoro = client.get("/api/admin/pricing").json()["servers"][1]["id"]
-    client.put("/api/admin/pricing/servers/%d" % zoro, json={"generation_power_w": 820, "idle_power_w": ""})
-    assert client.get("/api/admin/pricing").json()["servers"][1]["generation_power_w"] == 820
-    actions = [e["action"] for e in client.get("/api/admin/audit").json()["entries"]]
+         "created": console(client).get("/api/admin/pricing").json()["packages"][0]["created"]}]
+    assert console(client).post("/api/admin/pricing/packages", json={"price_inr": 5}).status_code == 400          # no name
+    assert console(client).delete("/api/admin/pricing/packages/%d" % package).json() == {"ok": True}
+    zoro = console(client).get("/api/admin/pricing").json()["servers"][1]["id"]
+    console(client).put("/api/admin/pricing/servers/%d" % zoro, json={"generation_power_w": 820, "idle_power_w": ""})
+    assert console(client).get("/api/admin/pricing").json()["servers"][1]["generation_power_w"] == 820
+    actions = [e["action"] for e in console(client).get("/api/admin/audit").json()["entries"]]
     assert {"Changed pricing", "Changed workflow pricing", "Added a credit package", "Deleted a credit package", "Changed a server"} <= set(actions)
 
 
@@ -926,7 +971,7 @@ def test_a_job_records_what_became_of_its_credits(client):
     register(client)
     job = post_job(client).json()["id"]
     for _ in range(100):
-        detail = client.get("/api/admin/jobs/" + job).json()
+        detail = console(client).get("/api/admin/jobs/" + job).json()
         if detail["status"] == "failed":    # there is no render server in the tests
             break
         time.sleep(0.1)
@@ -947,7 +992,7 @@ def test_motion_graphics_are_charged_by_the_second_and_refunded_when_a_render_fa
     queued = client.post("/api/motion/render", json=card).json()
     assert queued["credits"] == 240 and after(client, queued["job"])["error"] == "The render stopped."
     assert client.get("/api/auth/me").json()["credits"] == 500
-    assert [(e["amount"], e["reason"]) for e in client.get("/api/admin/credits").json()["events"]][:2] == [(240, "refund"), (-240, "generation")]
+    assert [(e["amount"], e["reason"]) for e in console(client).get("/api/admin/credits").json()["events"]][:2] == [(240, "refund"), (-240, "generation")]
 
     async def drawn(template_id, values, target, *args, **kwargs):
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -983,7 +1028,7 @@ def test_one_visitor_cannot_make_account_after_account(client):
     # The address in Cloudflare's header counts only when the request comes through the tunnel on this machine.
     assert join(9, **{"CF-Connecting-IP": "203.0.113.7"}) == 429
     client.post("/api/auth/login", json=ADMIN)
-    assert "Refused a new account" in [e["action"] for e in client.get("/api/admin/audit").json()["entries"]]
+    assert "Refused a new account" in [e["action"] for e in console(client).get("/api/admin/audit").json()["entries"]]
 
 
 def test_a_title_over_a_video_costs_less_a_second_than_a_motion_video(client, tmp_path):
@@ -1011,7 +1056,7 @@ def test_economics_show_what_each_workflow_earned_and_what_its_electricity_cost(
         "VALUES (?, ?, 'x', 'video/h3_master', 'video', '{}', ?, ?, 5, 'Zoro', ?, ?, ?)", (job, me["id"], status, cost, now - 10, started, now))
     add("a", "done", now - 3600, 100)       # an hour on Zoro: 0.95 kW at 8 a unit
     add("b", "failed", now - 1800, 100)     # half an hour that made nothing
-    report = client.get("/api/admin/economics?days=7").json()
+    report = console(client).get("/api/admin/economics?days=7").json()
     row = report["workflows"][0]
     assert (row["id"], row["title"], row["done"], row["failed"], row["credits"], row["refunded"]) == ("video/h3_master", "MiniMax H3", 1, 1, 100, 100)
     assert row["revenue_inr"] == 10 and round(row["electricity_inr"], 2) == 11.4 and round(row["margin_inr"], 2) == -1.4
@@ -1057,8 +1102,8 @@ def test_the_database_is_backed_up_at_every_start_and_old_copies_are_dropped(cli
     folder = client.app.state.backup_dir
     assert folder == tmp_path / "backups" and len(list(folder.glob(copies))) == 1     # made when the app started
     register(client)
-    assert not [a for a in client.get("/api/admin/overview").json()["attention"] if "backed up" in a["text"]]
-    assert client.get("/api/admin/system").json()["storage"]["last_backup"] > 0
+    assert not [a for a in console(client).get("/api/admin/overview").json()["attention"] if "backed up" in a["text"]]
+    assert console(client).get("/api/admin/system").json()["storage"]["last_backup"] > 0
     # today's copy is written again, with what has changed since, and only the newest days are kept
     for day in ("2020-01-01", "2020-01-02", "2020-01-03"):
         (folder / "scene_{}{}".format(day, db.suffix)).write_bytes(b"old")
@@ -1078,13 +1123,49 @@ def test_the_database_is_backed_up_at_every_start_and_old_copies_are_dropped(cli
     assert backup.attempt(db, folder) is None and made.read_bytes() == kept
 
 
+def test_the_outputs_and_uploads_are_copied_beside_the_backups_and_kept_when_deleted(client, tmp_path):
+    from scene import backup
+    db, folder = client.app.state.db, tmp_path / "copies"
+    outputs, assets = tmp_path / "out", tmp_path / "up"
+    (outputs / "a@b.c").mkdir(parents=True)
+    (outputs / "a@b.c" / "shot.png").write_bytes(b"one")
+    (assets / "1").mkdir(parents=True)
+    (assets / "1" / "face.jpg").write_bytes(b"face")
+    sources = {"outputs": outputs, "assets": assets, "missing": tmp_path / "nowhere"}
+    assert backup.copy_files(db, folder, sources) == 2
+    assert (folder / "files" / "outputs" / "a@b.c" / "shot.png").read_bytes() == b"one"
+    assert (folder / "files" / "assets" / "1" / "face.jpg").read_bytes() == b"face"
+    assert backup.copy_files(db, folder, sources) == 0   # nothing new, nothing copied
+    (outputs / "a@b.c" / "shot.png").write_bytes(b"changed")
+    (assets / "1" / "face.jpg").unlink()
+    assert backup.copy_files(db, folder, sources) == 1
+    assert (folder / "files" / "outputs" / "a@b.c" / "shot.png").read_bytes() == b"changed"
+    assert (folder / "files" / "assets" / "1" / "face.jpg").is_file()   # deleted in the studio, kept in the copy for good
+    import time
+    backup.copy_files(db, folder, sources, keep=14, now=time.time() + 400 * 86400)
+    assert (folder / "files" / "assets" / "1" / "face.jpg").is_file()   # even a year on: the backup is never pruned
+    (outputs / "a@b.c" / ".posters").mkdir()
+    (outputs / "a@b.c" / ".posters" / "shot.png.jpg").write_bytes(b"p")
+    backup.copy_files(db, folder, sources)
+    assert not (folder / "files" / "outputs" / "a@b.c" / ".posters").exists()   # posters are made again, not backed up
+    assert not list(folder.rglob("*.partial"))
+    # a folder that holds another database's copies takes none of this one's files
+    (folder / "database.txt").write_text("C:/somewhere/else/scene.db", encoding="utf-8")
+    (outputs / "a@b.c" / "new.png").write_bytes(b"new")
+    assert backup.attempt_files(db, folder, sources) is None and not (folder / "files" / "outputs" / "a@b.c" / "new.png").exists()
+
+
 def test_every_workflow_is_listed_in_the_section_of_its_kind(client):
     register(client)
     listed = {w["id"]: w for w in client.get("/api/workflows").json()["workflows"]}
     assert not [w for w in listed.values() if w["kind"] == "video" and w.get("error")]   # the fixture has the video nodes only
     assert {w for w in listed if w.startswith("video/")} == {
         "video/h3_master", "video/h3_director", "video/video_minimax_h3_i2v", "video/video_minimax_h3_r2v", "video/ai_influencer",
-        "video/MiniMax_H3_AI_Influencer", "video/MiniMax_H3_AI_Influencer_v2", "video/ref2va_vsa_4step_rtx4090_v2", "video/comfy_plus_codex"}
+        "video/MiniMax_H3_AI_Influencer", "video/MiniMax_H3_AI_Influencer_v2", "video/ref2va_vsa_4step_rtx4090_v2", "video/comfy_plus_codex",
+        "video/h3_chunk", "video/video_lipsync",
+        # the render PC's workflows of 22 October
+        "video/character_video_master", "video/h3_15s_720p", "video/h3_all_in_one", "video/model_router", "video/product_ad_studio",
+        "video/talking_head_narration", "video/video_ltx2_5_t2v", "video/video_wan_animate2", "video/video_wan_animate2_distilled"}
     assert {w["kind"] for w in listed.values()} == {"video", "image", "audio", "upscaler"}
     assert client.get("/api/workflows/video/h3_director").json()["id"] == "video/h3_director"
 
@@ -1184,7 +1265,7 @@ def test_a_file_uploaded_on_the_canvas_joins_the_library_and_its_project(client)
     assert [i["id"] for i in listed] == [item["id"]] and client.get("/api/library/%d/file" % item["id"]).content == png
     # what is not the image, video or sound it says it is, and a project of someone else's, are refused
     assert client.post("/api/library/upload", files={"file": ("page.png", b"<html>", "image/png")}).status_code == 400
-    assert client.post("/api/library/upload", files={"file": ("notes.txt", b"hello", "text/plain")}).status_code == 400
+    assert client.post("/api/library/upload", files={"file": ("notes.exe", b"hello", "application/octet-stream")}).status_code == 400
     assert client.post("/api/library/upload", data={"project_id": "999"}, files={"file": ("a.png", png, "image/png")}).status_code == 404
     loose = client.post("/api/library/upload", files={"file": ("a.png", png, "image/png")}).json()
     assert loose["project_id"] is None and client.get("/api/auth/me").json()["credits"] == 500   # nothing is charged
@@ -1205,3 +1286,47 @@ def test_each_agent_tab_keeps_its_own_conversation(client):
     assert client.get("/api/boards/agent-abc2?project=%d" % project).json()["data"]["runs"]
     assert client.delete("/api/boards/canvas?project=%d" % project).status_code == 404
     assert client.get("/api/boards/agent-NOT_OK").status_code == 404 and client.get("/api/boards/agent-" + "x" * 40).status_code == 404
+
+
+def test_the_studio_pages_have_addresses_of_their_own(client):
+    root = client.get("/")
+    assert root.status_code == 200 and "<div id=\"app\">" in root.text
+    for path in ("/signin", "/signup", "/home", "/projects", "/library", "/skills", "/create", "/canvas", "/timeline", "/settings", "/admin", "/project"):
+        page = client.get(path)
+        assert page.status_code == 200 and page.text == root.text, path
+    assert client.get("/nothing-here").status_code == 404
+    assert client.get("/assets/css/app.css").status_code == 200
+
+
+def test_a_project_holds_modules_that_share_its_kit(client):
+    me = register(client)
+    db = client.app.state.db
+    film = client.post("/api/projects", json={"name": "Pocket"}).json()["id"]
+    one = client.post("/api/projects", json={"name": "Episode 1", "parent_id": film}).json()
+    assert one["parent_id"] == film
+    assert client.post("/api/projects", json={"name": "Deeper", "parent_id": one["id"]}).status_code == 400   # no module in a module
+    for project, name in ((film, "on main"), (one["id"], "in module")):
+        db.run("INSERT INTO generations (user_id, project_id, workflow, kind, name, filename, settings, context, created) "
+               "VALUES (?, ?, 'x/y', 'image', ?, 'f.png', '{}', '{}', 1)", (me["id"], project, name))
+    listed = {p["id"]: p for p in client.get("/api/projects").json()["projects"]}
+    assert listed[film]["modules"] == 1 and listed[film]["items"] == 2 and listed[one["id"]]["parent_name"] == "Pocket"
+    page = client.get("/api/projects/%d" % film).json()
+    assert [(m["name"], m["main"], m["items"]) for m in page["modules"]] == [("Main canvas", True, 1), ("Episode 1", False, 1)]   # the project's own canvas, by its own name
+    assert client.get("/api/projects/%d" % one["id"]).json()["project"]["id"] == film   # a module's page is its project's
+    assert len(client.get("/api/library?project=%d" % film).json()["items"]) == 1
+    assert len(client.get("/api/library?project=%d&modules=1" % film).json()["items"]) == 2
+    # the kit of a module is the project's kit
+    from scene import kit
+    assert kit.root(db, one["id"]) == film and kit.root(db, film) == film
+    # what is kept from a module's canvas is in the project's NeuralCore, and no other project's
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+    kept = client.post("/api/kit", files={"file": ("maya.png", png, "image/png")}, data={"name": "Maya", "project_id": str(one["id"])}).json()
+    assert db.one("SELECT project_id FROM assets WHERE id = ?", (kept["id"],))["project_id"] == film
+    assert [e["name"] for e in client.get("/api/kit?project=%d" % film).json()["entries"]] == ["Maya"]
+    other = client.post("/api/projects", json={"name": "Other"}).json()["id"]
+    assert client.get("/api/kit?project=%d" % other).json()["entries"] == []
+    # deleting a module deletes its items; the main canvas keeps its own
+    assert client.delete("/api/projects/%d" % one["id"]).status_code == 200
+    assert len(client.get("/api/library?project=%d" % film).json()["items"]) == 1
+    assert client.get("/api/projects/%d" % film).json()["modules"][1:] == []
+    assert client.get("/project?id=%d" % film).status_code == 200

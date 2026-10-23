@@ -6,7 +6,7 @@ import json
 
 from scene import agent, media, memory
 from scene.api import workspace
-from test_api import register
+from test_api import console, register
 
 STEP = {"tool": "generate", "workflow": "video/h3_master", "name": "Dog in the park", "prompt": "A dog runs across a park.",
         "duration": 6, "resolution": 480, "orientation": "portrait"}
@@ -117,11 +117,11 @@ def test_a_video_shows_its_frames_and_a_result_can_be_rated(client):
 
 def test_a_message_costs_what_its_model_costs(client, monkeypatch):
     me = register(client)
-    prices = client.put("/api/admin/pricing/llm", json={"model": "gemini/flash", "credits": 3}).json()
+    prices = console(client).put("/api/admin/pricing/llm", json={"model": "gemini/flash", "credits": 3}).json()
     assert {"model": "gemini/flash", "credits": 3, "available": False} in prices["models"]
-    assert client.put("/api/admin/pricing/llm", json={"model": "local:9b", "credits": 1}).status_code == 200
-    assert client.put("/api/admin/pricing/llm", json={"model": "x", "credits": 1.5}).status_code == 400   # whole credits only
-    assert client.put("/api/admin/pricing/llm", json={"model": "", "credits": 1}).status_code == 400
+    assert console(client).put("/api/admin/pricing/llm", json={"model": "local:9b", "credits": 1}).status_code == 200
+    assert console(client).put("/api/admin/pricing/llm", json={"model": "x", "credits": 1.5}).status_code == 400   # whole credits only
+    assert console(client).put("/api/admin/pricing/llm", json={"model": "", "credits": 1}).status_code == 400
 
     async def pick(wanted=None):
         return wanted or "gemini/flash"
@@ -138,6 +138,43 @@ def test_a_message_costs_what_its_model_costs(client, monkeypatch):
     refused = client.post("/api/agent/plan", json={"instruction": "hi"})
     assert refused.status_code == 400 and "costs 3 cr" in refused.json()["detail"]
     # a free model costs nothing
-    assert client.put("/api/admin/pricing/llm", json={"model": "gemini/flash", "credits": 0}).status_code == 200
+    assert console(client).put("/api/admin/pricing/llm", json={"model": "gemini/flash", "credits": 0}).status_code == 200
     model(monkeypatch, client, {"thought": "", "reply": "Hello.", "steps": [], "model": "gemini/flash"})
     assert client.post("/api/agent/plan", json={"instruction": "hi"}).json()["llm"]["credits"] == 0
+
+
+def test_the_conversation_keeps_many_turns_with_what_each_used_and_drops_the_oldest_past_its_budget():
+    from scene import agent
+    history = [{"instruction": "turn {}".format(i), "reply": "answer {}".format(i)} for i in range(30)]
+    history[0]["steps"] = [{"name": "Maya", "uses": []}, "Liam"]   # the old shape (a name) is still read
+    history[-1]["steps"] = [{"name": "Football Match Beat", "uses": ["Maya", "Liam", "Elena"]}]
+    turns = agent.past_turns(history)
+    assert len(turns) == 60 and turns[0]["content"] == "turn 0"   # far more than the six turns of before
+    assert "(Planned: Maya, Liam)" in turns[1]["content"]
+    assert "(Planned: Football Match Beat using Maya, Liam, Elena)" in turns[-1]["content"]
+    long = [{"instruction": "x" * 2000, "reply": "y" * 1500} for _ in range(40)]
+    kept = agent.past_turns(long)
+    assert sum(len(t["content"]) for t in kept) <= agent.HISTORY_CHARS and len(kept) % 2 == 0 and kept[-1]["content"] == "y" * 1500
+
+
+def test_the_direction_goes_with_a_message_and_comes_back_updated(client, monkeypatch):
+    register(client)
+    asked = model(monkeypatch, client, {"thought": "", "reply": "Noted.", "steps": [], "direction": "Film: a pet shop ad\n1. dog in park"})
+    plan = client.post("/api/agent/plan", json={"instruction": "hello", "direction": "Film: a pet shop ad"}).json()
+    assert "Film: a pet shop ad" in asked[0] and "Direction, the notes" in asked[0]
+    assert plan["direction"] == "Film: a pet shop ad\n1. dog in park"
+
+
+def test_compact_folds_the_conversation_into_a_direction(client, monkeypatch):
+    register(client)
+    seen = []
+
+    async def fake_chat(messages, answer_format, **kwargs):
+        seen.append(messages[-1]["content"])
+        return {"direction": "  Film: pet ad  \n2. cat  "}
+    monkeypatch.setattr(client.app.state.agent, "chat", fake_chat)
+    history = [{"instruction": "a pet shop ad", "reply": "Here is a plan.", "steps": []}]
+    done = client.post("/api/agent/compact", json={"history": history, "direction": "old notes"}).json()
+    assert done["direction"] == "Film: pet ad\n2. cat"
+    assert "old notes" in seen[0] and "a pet shop ad" in seen[0]
+    assert client.post("/api/agent/compact", json={"history": []}).status_code == 400

@@ -1,0 +1,227 @@
+{
+ "100": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "A candid photo of a young Indian woman laughing at a street-food stall in Mumbai at dusk, holding a plate of pani puri, warm string lights, a hand-painted sign that reads \"MUMBAI CHAAT HOUSE\", shallow depth of field, 35mm film look, natural skin texture."
+  },
+  "_meta": {
+   "title": "PROMPT"
+  }
+ },
+ "101": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "blurry, lowres, watermark, extra fingers, deformed hands, cartoon, oversaturated"
+  },
+  "_meta": {
+   "title": "NEGATIVE PROMPT (optional)"
+  }
+ },
+ "106": {
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 42
+  },
+  "_meta": {
+   "title": "SEED"
+  }
+ },
+ "37": {
+  "class_type": "SceneAspectSize",
+  "inputs": {
+   "aspect_ratio": "16:9"
+  },
+  "_meta": {
+   "title": "Aspect ratio"
+  }
+ },
+ "38": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(a * 1.0 / 32) * 32",
+   "values.a": [
+    "37",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "render width"
+  }
+ },
+ "39": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(a * 1.0 / 32) * 32",
+   "values.a": [
+    "37",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "render height"
+  }
+ },
+ "500": {
+  "class_type": "SceneCogView4",
+  "inputs": {
+   "prompt": [
+    "100",
+    0
+   ],
+   "negative_prompt": [
+    "101",
+    0
+   ],
+   "width": [
+    "38",
+    1
+   ],
+   "height": [
+    "39",
+    1
+   ],
+   "steps": 50,
+   "cfg": 3.5,
+   "seed": [
+    "106",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "CogView4-6B (diffusers)"
+  }
+ },
+ "40": {
+  "class_type": "UpscaleModelLoader",
+  "inputs": {
+   "model_name": "RealESRGAN_x2plus.pth"
+  },
+  "_meta": {
+   "title": "RealESRGAN x2"
+  }
+ },
+ "41": {
+  "class_type": "ImageUpscaleWithModel",
+  "inputs": {
+   "upscale_model": [
+    "40",
+    0
+   ],
+   "image": [
+    "500",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Draft upscale"
+  }
+ },
+ "42": {
+  "class_type": "SeedVR2LoadDiTModel",
+  "inputs": {
+   "model": "seedvr2_ema_7b_sharp_fp16.safetensors",
+   "device": "cuda:0",
+   "offload_device": "cpu"
+  },
+  "_meta": {
+   "title": "SeedVR2 7B"
+  }
+ },
+ "43": {
+  "class_type": "SeedVR2LoadVAEModel",
+  "inputs": {
+   "model": "ema_vae_fp16.safetensors",
+   "device": "cuda:0",
+   "decode_tiled": true,
+   "offload_device": "cpu"
+  },
+  "_meta": {
+   "title": "SeedVR2 VAE"
+  }
+ },
+ "44": {
+  "class_type": "SeedVR2VideoUpscaler",
+  "inputs": {
+   "image": [
+    "500",
+    0
+   ],
+   "dit": [
+    "42",
+    0
+   ],
+   "vae": [
+    "43",
+    0
+   ],
+   "seed": [
+    "106",
+    0
+   ],
+   "resolution": [
+    "37",
+    4
+   ],
+   "max_resolution": 0,
+   "batch_size": 1,
+   "uniform_batch_size": false,
+   "color_correction": "wavelet",
+   "temporal_overlap": 0
+  },
+  "_meta": {
+   "title": "Final upscale"
+  }
+ },
+ "45": {
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "switch": false,
+   "on_false": [
+    "41",
+    0
+   ],
+   "on_true": [
+    "44",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Upscaler (false = draft, true = final)"
+  }
+ },
+ "47": {
+  "class_type": "ImageScale",
+  "inputs": {
+   "image": [
+    "45",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "width": [
+    "37",
+    2
+   ],
+   "height": [
+    "37",
+    3
+   ],
+   "crop": "center"
+  },
+  "_meta": {
+   "title": "Exact output size"
+  }
+ },
+ "9": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "47",
+    0
+   ],
+   "filename_prefix": "scene_ai/t2i_cogview4"
+  },
+  "_meta": {
+   "title": "Save Image"
+  }
+ }
+}

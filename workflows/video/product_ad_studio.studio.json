@@ -1,0 +1,190 @@
+{
+  "title": "Product Ad Studio",
+  "description": "Product and brand ads where the label must stay sharp: Qwen-Edit builds an opening and an end keyframe from your product photo, MiniMax H3 animates from one to the other with sound, and SeedVR2 upscales.",
+  "output_name": "68.filename_prefix",
+  "labels": {
+    "2:value": "Describe the shot, motion and sound. <Picture 1> is the opening frame, <Picture 2> the end frame.",
+    "15:image": "Product image (a clean photo, at least 1024 px)",
+    "16:image": "Style or scene reference (optional)",
+    "17:image": "End frame (used when the end frame is not generated)",
+    "18:value": "Opening keyframe prompt",
+    "19:value": "End keyframe prompt (edits the opening frame: a new camera angle)",
+    "11:value": "Upscale: short edge"
+  },
+  "defaults": {
+    "2:value": ""
+  },
+  "required_refs": [
+    "15:image"
+  ],
+  "hide": [
+    "4",
+    "6",
+    "7",
+    "8",
+    "10",
+    "28",
+    "31",
+    "35",
+    "38",
+    "51",
+    "65"
+  ],
+  "options": [
+    {
+      "id": "shape",
+      "label": "Shape",
+      "default": "portrait",
+      "top": true,
+      "choices": [
+        {
+          "id": "portrait",
+          "label": "9:16",
+          "hint": "vertical"
+        },
+        {
+          "id": "landscape",
+          "label": "16:9",
+          "hint": "landscape"
+        }
+      ]
+    },
+    {
+      "id": "keyframes",
+      "label": "Keyframes",
+      "default": "both",
+      "choices": [
+        {
+          "id": "both",
+          "label": "Build opening and end",
+          "hint": "the steadiest product and label"
+        },
+        {
+          "id": "opening",
+          "label": "Build the opening only",
+          "hint": "ends on the END FRAME you upload, or anywhere"
+        },
+        {
+          "id": "photo",
+          "label": "My photo as it is",
+          "hint": "the product photo is the opening frame"
+        }
+      ]
+    },
+    {
+      "id": "quality",
+      "label": "Quality",
+      "default": "draft",
+      "choices": [
+        {
+          "id": "draft",
+          "label": "Draft",
+          "hint": "8-step turbo"
+        },
+        {
+          "id": "final",
+          "label": "Final",
+          "hint": "the full model"
+        }
+      ]
+    },
+    {
+      "id": "upscale",
+      "label": "Upscale",
+      "default": "on",
+      "choices": [
+        {
+          "id": "on",
+          "label": "On",
+          "hint": "SeedVR2 7B sharp"
+        },
+        {
+          "id": "off",
+          "label": "Off",
+          "hint": "the native size"
+        }
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "when": {
+        "shape": "portrait"
+      },
+      "set": {
+        "4.value": true
+      }
+    },
+    {
+      "when": {
+        "shape": "landscape"
+      },
+      "set": {
+        "4.value": false
+      }
+    },
+    {
+      "when": {
+        "keyframes": "both"
+      },
+      "set": {
+        "6.value": true,
+        "7.value": true
+      }
+    },
+    {
+      "when": {
+        "keyframes": "opening"
+      },
+      "set": {
+        "6.value": true,
+        "7.value": false
+      }
+    },
+    {
+      "when": {
+        "keyframes": "photo"
+      },
+      "set": {
+        "6.value": false,
+        "7.value": false
+      }
+    },
+    {
+      "when": {
+        "quality": "draft"
+      },
+      "set": {
+        "8.value": false
+      }
+    },
+    {
+      "when": {
+        "quality": "final"
+      },
+      "set": {
+        "8.value": true
+      }
+    },
+    {
+      "when": {
+        "upscale": "on"
+      },
+      "set": {
+        "10.value": true
+      }
+    },
+    {
+      "when": {
+        "upscale": "off"
+      },
+      "set": {
+        "10.value": false
+      }
+    }
+  ],
+  "hints": [
+    "Use a sharp product photo of at least 1024 px; a white background is fine.",
+    "5-8 second ads work best. The opening and end frames keep the product's shape and label stable."
+  ]
+}

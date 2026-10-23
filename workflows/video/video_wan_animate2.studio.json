@@ -1,0 +1,27 @@
+{
+  "title": "Wan Animate 2",
+  "description": "Character animation: your character (a picture) performs the motion of a driving video. The background and camera come from the prompt.",
+  "output_name": "292.filename_prefix",
+  "labels": {
+    "672:582:text": "Describe the character and the background",
+    "672:585:text": "Describe the motion and the camera",
+    "189:image": "Character (a picture of who moves)",
+    "240:file": "Driving video (the motion to copy)"
+  },
+  "required_refs": [
+    "189:image",
+    "240:file"
+  ],
+  "hide": [
+    "672:581",
+    "672:635",
+    "672:654"
+  ],
+  "pricing": {
+    "source": "video"
+  },
+  "hints": [
+    "The character keeps the look of its picture; the background is made from the prompt, not from the picture or the video.",
+    "A clear, full-body driving video with one person works best."
+  ]
+}

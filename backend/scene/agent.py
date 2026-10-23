@@ -8,20 +8,29 @@ import asyncio
 import json
 import math
 import re
+import time
 
 import httpx
 
-from . import cast, sequence
+from . import camera, gpu, kit, sequence, traces
 
-MAX_STEPS = 6
+MAX_STEPS = 12   # a longer film runs in stages (cast, stills, clips), each priced and approved on its own
 SHOT_SECONDS = (4, 15)  # the length the agent may give one video shot; the workflow takes any number of seconds
 WORDS_PER_SECOND = 2.5  # how fast people speak in a shot, for the time spoken words need
 LONG_SHOT = 10          # a shot longer than this is not made at the largest resolution: it may not fit in memory
-MAX_HISTORY = 6     # earlier turns of the conversation sent along with a new message
+MAX_HISTORY = 40    # earlier turns of the conversation sent along with a new message
+HISTORY_CHARS = 48_000   # ...but no more than this much of them (about 12k tokens): the newest turns are kept
+LOCAL_CONTEXT = 32768    # tokens a local model reads, the same for every call, unless ollama_context says otherwise
+CHARS_PER_TOKEN = 3.0    # a careful guess of how many characters one token holds (prose, JSON and code mixed)
+SKILL_SHARE = 0.45       # the share of a local model's context a skill may take whole; a longer one is read in parts
+KEEP_RESULTS = 6         # the newest tool results kept whole when a long run must be shortened to fit the context
+LOAD_RETRIES = (2, 5, 10)   # seconds between tries while Ollama loads a model or is busy
+FIX_ROUNDS = 2   # how many times a finished plan with steps that cannot run goes back to the model to be put right
 ORIENTATIONS = ("landscape", "portrait", "square")
 EDIT_TOOLS = ("trim", "split", "join")   # done with ffmpeg on videos the user already has: no GPU, no credits
 MAX_PARTS = 6
 MOTION_TOOLS = ("motion", "overlay")     # drawn by HyperFrames from words: no GPU, priced by the second
+ASSEMBLE_TOOL = "assemble"                 # the finished cut: shots in order, music, a title and an end card; ffmpeg, no credits
 SOUND_TOOL = "sound"                     # a sound put on a video with ffmpeg: no GPU, no credits
 OVERLAY_KINDS = ("lower_third",)         # a scene kind only an overlay has
 CAPTION_CONTEXT = 16384   # tokens: the caption instructions of a workflow run to several thousand
@@ -59,8 +68,15 @@ The asset book (the project's memory):
   shot shows a character, place or prop the book has, use that asset: put it in "uses" with the slot of the workflow
   that fits its type (a character in a character slot, a location in a background or location slot, an outfit in an
   outfit slot, a voice in a voice slot). For a saved asset write {{"item": 0, "asset": <its id>, "slot": ...}}; for an
-  item of the project write {{"item": <its id>, "asset": 0, "slot": ...}}. An entry marked "in_cast" is attached to every
-  shot already: never put it in "uses".
+  item of the project write {{"item": <its id>, "asset": 0, "slot": ...}}. An entry marked "always" is attached to every
+  shot already, in its slot: never put it in "uses"; a shot it does not belong in (no location in a close-up on white)
+  lists its asset id in "leave_out". An entry marked "unnamed" was attached without a name: before you use it, ask the
+  user once who or what it is (a question), and when they say, save its name and type with kit_save.
+- A step that makes something meant for reuse in later shots (a character, an outfit, a location, a prop, a style
+  picture, or a voice sample) fills "keep": {{"as": its type, "name": its short name, "Maya" or "the cafe"}}. Its result
+  is kept in the project's NeuralCore under that name, for every agent tab. Every other step writes {{"as": "", "name": ""}}.
+  Name a kept asset by who or what it is, never "Maya Character Asset". When the user names one ("use Maya"), find it in the
+  book by its name and put it in "uses"; a shot with several characters puts each in its own character slot.
 - In the prompt, call a used asset by what it is in plain words ("the girl", "the cafe"), never by its name in the book
   or a number, and do not describe its look again: the reference carries it.
 - Use an entry only when it is what the shot is about. An entry about something else (a car when the user wants a pet)
@@ -77,7 +93,9 @@ Tools, and which to use:
   has, or draw text on screen; they are instant and free, and they never change what is in a generated picture.
 - "trim", "split", "join" and "sound" edit a selected video the user already has (cut, shorten, halve, join, or put
   music or audio on it). Never use "generate" for that: generating makes a different video. Editing needs a selected
-  video: when none is selected, return no steps and ask the user to select the video on the canvas first.
+  video: when none is selected, return no steps and ask the user to select the video on the canvas first. "sound" only
+  puts an audio file on a video. Work on a sound file itself (separate the voice, transcribe it) is a "generate" step
+  with the workflow made for it: those take an audio file, no video.
 - "motion" makes a video of words and shapes (a title sequence, kinetic text, an intro or outro, an explainer, a list
   or a figure on screen); "overlay" puts words over a selected video. Never use "generate" for readable text: a
   generating model cannot write words.
@@ -85,6 +103,15 @@ Tools, and which to use:
   under "How to do this kind of work"; follow it. The field defaults always hold: for "generate" set source, start,
   end, parts and audio to 0 and leave "scenes" empty; for an editing tool set prompt to "" and clips to 1; for "motion"
   and "overlay" set prompt to "" and fill "scenes".
+- Camera: for a "generate" step that shows a scene, fill "shot_size" (ECU, CU, MCU, MS, WS, EWS), "angle" (eye, low, high,
+  top, OTS), "move" (static, push in, pull back, pan, track, crane, handheld, orbit) and "end_state" (where the people and
+  the camera end up, in a few words). They are turned into words in the prompt for you, so do not repeat them there. Open
+  a scene wide, go closer for the action, keep the people moving the same way across shots. For anything that is not a
+  scene (an edit, text, music) leave them "" .
+- "assemble" is the last step of a film: it puts the shots of this plan (the takes the user keeps) in order, with music
+  under them, a title card and an end card, into one video. "scenes" may hold one scene of kind "title" and one of kind
+  "end" (heading and text); "audio" is the id of music that exists, or "after" is the step number of a music step in this
+  plan; leave "prompt" empty. Use it when the user wants the finished film, not for a single shot. Free and quick.
 - Never write a tag such as @1 in a prompt: the video model does not know what it means. Describe what is seen.
 
 Rules for a plan:
@@ -93,7 +120,8 @@ Rules for a plan:
 Deciding the settings of every step. What the user says always wins: a length, a shape, a resolution or a quality they
 name is used exactly. Everything they leave open you decide from the script and the conversation. Never ask
 the user to choose a setting.
-- "duration" (a video shot, any whole number from 4 to 15 seconds): the time the action really takes, not a round number.
+- "duration" (a video shot, from 4 to 15 seconds; whole seconds, unless the workflow says decimals are allowed): the
+  time the action really takes, not a round number.
   A glance, a reaction, a logo or a product turning: 4 to 5. One walk, one gesture, a reveal, a pour: 5 to 7. A slow
   establishing shot or a camera move across a place: 6 to 9. Spoken words need about 2.5 words a second, plus a second
   before and after: 12 spoken words is 7 seconds. When someone speaks, write their exact words in the prompt in
@@ -135,9 +163,9 @@ the user to choose a setting.
 - One shot is ONE action in one place: a 5 second clip cannot show more. When the user lists several actions in a row
   ("she runs through the market, jumps over a crate, turns into an alley and hides behind a door"), plan one step for
   each action, in order (four steps for that example), each prompt describing only its own action.
-- When the project has a cast, name its members in the prompt with the words given for them ("the main character",
+- When the NeuralCore has always-on entries, name them in the prompt with the words given for them ("the main character",
   "the outfit", "the background") and do not describe their looks: the reference files carry the looks.
-- When there is no cast and nothing is attached, never ask for a picture: plan the shot from words. Describe the person
+- When the NeuralCore has nothing for a shot and nothing is attached, never ask for a picture: plan the shot from words. Describe the person
   and the place in a few concrete words (age, hair, clothes; the kind of place), and when a plan has several steps
   with the same person or place, repeat that same description word for word in every step so the shots match.
 - "start_from" is the id of a selected item the shot should start on, or 0. Use it only when the user asks to continue or animate a selected item.
@@ -166,27 +194,6 @@ Your answer:
 - "reply" may use **bold** for a few key words and a short list with "- " at the start of each line. No headings and no
   tables. To show an item of the asset book or an attached item as a small picture, write [[item:<its id>]]; for a
   saved asset write [[asset:<its id>]]. Use only ids you were given."""
-
-
-IMPROVE = """You rewrite prompts for an AI {kind} model inside Scene.ai. You are given the user's prompt and you return a better one.
-{tips}
-Rules:
-- Keep everything the user asked for: the subject, the action, the setting and any style or detail they named. Never change what the {what} is about.
-- Add what a good prompt needs and the user left out: {needs}
-- When a project cast is listed, name its members with the words given for them and do not describe their looks. When
-  none is listed, describe the people and places in the user's own terms; do not call anyone "the main character".
-- Write plain descriptive sentences in the user's language. No lists, no headings, no quotation marks around the whole prompt, no explanations.
-- {length}
-- If the prompt is already detailed, tighten the wording instead of making it longer."""
-IMPROVE_KINDS = {
-    "video": {"what": "shot", "needs": "what moves and how, the camera (framing and movement), the light, the mood, and sound if it matters.",
-              "length": "Two to four sentences: one shot, one main action."},
-    "image": {"what": "picture", "needs": "the framing and viewpoint, the light, the colours, the mood, and the look (photograph, illustration, and so on).",
-              "length": "Two to four sentences."},
-    "audio": {"what": "music", "needs": "the genre, the tempo, the instruments, the mood, whether there are vocals and what kind, "
-                                         "and how the piece develops from start to end.",
-              "length": "Three to five sentences."},
-}
 
 
 WRITE_SCENES = """You write motion graphics videos for Scene.ai: videos made of words and shapes, with no pictures.
@@ -287,6 +294,160 @@ class AgentError(Exception):
     pass
 
 
+TOOLS = ("find_assets", "look", "check_shots", "review", "save_note", "kit_save", "state_read", "state_write", "state_check",
+         "film", "import_url", "transcript", "timing", "read_text", "read_skill", "finish")
+TOOL_ROUNDS = 6   # a message is answered in at most this many calls to the model
+RUN_ROUNDS = 40   # ...or this many while a long skill runs: it reads and writes its state and cuts its media as it goes
+TOOL_RESULT = 8000   # characters of a tool's result the model is given back
+QUESTION_OPTIONS = 4
+
+TOOL_RULES = """How you work now: you answer in steps, one call at a time, and each answer names a "tool". The server runs
+the tool and tells you the result, and then you answer again. Fill every field; the ones the tool does not read stay
+"", 0 or []. The tools:
+- find_assets: "query" is words; you get the asset book's entries that match. Use it before you say the book has nothing.
+- look: "item" or "asset" is an id; you get what is in that picture or clip.
+- check_shots: "steps" is your plan; you get each step checked and priced, and the ones that cannot run with the reason.
+  Do this before you finish when a plan is more than one or two steps, and fix what it says.
+- review: "item" is an id of something made; you get the checks of it.
+- save_note: "text" is the whole direction (see "Direction" in the message), kept for the next messages.
+- kit_save: keeps something in the project's kit, or names an entry. "text" is its name ("Violet"), "op" its type
+  (character, location, prop, outfit, voice, style, script); "item" a library id to add (a sheet you made, a file the
+  user attached) or "asset" the NeuralCore entry to change; "value" what it shows, when you know better than the NeuralCore; and
+  "settings" "always" to attach it to every shot of the project. You get its asset id.
+- state_read: "path" (/motion/chunks/c3) and "offset"; you get the value kept there, or every leaf under a folder, a
+  page at a time. state_write: "path" and "value", the JSON text to keep there (it replaces what was there); a path
+  ending in /* and a value that is an object of name: value write every leaf of that folder at once. A run's
+  state is the one place its steps take their inputs from: read it, never what you remember of the chat. state_check:
+  "path" and "against" (two folders); you get which names under "against" have nothing under "path".
+- film: "op" and "settings", JSON text of the operation's fields; it is done on this machine, costs nothing, and you
+  get the library ids of what it made. op: reference {"image"} (longer side 1500 px) · slice {"audio", "f_in", "f_out"}
+  · track {"frames": [per block]} · trim {"video", "frames", "stretch"?, "size"?} · retime {"video", "frames",
+  "lines": [{"master": [s, e], "clip": [s, e]}]} · proof {"video", "marks": [{"at", "label"}]} · subtitles {"video",
+  "lines": [{"start", "end", "text", "speaker", "lead"}]} · film {"clips": [ids], "audio"} · speech {"audio", "lines":
+  [{"n", "start", "end", "speaker"}], "narrator"?: the narrator's speaker label, "save_to"?: a folder for the spans}
+  or {"audio", "windows": [[a, b]]}. Ids are library ids; "$state:/path" stands for the id kept at that path, and
+  "$state:/folder/*" for every leaf of a folder (lines: "$state:/motion/transcript/lines/*").
+- import_url: "text" is a link to a picture, clip or sound on another site (a link in the chat, a tracker row) and
+  "query" the name to file it under; you get its library id. Only public web links are fetched.
+- read_skill: "op" is a skill's id and "query" one of its parts (its number or heading), "offset" where to start; you get
+  that part, a page at a time. A skill too long to give you whole lists its parts: read each before you act on it.
+- read_text: "item" is a text in the library (a script or a document the user attached, a transcript), or "asset" a
+  script in the NeuralCore, and "offset"
+  where to start; you get its words, a page at a time. With "path" as well, the whole text is kept in the run's state
+  there (the script: /motion/inputs/script), word for word, so you need not copy it.
+- transcript: "item" is a transcript in the library (a transcription's JSON, or an .srt) and "path" a folder; every
+  line is written there as path/<n> = {"start", "end", "speaker", "text"}, n from 1, times exactly as the file has them.
+  With "item" 0 and "value" the JSON text {"<n>": "<speaker>"}, it names who speaks the lines at "path" (a
+  transcription without speakers says SPEAKER_00 for all): only the speakers change, never a time or a word.
+- timing: "settings" is JSON text {"units", "lines", "speech", "length", "save_to"} — the folders of the plan's units
+  (each with "from": L<n>, sfx@<s>, gap@L<n>, gap@start or gap@end), of the lines and of the speech spans, the
+  master's length in seconds, and the folder for the result; every unit's {"f_in", "f_out"} is written there by the
+  clock rules, and you get the problems to fix (a shot too short or too long, a line that is not there).
+- finish: your answer for the user: "thought", "reply", "steps" and "direction". If a step cannot run you get the reason
+  back instead, and you finish again.
+Nothing is generated by these tools (film only cuts what exists): generating starts only when the user approves the
+steps you finish with. Finish as soon as
+you know enough; most messages need one or two tool calls, or none."""
+
+
+CALL_FIELDS = ("query", "item", "asset", "text", "path", "value", "against", "offset", "op", "settings")
+
+COMPACT_RULES = """Each answer of yours now is one tool call: {"tool": <its name>, "args": {<that tool's fields>}}. Put only the
+fields the tool reads in "args" ("query", "item", "path", "value", "settings" and so on, as the tools above say; "steps" for
+check_shots). When you have all you need, answer {"tool": "finish", "args": {}}: you are then asked for your answer to the
+user in a call of its own."""
+
+FINISH_NOW = ("Now give your answer to the user: thought, reply, steps, direction and question, in the shape asked. Plan only what "
+              "the work so far supports.")
+
+
+S, I = {"type": "string"}, {"type": "integer"}
+# Each tool's own fields, the required ones first: (required, optional). A local model is held to exactly these, so a
+# field cannot land in the wrong place (a part number in "settings", say).
+TOOL_ARGS = {
+    "find_assets": ({"query": S}, {}),
+    "look": ({}, {"item": I, "asset": I}),
+    "check_shots": ({"steps": {"type": "array", "items": {"type": "object"}}}, {}),
+    "review": ({"item": I}, {}),
+    "save_note": ({"text": S}, {}),
+    "kit_save": ({"text": S, "op": S}, {"item": I, "asset": I, "value": S, "settings": S}),
+    "state_read": ({"path": S}, {"offset": I}),
+    "state_write": ({"path": S, "value": S}, {}),
+    "state_check": ({"path": S, "against": S}, {}),
+    "film": ({"op": S, "settings": S}, {}),
+    "import_url": ({"text": S}, {"query": S}),
+    "transcript": ({"path": S}, {"item": I, "value": S}),
+    "timing": ({"settings": S}, {}),
+    "read_text": ({}, {"item": I, "asset": I, "offset": I, "path": S}),
+    "read_skill": ({"op": S, "query": S}, {"offset": I}),
+    "finish": ({}, {}),
+}
+
+
+def compact_tool_format(names=None):
+    """The small shape of one tool call, for a local model: one of the tools, with exactly that tool's fields in
+    "args". names: the tools on offer (finish is always one)."""
+    shapes = []
+    for name in [n for n in TOOLS if names is None or n in names or n == "finish"]:
+        required, optional = TOOL_ARGS.get(name, ({}, {}))
+        shapes.append({"type": "object", "required": ["tool", "args"], "additionalProperties": False, "properties": {
+            "tool": {"type": "string", "enum": [name]},
+            "args": {"type": "object", "required": list(required), "additionalProperties": False, "properties": {**required, **optional}}}})
+    return {"anyOf": shapes}
+
+
+def tool_format(workflow_ids):
+    """The JSON shape of one call: the tool and its fields beside the fields of a finished answer."""
+    base = reply_format(workflow_ids)
+    extra = {"tool": {"type": "string", "enum": list(TOOLS)}, "query": {"type": "string"}, "item": {"type": "integer"},
+             "asset": {"type": "integer"}, "text": {"type": "string"}, "path": {"type": "string"}, "value": {"type": "string"},
+             "against": {"type": "string"}, "offset": {"type": "integer"}, "op": {"type": "string"}, "settings": {"type": "string"}}
+    return {"type": "object", "required": [*extra, *base["required"]], "properties": {**extra, **base["properties"]}}
+
+
+REPLY_CHARS = 8000   # a reply may carry a table a skill posts for review: an asset, anchor or clips table
+
+
+def clean_question(question):
+    """A question the user answers with a button: {"text", "options"} with two to four short options, or None."""
+    if not isinstance(question, dict):
+        return None
+    text = " ".join(str(question.get("text") or "").split())[:300]
+    options = []
+    for option in question.get("options") if isinstance(question.get("options"), list) else []:
+        option = " ".join(str(option or "").split())[:80]
+        if option and option.lower() not in (o.lower() for o in options):
+            options.append(option)
+    return {"text": text, "options": options[:QUESTION_OPTIONS]} if text and len(options) >= 2 else None
+
+
+def shaped(answer):
+    """A model's answer as the agent returns it: {"thought", "reply", "steps", "model", "direction", "question"}."""
+    steps = answer.get("steps")
+    reply = str(answer.get("reply") or "").strip()[:REPLY_CHARS]
+    if answer.get("_stood_in"):   # say so when another model answered than the one that was picked
+        reply = "{} ({})".format(reply, answer["_stood_in"]).strip()
+    thought = str(answer.get("thought") or "").strip()[:800]   # shown folded above the reply
+    return {"thought": thought, "reply": reply, "steps": steps if isinstance(steps, list) else [], "model": answer.get("_model"),
+            "direction": clean_direction(answer.get("direction")), "question": clean_question(answer.get("question"))}
+
+
+def tokens_of(answer):
+    """What one answer of a hosted model cost: {"prompt", "cached" (of the prompt, read from the service's cache),
+    "answer"} in tokens, as the OpenAI chat API reports them (zeros when the service does not say)."""
+    usage = answer.get("usage") if isinstance(answer.get("usage"), dict) else {}
+    details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+    number = lambda v: int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
+    return {"prompt": number(usage.get("prompt_tokens")), "cached": number(details.get("cached_tokens") or usage.get("cached_tokens")),
+            "answer": number(usage.get("completion_tokens"))}
+
+
+def add_tokens(total, more):
+    for key in ("prompt", "cached", "answer"):
+        total[key] = total.get(key, 0) + int((more or {}).get(key) or 0)
+    return total
+
+
 class AgentBusy(AgentError):
     """A hosted model is overloaded or out of quota for the moment: worth another try, or another model."""
 
@@ -294,19 +455,59 @@ class AgentBusy(AgentError):
 BUSY = re.compile(r"high demand|overloaded|try again later|temporarily|unavailable|rate limit|quota|resource.exhausted", re.IGNORECASE)
 
 
+DIRECTION_CHARS = 3000   # the durable notes of a conversation, kept whole and sent with every message
+
+COMPACT = """You keep the notes of a film studio's assistant. Fold the conversation into the Direction: short durable notes
+that the assistant reads before every message, in place of the old turns. Keep: what is being made and for whom, the style
+and look, the people and places with the names they were given, the shot list as agreed (numbered, one line each, marking
+which are made), the length and shape, and what the user turned down or insisted on. Keep names exactly. Drop greetings,
+repeats and anything that was changed later. Plain lines, no more than 2,500 characters. Write only the notes."""
+
+
+PREFLIGHT_CHARS = 40_000   # how much of a skill the check reads: the inputs and the rules come first in a skill
+
+PREFLIGHT = """You check whether a studio's assistant can start the work a skill describes. The skill is a procedure someone wrote;
+it may say what must be in hand before it starts, and it may name models and tools. Decide from the skill, what the studio can
+do, what is attached, the conversation so far and the new message.
+- "missing": what the skill itself says it must have before it starts and the user has not given: files (audio, video, images),
+  a script or text, a link. Only what the skill really requires, in the skill's own words. A script, an article or any text is
+  given when it is pasted in the conversation (a few lines at least) or attached as a text (a document the user uploaded);
+  audio, video and images are given only when attached or already in the project. Never treat a summary as the thing itself.
+  An attached sound is the audio the skill asks for, and an attached text the script, unless what is said of it shows it is
+  something else (a sound of a few seconds is no episode; a text that begins like a list or a letter is no script). A file's
+  name proves nothing either way, and whether a sound is the "final mix" cannot be heard here: take the user's word for it.
+- "unsupported": parts the skill depends on that the studio cannot do: anything that "What the studio can do" does not list
+  (a workflow, a tool, an ability), judged by what it does, not by its name: a skill's own tool names (ffmpeg jobs, a sandbox, a
+  state store, structured questions) are supported when the list has a tool that does the same. Name each plainly. Leave out
+  what a plain generation, edit or timeline step can stand in for only when the skill does not insist on it.
+- If the conversation shows the user was already told about a gap and chose to go on (or gave the thing now), it is not blocking
+  any more: say in "adaptation" what will be done instead, in one or two sentences.
+- "ready" is true only when nothing is missing and every unsupported part has been agreed or is not essential.
+- "message": what to say to the user when not ready. Plain and short. First ask for exactly what is missing, as a list. Then
+  say what this studio cannot do from the skill and what it can do instead, and ask whether to go on that way. No plan, no
+  promises of work."""
+
+
+def clean_direction(text):
+    """The direction as kept: one string, lines trimmed, at most DIRECTION_CHARS."""
+    if not isinstance(text, str):
+        return ""
+    return chr(10).join(line.rstrip() for line in text.strip().splitlines())[:DIRECTION_CHARS]
+
+
 def reply_format(workflow_ids):
     """The JSON shape the model must answer in."""
     # Every field is required so the model has to decide each one; values a workflow can't take are dropped later.
     step = {"type": "object", "required": ["tool", "workflow", "name", "prompt", "resolution", "orientation", "duration", "clips",
                                            "start_from", "after", "uses", "source", "start", "end", "parts", "audio", "replace", "scenes", "look",
-                                           "choices", "why"], "properties": {
-        "tool": {"type": "string", "enum": ["generate", *EDIT_TOOLS, SOUND_TOOL, *MOTION_TOOLS]},
+                                           "choices", "keep", "shot_size", "angle", "move", "end_state", "why"], "properties": {
+        "tool": {"type": "string", "enum": ["generate", *EDIT_TOOLS, SOUND_TOOL, ASSEMBLE_TOOL, *MOTION_TOOLS]},
         "workflow": {"type": "string", "enum": workflow_ids},
         "name": {"type": "string"},
         "prompt": {"type": "string"},
         "resolution": {"type": "integer"},
         "orientation": {"type": "string", "enum": list(ORIENTATIONS)},
-        "duration": {"type": "integer"},
+        "duration": {"type": "number"},
         "clips": {"type": "integer"},
         "start_from": {"type": "integer"},
         "after": {"type": "integer"},
@@ -324,10 +525,21 @@ def reply_format(workflow_ids):
         "look": {"type": "string", "enum": list(sequence.LOOKS)},
         "choices": {"type": "array", "items": {"type": "object", "required": ["setting", "value"],
                                                "properties": {"setting": {"type": "string"}, "value": {"type": "string"}}}},
+        "leave_out": {"type": "array", "items": {"type": "integer"}},
+        "keep": {"type": "object", "required": ["as", "name"], "properties": {
+            "as": {"type": "string", "enum": ["", "character", "outfit", "location", "prop", "voice", "style"]}, "name": {"type": "string"}}},
+        "shot_size": {"type": "string", "enum": camera.choices("shot_size")},
+        "angle": {"type": "string", "enum": camera.choices("angle")},
+        "move": {"type": "string", "enum": camera.choices("move")},
+        "end_state": {"type": "string"},
         "why": {"type": "string"},
     }}
-    return {"type": "object", "required": ["thought", "reply", "steps"], "properties": {
-        "thought": {"type": "string"}, "reply": {"type": "string"}, "steps": {"type": "array", "items": step}}}
+    # "question": one the run must stop for, answered by a button (two to four short options); "" and [] otherwise
+    question = {"type": "object", "required": ["text", "options"], "properties": {
+        "text": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}}}
+    return {"type": "object", "required": ["thought", "reply", "steps", "direction", "question"], "properties": {
+        "thought": {"type": "string"}, "reply": {"type": "string"}, "steps": {"type": "array", "items": step},
+        "direction": {"type": "string"}, "question": question}}
 
 
 def service(sid, name, url, key, models="", only=""):
@@ -352,13 +564,84 @@ class Agent:
     services that have a key set, such as Kimi and Gemini. A hosted model is named "<service id>/<model>",
     for example "gemini/gemini-3.8-flash"; the user picks one by name."""
 
-    def __init__(self, url, model="", services=(), local=""):
+    def __init__(self, url, model="", services=(), local="", options=None):
         self.url = url.rstrip("/")
         self.model = model
         # The local models to offer, when not every model Ollama has (it may also hold models for other uses).
         self.local = [m.strip() for m in str(local or "").split(",") if m.strip()]
         self.services = {s["id"]: s for s in services if s["url"] and s["key"]}   # without a key a service is not offered
-        self.http = httpx.AsyncClient(timeout=httpx.Timeout(180, connect=5))
+        # How local models are run (config.json: ollama_context, ollama_timeout, ollama_keep_alive, ollama_vision_model,
+        # ollama_fast_model, ollama_think, local_tools).
+        options = options or {}
+        self.context = max(4096, int(options.get("context") or LOCAL_CONTEXT))
+        self.keep_alive = str(options.get("keep_alive") or "2h")
+        self.vision = str(options.get("vision") or "").strip()
+        self.fast = str(options.get("fast") or "").strip()
+        self.think = bool(options.get("think"))
+        self.tools = options.get("tools", True) is not False
+        self.seen = {}   # local model -> what it can do ("vision", "tools", "thinking"), as Ollama says
+        self.http = httpx.AsyncClient(timeout=httpx.Timeout(max(60, int(options.get("timeout") or 600)), connect=5))
+        self.gpu = gpu.Gate(lambda: False)   # the GPU it may share with the renders (main.py sets the real one)
+        self.recorder = None   # writes down each call (traces.Recorder; main.py sets it)
+
+    def is_local(self, model):
+        return self._service_of(model or self.model)[0] is None
+
+    def uses_tools(self, model):
+        """Whether a model works in the loop of tool calls: a hosted one always, a local one unless local_tools is off."""
+        return not self.is_local(model) or self.tools
+
+    def reads(self, model):
+        """The tokens a local model reads at once: ollama_context, the same for every model (the user's choice)."""
+        return self.context
+
+    def skill_room(self, model):
+        """How many characters of a skill a model is given whole; a longer skill is read in parts (read_skill)."""
+        return None if not self.is_local(model) else int(self.reads(model) * CHARS_PER_TOKEN * SKILL_SHARE)
+
+    async def smallest(self):
+        """The smallest local model Ollama has, for a small job no one chose a model for (a caption): it loads fastest.
+        None when Ollama has none, or cannot be reached."""
+        try:
+            local = await self._local_models()
+        except AgentError:
+            return None
+        return min(local, key=lambda n: self.sizes.get(n) or 0) if local else None
+
+    def helper(self, model):
+        """The model for the small jobs (a caption, the notes, the check of a skill): the fast local model
+        when one is set and a local model is in use, else the one in use."""
+        return self.fast if self.fast and self.is_local(model) else model
+
+    async def abilities(self, name):
+        """What a local model can do, as Ollama says ({"vision", "tools", "thinking", ...}); remembered."""
+        if name not in self.seen:
+            try:
+                shown = (await self.http.post(self.url + "/api/show", json={"model": name})).json()
+                found = set(shown.get("capabilities") or [])
+                if not found and "clip" in ((shown.get("details") or {}).get("families") or []):
+                    found = {"completion", "vision"}   # an older Ollama: a model with an image encoder can see
+                self.seen[name] = found
+            except (httpx.HTTPError, ValueError, AttributeError):
+                return set()
+        return self.seen[name]
+
+    async def seeing(self, model):
+        """The model that looks at pictures for this one: itself when it can see (or is hosted), else ollama_vision_model,
+        else the first local model that can see. Raises AgentError when no local model can."""
+        if not self.is_local(model) or "vision" in await self.abilities(model):
+            return model
+        if self.vision and "vision" in await self.abilities(self.vision):   # the one set, while Ollama still has it
+            return self.vision
+        try:
+            every = [m["name"] for m in (await self.http.get(self.url + "/api/tags")).json().get("models") or [] if m.get("name")]
+        except (httpx.HTTPError, ValueError, AttributeError):
+            every = []
+        offered = [m for m in every if not self.local or m in self.local]
+        for name in offered + [m for m in every if m not in offered]:
+            if "vision" in await self.abilities(name):
+                return name
+        raise AgentError("No local model can look at pictures. Pull one that can (a vision model) in Ollama, or set ollama_vision_model.")
 
     def hosted(self):
         """The hosted services that are set up: [{"id", "name"}]."""
@@ -399,20 +682,47 @@ class Agent:
         return (local or []) + hosted
 
     async def pick_model(self, wanted=None):
-        """The model to use: the one asked for if there is such a model, else the configured one, else the first one there."""
-        if not wanted and self.model:
-            return self.model
-        names = await self.models()
+        """The model to use: the one asked for if Ollama (or a hosted service) has it, else the configured one if it is
+        there, else the first one there is. Models come and go as they are pulled and removed: none is assumed."""
+        try:
+            names = await self.models()
+        except AgentError:
+            if wanted or self.model:
+                return wanted or self.model   # the server is not answering: the call itself says so
+            raise
         if not names:
-            raise AgentError("There is no model for the agent. Pull one in Ollama (ollama pull qwen3.5:9b) or set an API key.")
-        return wanted if wanted in names else self.model or names[0]
+            raise AgentError("There is no model for the agent. Pull one in Ollama (ollama pull <model>) or set an API key.")
+        return next((name for name in (wanted, self.model) if name and name in names), names[0])
 
-    async def chat(self, messages, answer_format, context=None, model=None, images=()):
+    async def chat(self, messages, answer_format, context=None, model=None, images=(), think=False, purpose="plan"):
+        """_chat, written down (traces.py) as a call made for `purpose`: how long it took, what it cost, what it chose."""
+        started = time.time()
+        try:
+            answer = await self._chat(messages, answer_format, context, model, images, think)
+        except Exception as error:
+            self._record(purpose, None, model, started, messages, answer_format, images, error=str(error) or type(error).__name__)
+            raise
+        self._record(purpose, answer.get("_model"), model, started, messages, answer_format, images, content=answer,
+                     usage=answer.get("_usage"), tool=answer.get("tool"))
+        return answer
+
+    def _record(self, purpose, model, asked, started, messages, answer_format, images, **found):
+        if self.recorder is None:
+            return
+        try:
+            kept = [*messages[:-1], dict(messages[-1], images=list(images))] if images else messages
+            self.recorder.record(purpose, model, asked, started, kept, answer_format, **found)
+        except Exception as error:   # a record that can't be written must not cost the user their answer
+            print("The agent's call could not be recorded: {}".format(error))
+
+    async def _chat(self, messages, answer_format, context=None, model=None, images=(), think=False):
         """Send messages to the model and return its answer, which has to be JSON of the given shape.
         context: room for the conversation in tokens, when the instructions are longer than a local model's default.
         model: the model the user picked; the usual one when it is not given or not there.
         images: JPEG pictures (base64) the model looks at with the last message. A model that cannot see fails."""
         model = await self.pick_model(model)
+        if images:   # a local model that cannot see hands the pictures to one that can
+            model = await self.seeing(model)
         hosted, name = self._service_of(model)
         stood_in = None
         # Ollama takes pictures beside the words of a message; the OpenAI chat API takes them as parts of its content.
@@ -421,16 +731,16 @@ class Agent:
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + picture}} for picture in images)])] if images else messages
         if hosted:
             try:
-                content = await self._ask_hosted(hosted, name, hosted_messages, answer_format)
+                content, usage = await self._ask_hosted(hosted, name, hosted_messages, answer_format)
             except AgentBusy:
                 # The hosted model is busy and a second try did not help: the smallest local model answers instead.
                 local = await self._local_models()
                 if not local:
                     raise
                 stood_in = min(local, key=lambda n: self.sizes.get(n) or 0)
-                content = await self._ask_local(stood_in, local_messages, answer_format, context)
+                content, usage = await self._ask_local(stood_in, local_messages, answer_format, context)
         else:
-            content = await self._ask_local(model, local_messages, answer_format, context)
+            content, usage = await self._ask_local(model, local_messages, answer_format, context, think=think and self.think)
         try:
             answer = json.loads(_unfenced(content))
         except (ValueError, TypeError):
@@ -440,20 +750,49 @@ class Agent:
         if stood_in:
             answer["_stood_in"] = "{} was busy, so {} answered.".format(hosted["name"], stood_in)
         answer["_model"] = stood_in or model   # what the message is charged at
+        answer["_usage"] = usage
         return answer
 
-    async def _ask_local(self, model, messages, answer_format, context):
-        options = {"temperature": 0.4, **({"num_ctx": context} if context else {})}
-        try:
-            response = await self.http.post(self.url + "/api/chat", json={
-                "model": model, "stream": False, "think": False, "format": answer_format,
-                "options": options, "messages": messages})
-            body = response.json()
-        except (httpx.HTTPError, ValueError):
-            raise AgentError("The agent's model server (Ollama) can't be reached at {}.".format(self.url))
+    async def _ask_local(self, model, messages, answer_format, context, think=False):
+        # One context size for every call. Without one Ollama cuts a long prompt from its start (the instructions), and a
+        # call with another size than the last makes it load the model again and lose what it had already read.
+        size = max(self.context, context or 0)
+        # Ollama does not refuse a prompt longer than its context: it drops the start, which is the instructions. So a
+        # prompt that cannot fit is refused here, saying what to do, instead of being answered without them.
+        guess = sum(len(str(m.get("content") or "")) for m in messages) / CHARS_PER_TOKEN
+        if guess > size * 0.97:
+            raise AgentError("This message is too long for {}: about {:,} tokens, and it reads {:,}. Compact the conversation, "
+                             "or give it a larger context (ollama_context in config.json).".format(model, int(guess), size))
+        # Thinking is asked only of a model that can think: Ollama refuses it from one that cannot.
+        think = bool(think) and "thinking" in await self.abilities(model)
+        payload = {"model": model, "stream": False, "think": think, "format": answer_format, "keep_alive": self.keep_alive,
+                   "options": {"temperature": 0.4, "num_ctx": size}, "messages": messages}
+        async with self.gpu.use("llm"):
+            body = await self._post_local(model, payload)
         if body.get("error"):
             raise AgentError("The agent's model failed: {}".format(str(body["error"])[:200]))
-        return (body.get("message") or {}).get("content")
+        usage = {"prompt": int(body.get("prompt_eval_count") or 0), "cached": 0, "answer": int(body.get("eval_count") or 0)}
+        return (body.get("message") or {}).get("content"), usage
+
+    async def _post_local(self, model, payload):
+        """Send one chat to Ollama, trying again while it starts or loads the model."""
+        for wait in (*LOAD_RETRIES, None):
+            try:
+                body = (await self.http.post(self.url + "/api/chat", json=payload)).json()
+            except httpx.TimeoutException:
+                raise AgentError("{} took longer than {:.0f} s to answer. Raise ollama_timeout in config.json, or use a quicker "
+                                 "model.".format(model, self.http.timeout.read or 0))
+            except (httpx.HTTPError, ValueError):
+                if wait is None:
+                    raise AgentError("The agent's model server (Ollama) can't be reached at {}.".format(self.url))
+                await asyncio.sleep(wait)   # it may be starting
+                continue
+            problem = str(body.get("error") or "")
+            if problem and wait is not None and re.search(r"load|busy|try again|unavailable|server.*(overload|not ready)", problem, re.I):
+                await asyncio.sleep(wait)   # the model is being loaded, or another call has it
+                continue
+            break
+        return body
 
     async def _ask_hosted(self, s, model, messages, answer_format):
         """Ask a model of the hosted service `s` through the OpenAI chat API. It is told the shape of the answer in
@@ -474,7 +813,7 @@ class Agent:
             problem = answer.get("error") if isinstance(answer, dict) else "an answer that can't be read"
             if not problem and response.status_code < 400:
                 try:
-                    return answer["choices"][0]["message"]["content"]
+                    return answer["choices"][0]["message"]["content"], tokens_of(answer)
                 except (KeyError, IndexError, TypeError):
                     raise AgentError("{} gave an answer that can't be read. Try again.".format(s["name"]))
             said = str(problem.get("message") if isinstance(problem, dict) else problem or response.status_code)
@@ -490,30 +829,12 @@ class Agent:
                 raise AgentError("{} refused the API key. Check it in config.json.".format(s["name"]))
             raise AgentError("{} failed: {}".format(s["name"], said[:200].replace(s["key"], "<key>")))
 
-    async def improve(self, prompt, kind="video", model=None, tips=(), project_cast=None, structure=""):
-        """A fuller version of a prompt the user wrote, for an image, a video or a music model.
-        tips: how the chosen workflow's model wants prompts written. project_cast: the project's pinned references.
-        structure: the prompt structure the new prompt follows (PROMPT_STRUCTURE)."""
-        advice = ("\nAdvice on what works with this model. Use it to shape the prompt, but never mention the advice, "
-                  "reference images or consistency in the prompt itself:\n{}\n").format("\n".join("- " + str(t)[:220] for t in tips[:6])) if tips else ""
-        system = IMPROVE.format(kind=kind, tips=advice, **IMPROVE_KINDS[kind])
-        if structure:   # the studio's prompt structure wins over "plain sentences, no headings"
-            system += "\n\n" + STRUCTURE_GUIDE.format(structure=structure)
-        message = "Project cast:\n{}\n\nPrompt:\n{}".format(cast.described(project_cast or {}) or "(none)", prompt)
-        answer = await self.chat([{"role": "system", "content": system}, {"role": "user", "content": message}],
-                                 {"type": "object", "required": ["prompt"], "properties": {"prompt": {"type": "string"}}},
-                                 **({"model": model} if model else {}))
-        better = str(answer.get("prompt") or "").strip().strip('"').strip()
-        if not better:
-            raise AgentError("The agent's model gave no prompt back. Try again.")
-        return better[:2000]
-
     async def write_scenes(self, about, model=None):
         """A whole motion graphics video written from what it is about: {"name", "look", "shape", "scenes"}.
         The scenes are as the model gave them, less the ones it made up; sequence.clean_scenes checks them."""
         message = "The video is about:\n{}".format(about)
         answer = await self.chat([{"role": "system", "content": WRITE_SCENES}, {"role": "user", "content": message}],
-                                 SCENES_FORMAT, **({"model": model} if model else {}))
+                                 SCENES_FORMAT, purpose="motion scenes", **({"model": model} if model else {}))
         return {"name": " ".join(str(answer.get("name") or "").split())[:80],
                 "look": answer.get("look") if answer.get("look") in sequence.LOOKS else "dark",
                 "shape": answer.get("orientation") if answer.get("orientation") in ORIENTATIONS else "landscape",
@@ -525,7 +846,8 @@ class Agent:
         answer = await self.chat([{"role": "system", "content": DESCRIBE},
                                   {"role": "user", "content": "The {} is called \"{}\". Describe it.".format(
                                       "video this frame is from" if kind == "video" else "picture", name or "untitled")}],
-                                 {"type": "object", "required": ["shows"], "properties": {"shows": {"type": "string"}}}, images=[picture])
+                                 {"type": "object", "required": ["shows"], "properties": {"shows": {"type": "string"}}}, images=[picture],
+                                 purpose="describe")
         shows = " ".join(str(answer.get("shows") or "").split())
         if not shows:
             raise AgentError("The agent's model gave no description back.")
@@ -544,7 +866,8 @@ class Agent:
             "checks": {"type": "array", "items": check}, "problem": {"type": "string"},
             "fix": {"type": "object", "required": ["prompt", "start_from_previous", "why"], "properties": {
                 "prompt": {"type": "string"}, "start_from_previous": {"type": "boolean"}, "why": {"type": "string"}}}}}
-        return await self.chat([{"role": "system", "content": REVIEW}, {"role": "user", "content": message}], shape, images=pictures)
+        return await self.chat([{"role": "system", "content": REVIEW}, {"role": "user", "content": message}], shape, images=pictures,
+                               purpose="review")
 
     async def caption(self, template, idea, ratio):
         """The structured JSON caption some image models are trained on, written from a plain prompt.
@@ -554,9 +877,10 @@ class Agent:
         """
         system, _, user = template.partition("[USER]")
         user = user.strip() or "TARGET IMAGE ASPECT RATIO: {{ratio}} (width:height).\nUser idea: {{original_prompt}}"
+        model = self.helper(None) or await self.smallest()
         answer = await self.chat([{"role": "system", "content": system.strip()},
                                   {"role": "user", "content": user.replace("{{ratio}}", ratio).replace("{{original_prompt}}", idea)}],
-                                 "json", context=CAPTION_CONTEXT)
+                                 "json", context=CAPTION_CONTEXT, purpose="caption", **({"model": model} if model else {}))
         answer.pop("_stood_in", None)   # a note of ours, not part of the caption
         if not answer:
             raise AgentError("The agent's model gave no caption back. Try again.")
@@ -566,13 +890,131 @@ class Agent:
         """One question to the model; returns its answer as {"thought": str, "reply": str, "steps": [...]}.
         history: the earlier turns of the conversation, as {"role", "content"} messages."""
         answer = await self.chat([{"role": "system", "content": system}, *history, {"role": "user", "content": message}],
-                                 reply_format(workflow_ids), **({"model": model} if model else {}))
-        steps = answer.get("steps")
-        reply = str(answer.get("reply") or "").strip()[:1200]
-        if answer.get("_stood_in"):   # say so when another model answered than the one that was picked
-            reply = "{} ({})".format(reply, answer["_stood_in"]).strip()
-        thought = str(answer.get("thought") or "").strip()[:800]   # shown folded above the reply
-        return {"thought": thought, "reply": reply, "steps": steps if isinstance(steps, list) else [], "model": answer.get("_model")}
+                                 reply_format(workflow_ids), think=True, **({"model": model} if model else {}))
+        return dict(shaped(answer), tokens=add_tokens({}, answer.get("_usage")))
+
+    async def ask_with_tools(self, system, message, workflow_ids, tools, finishing=None, model=None, rounds=TOOL_ROUNDS):
+        """The same question as ask(), answered in a loop of tool calls: the model looks things up, checks its shots and
+        only then finishes. tools: {name: async function(call) -> str}, called with the model's answer; what it returns
+        goes back to the model. finishing: async function(answer) -> a hint, when the finishing answer is wrong; the
+        model is then asked to put it right. Nothing is made in the loop: the steps it ends with still wait for Approve.
+        Returns what ask() returns, and "tools": the names of the tools it used.
+
+        A local model calls its tools in a small shape ({"tool", "args"}) and gives its plan in a call of its own when it
+        finishes: one large shape for every call is slow for it, and easy to get wrong. A long run is kept within a local
+        model's context by shortening the oldest tool results."""
+        compact = self.is_local(model)   # by its name: a hosted model is "<service>/<name>"
+        messages = [{"role": "system", "content": system + "\n\n" + TOOL_RULES + ("\n\n" + COMPACT_RULES if compact else "")},
+                    {"role": "user", "content": message}]
+        shape, used, tokens = compact_tool_format(tools) if compact else tool_format(workflow_ids), [], {}
+        answer, fixes, noticed = {}, 0, []
+        for round_ in range(1, rounds + 1):
+            if compact:
+                self._fit(messages, model)
+            asked = await self.chat(messages, shape, model=model, think=True)
+            add_tokens(tokens, asked.get("_usage"))
+            if compact:
+                args = asked.get("args") if isinstance(asked.get("args"), dict) else {}
+                call_in = {k: args.get(k) for k in CALL_FIELDS if args.get(k) not in ("", None)}
+                call_in["steps"] = args.get("steps") if isinstance(args.get("steps"), list) else []
+                call_in["tool"] = asked.get("tool")
+            else:
+                call_in = asked
+            name = call_in.get("tool") if call_in.get("tool") in tools else "finish"
+            last = round_ == rounds
+            if name == "finish":
+                if compact:   # the plan itself, in its own call with the plan's shape
+                    self._fit(messages, model)
+                    answer = await self.chat(messages + [{"role": "user", "content": FINISH_NOW}], reply_format(workflow_ids),
+                                             model=model, think=True)
+                    add_tokens(tokens, answer.get("_usage"))
+                else:
+                    answer = asked
+                # A plan it cannot put right after FIX_ROUNDS hints stands as it is: what cannot run is left out.
+                # An answer with nothing in it (a model that stops while it means to go on) is sent back first.
+                # (a local model always sends a question, {"text": "", "options": []} when it has none to ask)
+                empty = not str(answer.get("reply") or "").strip() and not answer.get("steps") and not clean_question(answer.get("question"))
+                if last or fixes >= FIX_ROUNDS:
+                    hint = None
+                elif empty:
+                    hint = EMPTY_FINISH.format(" ".join(str(answer.get("thought") or "").split())[:400] or "nothing")
+                    noticed.append("empty")
+                else:
+                    hint = await finishing(answer) if finishing else None
+                if not hint:
+                    break
+                fixes += 1
+                result = hint
+                call = {"steps": answer.get("steps") if isinstance(answer.get("steps"), list) else []}
+            else:
+                try:
+                    result = await tools[name](call_in)
+                except (KeyError, ValueError, TypeError):
+                    result = "That call could not be run. Check its fields."
+                call = {k: call_in[k] for k in CALL_FIELDS if call_in.get(k) not in ("", 0, None)}
+                if name == "check_shots":
+                    call["steps"] = call_in.get("steps") if isinstance(call_in.get("steps"), list) else []
+                if not compact:   # a hosted model's every call carries a whole answer: the last one stands if the rounds run out
+                    answer = asked
+            used.append(name)
+            messages += [{"role": "assistant", "content": json.dumps(dict(call, tool=name), ensure_ascii=False)[:6000]},
+                         {"role": "user", "content": "Result of {}:\n{}".format(name, str(result)[:TOOL_RESULT])}]
+        if not answer.get("reply") and not answer.get("steps") and compact and name != "finish":
+            # the rounds ran out while it was still working: it gives its answer now, from what it has
+            self._fit(messages, model)
+            answer = await self.chat(messages + [{"role": "user", "content": FINISH_NOW}], reply_format(workflow_ids), model=model)
+            add_tokens(tokens, answer.get("_usage"))
+        return dict(shaped(answer), tools=used, tokens=tokens, empty_sent_back=len(noticed))
+
+    def _fit(self, messages, model=None):
+        """Keep a long run within a local model's context: the oldest tool results are shortened first (the newest
+        KEEP_RESULTS stay whole), as the instructions and the question must stay as they are."""
+        room = int(self.reads(model or self.model) * CHARS_PER_TOKEN * 0.9)
+        size = lambda: sum(len(str(m.get("content") or "")) for m in messages)
+        results = [i for i, m in enumerate(messages) if m["role"] == "user" and str(m["content"]).startswith("Result of ")]
+        for i in results[:-KEEP_RESULTS] if len(results) > KEEP_RESULTS else []:
+            if size() <= room:
+                return
+            content = messages[i]["content"]
+            if len(content) > 500:
+                messages[i] = dict(messages[i], content=content[:400] + "\n[... shortened to keep within the model's context: call the tool again if you need it]")
+
+    async def preflight(self, skill, instruction, attached, available, turns=(), model=None):
+        """Whether a skill can be started: {"ready", "missing", "unsupported", "adaptation", "message"}. skill: the skill as
+        skills.load() gives it. attached: lines naming what is attached and what the asset book holds. available: what the
+        studio can do (workflows and tools). turns: the conversation so far, from past_turns()."""
+        said = "\n".join("{}: {}".format("User" if t["role"] == "user" else "You", t["content"]) for t in turns)
+        message = ("The skill \"{}\":\n{}\n\nWhat the studio can do:\n{}\n\nAttached to the message and kept in the project:\n{}\n\n"
+                   "The conversation so far:\n{}\n\nThe user's new message:\n{}").format(
+            skill["title"], skill["text"][:self._preflight_chars(model)], available, attached or "(nothing)", said or "(none)", instruction)
+        shape = {"type": "object", "required": ["ready", "missing", "unsupported", "adaptation", "message"], "properties": {
+            "ready": {"type": "boolean"}, "missing": {"type": "array", "items": {"type": "string"}},
+            "unsupported": {"type": "array", "items": {"type": "string"}}, "adaptation": {"type": "string"}, "message": {"type": "string"}}}
+        answer = await self.chat([{"role": "system", "content": PREFLIGHT}, {"role": "user", "content": message}], shape,
+                                 purpose="skill check", **({"model": self.helper(model)} if self.helper(model) else {}))
+        lists = {k: [" ".join(str(x).split())[:200] for x in answer.get(k) or [] if str(x).strip()][:8] for k in ("missing", "unsupported")}
+        ready = answer.get("ready") is True and not lists["missing"]
+        return {"ready": ready, **lists, "adaptation": " ".join(str(answer.get("adaptation") or "").split())[:600],
+                "message": str(answer.get("message") or "").strip()[:1500]}
+
+    def _preflight_chars(self, model):
+        """How much of a skill its check reads: its first PREFLIGHT_CHARS, or what the checking model holds, if less."""
+        room = self.skill_room(self.helper(model))
+        return PREFLIGHT_CHARS if room is None else min(PREFLIGHT_CHARS, room)
+
+    async def compact(self, turns, direction="", model=None):
+        """The conversation boiled down to a Direction: the durable notes (what the film is, the style, the people, the
+        shot list, what was turned down) that replace the old turns. turns: from past_turns(). Returns the new text."""
+        said = "\n".join("{}: {}".format("User" if t["role"] == "user" else "You", t["content"]) for t in turns)
+        message = "Current direction:\n{}\n\nConversation to fold in, oldest first:\n{}\n\nWrite the new direction.".format(
+            direction or "(none yet)", said or "(nothing)")
+        answer = await self.chat([{"role": "system", "content": COMPACT}, {"role": "user", "content": message}],
+                                 {"type": "object", "required": ["direction"], "properties": {"direction": {"type": "string"}}},
+                                 purpose="compact", **({"model": self.helper(model)} if self.helper(model) else {}))
+        text = clean_direction(answer.get("direction"))
+        if not text:
+            raise AgentError("The agent's model gave no summary back. Try again.")
+        return text
 
 
 # Words that show an instruction is about the items the user selected. Without any, the selection is left out of the
@@ -589,7 +1031,7 @@ def points_at_selection(instruction):
     return bool(POINTS.search(instruction)) or not instruction.isascii()
 
 
-FITS = cast.FITS   # what a reference slot of each kind can be filled with from the library
+FITS = kit.FITS   # what a reference slot of each kind can be filled with from the library
 
 
 def offer(schema, attached=True):
@@ -599,17 +1041,23 @@ def offer(schema, attached=True):
     roles = {c["role"]: c for c in schema["controls"] if c["role"]}
     first_frame = (schema.get("slots") or {}).get("first_frame")
     required = [r for r in schema["refs"] if not r["optional"] and r["id"] != first_frame]
-    if "prompt" not in roles or (required and not attached):
-        return None
+    if ("prompt" not in roles and not required) or (required and not attached):
+        return None   # a workflow with no prompt works on a file it is given: without one it makes nothing
     needs_start = any(not r["optional"] and r["id"] == first_frame for r in schema["refs"])
     info = {"id": schema["id"], "title": schema["title"], "makes": schema["id"].split("/", 1)[0], "about": schema["description"][:200]}
+    if "prompt" not in roles:
+        info["prompt"] = "none: it works on the files it is given; leave the step's prompt empty"
+    elif schema.get("prompt_optional"):
+        info["prompt"] = "optional: notes only, may be empty"
     if schema.get("size") or "resolution" in roles:
         info["resolutions"] = schema["resolutions"]
     if schema.get("size"):
         info["default_resolution"] = schema["size"]["resolution"]
         info["orientation"] = "landscape, portrait or square; default " + schema["size"]["orientation"]
     if "duration" in roles:
-        info["duration_seconds"] = "{} to {}: decide it from the shot (default {:g})".format(*SHOT_SECONDS, roles["duration"]["default"])
+        info["duration_seconds"] = "{} to {}: decide it from the shot (default {:g}){}".format(
+            *SHOT_SECONDS, roles["duration"]["default"],
+            "; decimals allowed: the clip has round(24 x seconds) frames" if roles["duration"]["type"] == "float" else "")
     choosable = choosable_settings(schema)
     if choosable:
         info["settings"] = choosable
@@ -636,7 +1084,16 @@ def choosable_settings(schema):
              for o in schema["options"]]
     found += [{"setting": c["id"], "about": c["label"][:90], "default": str(c["default"]), "choices": [{"value": str(v)} for v in c["choices"]]}
               for c in schema["controls"] if not c["role"] and c.get("choices")]
+    # Switches and words the workflow takes (lips follow the voice, the frames where shots cut, a song's lyrics, a
+    # script): the model may set them too. Number knobs (steps, cfg) are left as the workflow has them.
+    found += [{"setting": c["id"], "about": c["label"][:120], "default": str(c["default"])[:80],
+               "value": "true or false" if c["type"] == "bool" else "any words"}
+              for c in schema["controls"] if not c["role"] and not c.get("choices") and c["type"] in FREE_TYPES]
     return found
+
+
+FREE_TYPES = ("bool", "string", "text")   # the kinds of a workflow's setting the model may set to its own value
+FREE_CHARS = 4000
 
 
 # Words in quotation marks: "double", curly, ‘single curly’ or 'single'. A single quote must not touch a letter on its
@@ -661,6 +1118,7 @@ def apply_choices(schema, settings, choices):
     """Put the settings the model chose into job settings, keeping only settings the workflow has and values it offers."""
     options = {o["id"]: {c["id"] for c in o["choices"]} for o in schema["options"]}
     controls = {c["id"]: c["choices"] for c in schema["controls"] if not c["role"] and c.get("choices")}
+    free = {c["id"]: c["type"] for c in schema["controls"] if not c["role"] and not c.get("choices") and c["type"] in FREE_TYPES}
     # A model sometimes names a setting by its label ("speed") instead of its id ("mode").
     labels = {o["label"].strip().lower(): o["id"] for o in schema["options"]}
     for choice in choices if isinstance(choices, list) else []:
@@ -675,6 +1133,12 @@ def apply_choices(schema, settings, choices):
             match = next((v for v in controls[key] if str(v) == value), None)
             if match is not None:
                 settings["values"][key] = match
+        elif key in free:
+            if free[key] == "bool":
+                if value.lower() in ("true", "false", "on", "off", "yes", "no"):
+                    settings["values"][key] = value.lower() in ("true", "on", "yes")
+            else:
+                settings["values"][key] = str(choice.get("value") or "")[:FREE_CHARS]
 
 
 def uses_for(schema, step, selection, assets=None):
@@ -719,6 +1183,18 @@ def uses_for(schema, step, selection, assets=None):
             continue   # a video that starts and ends on the same picture does not move
         taken.add(slot["id"])
         used.append({"id": use["item"], "name": item["name"], "slot": slot["id"], "label": slot["label"].split(" (")[0], "kind": slot["kind"]})
+    # A workflow that works on a sound or a video (separate a voice, transcribe, lip sync) must be given it, and a model
+    # often leaves the slot out: the item the step names in "audio" or "source" fills it, or else the only one of that
+    # kind there is. Pictures are never guessed: there are usually several.
+    for slot in slots.values():
+        if slot["optional"] or slot["id"] in taken or slot["kind"] not in ("audio", "video") or slot["id"] == named.get("first_frame"):
+            continue
+        fits = [iid for iid, item in selection.items() if item["kind"] == slot["kind"] and all(u["id"] != iid for u in used)]
+        wanted = step.get("audio" if slot["kind"] == "audio" else "source")
+        pick = wanted if wanted in fits else fits[0] if len(fits) == 1 else None
+        if pick is not None:
+            taken.add(slot["id"])
+            used.append({"id": pick, "name": selection[pick]["name"], "slot": slot["id"], "label": slot["label"].split(" (")[0], "kind": slot["kind"]})
     return used
 
 
@@ -779,14 +1255,21 @@ EMPTY_CLAIM = "I didn't put a plan together that time, so nothing was made. Say 
 
 
 def past_turns(history):
-    """The last few turns the browser sent, as chat messages. Anything that is not text is left out."""
+    """The earlier turns the browser sent, as chat messages, the newest that fit in HISTORY_CHARS. Anything that is not
+    text is left out. A turn says what it planned and which assets each step used, so "use those three" still knows."""
     turns = []
     for turn in history[-MAX_HISTORY:] if isinstance(history, list) else []:
         if not isinstance(turn, dict):
             continue
         said, answered = str(turn.get("instruction") or "").strip(), str(turn.get("reply") or "").strip()
         if said and answered:
-            planned = [str(name)[:80] for name in turn.get("steps") or [] if isinstance(name, str)][:MAX_STEPS]
+            planned = []
+            for step in (turn.get("steps") or [])[:MAX_STEPS]:
+                if isinstance(step, str):
+                    planned.append(step[:80])
+                elif isinstance(step, dict) and step.get("name"):
+                    used = [str(u)[:60] for u in step.get("uses") or [] if isinstance(u, str)][:6]
+                    planned.append(str(step["name"])[:80] + (" using " + ", ".join(used) if used else ""))
             # A reply that came without a plan made nothing, whatever its words said ("Generating it now"): the model
             # is told so, or it believes the work was done and only talks about it from then on.
             if planned:
@@ -794,10 +1277,22 @@ def past_turns(history):
             elif CLAIMS.search(answered):
                 answered += "\n(No plan with this reply: nothing was made or queued.)"
             turns += [{"role": "user", "content": said[:2000]}, {"role": "assistant", "content": answered[:1500]}]
+    size = 0
+    for start in range(len(turns) - 2, -1, -2):   # from the newest pair back, while they fit
+        size += len(turns[start]["content"]) + len(turns[start + 1]["content"])
+        if size > HISTORY_CHARS:
+            return turns[start + 2:]
     return turns
 
 
-def question(instruction, offers, selection, default="", history=(), project_cast=None, recent=(), book=(), guides=""):
+def skills_part(guides):
+    """The skills of a message, as the model is given them: in the message, or first in the system prompt (a long run)."""
+    return ("Skills for this message. A skill is a procedure the user or the studio wrote: follow it step by step, in its order, with its checks and "
+            "its rules. Do not skip what it asks for first. When it needs something the user has not given, ask for exactly that and plan nothing. "
+            "When it names a model or tool that is not in the workflows listed, say so in \"reply\" and do not swap it for another without asking:\n" + guides)
+
+
+def question(instruction, offers, selection, default="", history=(), project_cast=None, recent=(), book=(), guides="", direction=""):
     """Everything the model is given for one message. history: the earlier turns, from past_turns().
     book: the project's asset book, from memory.book(). guides: the skills that fit the message, from skills.guide().
 
@@ -807,12 +1302,15 @@ def question(instruction, offers, selection, default="", history=(), project_cas
     if offers[0]["id"] == default:
         offers[0] = dict(offers[0], default=True)
     said = ["{}: {}".format("User" if turn["role"] == "user" else "You", turn["content"]) for turn in history]
-    parts = ["Project cast:\n" + (cast.described(project_cast or {}) or "(none)"),
-             "Asset book, the project's memory:\n" + ("\n".join(json.dumps(entry, ensure_ascii=False) for entry in book)
+    parts = ["Always on:\n" + (kit.described(project_cast or []) or "(none)"),
+             "Asset book, the project's NeuralCore (its characters, locations, props, voices, scripts by name) and items:\n" + ("\n".join(json.dumps(entry, ensure_ascii=False) for entry in book)
                                                        or "(empty: nothing is saved for reuse yet)"),
-             *(["How to do this kind of work (follow it where it fits the message):\n" + guides] if guides else []),
+             *([skills_part(guides)] if guides else []),
              "Workflows:\n" + "\n".join(json.dumps(o) for o in offers),
-             "Conversation so far, oldest first:\n" + ("\n".join(said) or "(this is the first message)"),
+             "Direction, the notes of this conversation that you keep (they stand in for turns no longer shown; when "
+             "something durable changes, answer with the whole updated direction in \"direction\", else repeat it as it is):\n"
+             + (clean_direction(direction) or "(empty)"),
+             "Conversation so far, oldest first:\n" +("\n".join(said) or "(this is the first message)"),
              "Recent items, newest first (what was made lately in this project; for the \"sound\" tool only):\n"
              + ("\n".join(json.dumps(r) for r in recent) or "(none)"),
              "Items attached to the new message:\n" + ("\n".join(json.dumps(s) for s in selection)
@@ -835,6 +1333,26 @@ def wants_sound(instruction, history=()):
     return "ffmpeg" in instruction.lower() and bool(SOUND_WORDS.search(str(last.get("instruction") or "")))
 
 
+EMPTY_FINISH = ("You finished with no reply, no steps and no question, so the user would get nothing. You were thinking: "
+                "\"{}\". Do that now: call the tool you need next, or finish with the steps to make, a reply, or a question.")
+# A reply that says what it is about to do ("Let me check the spans first", "I need to name the speakers").
+ABOUT_TO = re.compile(r"\b(let me|let's|i need to|i will|i'll|i am going to|i'm going to|i'm now|i am now|next,? i|now i|first,? i|"
+                      r"i should|i have to|i must)\b", re.IGNORECASE)
+SAID_NOT_DONE = ("Your reply says what you are about to do (\"{}\"), but you finished without doing it: no steps, no "
+                 "question, nothing saved, so the run would stop here. Do it now: call the tools it takes (state_write, "
+                 "transcript, film, …), plan the steps, and finish again.")
+SAVE_FIRST = ("Nothing of this run is saved yet, and the next message only knows what the run state holds. Before you "
+              "finish, save what the skill says to keep at this point (the models and cutting the user chose, the inventory of "
+              "what is attached, what you worked out) with state_write, then finish again.")
+NO_SOUND_EDIT = ("the sound tool only puts an audio file on a video, and there was no video and sound to put together; to "
+                 "separate a voice, transcribe or otherwise work on a sound file, make a \"generate\" step with that workflow")
+
+
+def takes_sound(offers):
+    """The ids of the offered workflows that must be given a sound file: they work on a sound (separate, transcribe)."""
+    return {o["id"] for o in offers if any(r.get("required") and r["takes"] == "audio" for r in o.get("references") or [])}
+
+
 def sound_for(step, items):
     """Turn a proposed "sound" step into what the sound endpoint takes, or None if it can't be done.
 
@@ -853,6 +1371,33 @@ def sound_for(step, items):
     name = " ".join(str(step.get("name") or "").split())[:80] or "{} with sound".format(items[video]["name"])[:80]
     return {"name": name, "facts": "{} {} {}".format(items[sound]["name"], "in place of the sound of" if replace else "under", items[video]["name"]),
             "sound": {"video": video, "audio": sound, "replace": replace, "name": name}}
+
+
+def assemble_for(step, planned, videos, known, music_planned=False, shape=None):
+    """Turn a proposed "assemble" step into what the assemble endpoint takes, or None if there is nothing to put together.
+
+    planned: the numbers (positions in the plan) of the video shots the plan makes before this step. videos: the selected
+    videos. known: {id: {"name", "kind"}} for the music the step may name. music_planned: the step's "after" names an audio
+    step of the plan, which makes the music. shape: the orientation of the first shot. The shots of the plan come first;
+    with none, the selected videos are cut together in the order given. "scenes" may hold a "title" and an "end" card."""
+    if not planned and not videos:
+        return None
+    try:
+        scenes = sequence.clean_scenes([dict(s, seconds=s.get("seconds") or None) for s in step.get("scenes") or [] if isinstance(s, dict)])
+    except sequence.SequenceError:
+        scenes = []
+    card = lambda kind: next(({"kind": kind, "heading": s["heading"], "text": s["text"], "seconds": s["seconds"]} for s in scenes if s["kind"] == kind), None)
+    title, end = card("title"), card("end")
+    music = step.get("audio") if (known.get(step.get("audio")) or {}).get("kind") == "audio" else None
+    name = " ".join(str(step.get("name") or "").split())[:80] or "Final cut"
+    orientation = step.get("orientation") if step.get("orientation") in ORIENTATIONS else shape if shape in ORIENTATIONS else "landscape"
+    count = len(planned) + (0 if planned else len(videos))
+    parts = ["{} {}".format(count, "shot" if count == 1 else "shots"), "title card" if title else "", "music" if music or music_planned else "",
+             "end card" if end else ""]
+    return {"name": name, "facts": " · ".join(p for p in parts if p),
+            "assemble": {"name": name, "steps": list(planned), "clips": [{"id": v["id"], "start": 0, "end": 0} for v in videos] if not planned else [],
+                         "music": music, "title": title, "end": end, "shape": orientation,
+                         "look": step.get("look") if step.get("look") in sequence.LOOKS else "dark"}}
 
 
 def motion_for(step, videos):
@@ -992,14 +1537,18 @@ def settings_for(schema, step, selection_ids, project_id, filled=(), used_items=
     roles = {c["role"]: c for c in schema["controls"] if c["role"]}
     # A section of the prompt structure with nothing in it ("REFERENCES:" on its own) says nothing to the video model.
     prompt = "\n".join(line for line in str(step.get("prompt") or "").strip().splitlines() if not EMPTY_SECTION.match(line)).strip()
-    if "prompt" not in roles or not prompt:
+    if "prompt" in roles and not prompt and not schema.get("prompt_optional"):
         return None
     values = {c["id"]: c["default"] for c in schema["controls"]}
-    values[roles["prompt"]["id"]] = prompt[:4000]
+    if "prompt" in roles:
+        values[roles["prompt"]["id"]] = prompt[:4000]
     if "duration" in roles:
-        asked = step.get("duration") if isinstance(step.get("duration"), int) and step.get("duration") > 0 else roles["duration"]["default"]
-        # Spoken words need their time: a shot is never shorter than its dialogue, whatever the model said.
-        seconds = max(int(asked), spoken_seconds(prompt))
+        given = step.get("duration")
+        asked = given if isinstance(given, (int, float)) and not isinstance(given, bool) and given > 0 else roles["duration"]["default"]
+        # Spoken words need their time: a shot is never shorter than its dialogue, whatever the model said. A workflow
+        # that takes decimals gets them (a clip of exactly 151 frames is 151 / 24 s); the others whole seconds.
+        seconds = max(float(asked), spoken_seconds(prompt))
+        seconds = round(seconds, 4) if roles["duration"]["type"] == "float" else int(seconds)
         values[roles["duration"]["id"]] = max(SHOT_SECONDS[0], min(SHOT_SECONDS[1], seconds))
     resolution = orientation = None
     if schema.get("size"):
@@ -1031,7 +1580,8 @@ def settings_for(schema, step, selection_ids, project_id, filled=(), used_items=
             settings["options"][option["id"]] = option["default"]
     # A workflow whose length is a list of choices (a song) gets the shortest one that covers the seconds asked for.
     length = length_control(schema)
-    if length and "duration" not in roles and isinstance(step.get("duration"), int) and step["duration"] > 0:
+    if length and "duration" not in roles and isinstance(step.get("duration"), (int, float)) and not isinstance(step.get("duration"), bool) \
+            and step["duration"] > 0:
         numbers = sorted(v for v in length["choices"] if isinstance(v, (int, float)))
         settings["values"][length["id"]] = next((v for v in numbers if v >= step["duration"]), numbers[-1]) if numbers else settings["values"][length["id"]]
     return settings, start

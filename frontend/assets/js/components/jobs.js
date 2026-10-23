@@ -1,7 +1,7 @@
 // The list of queue rows, used on the Create and Queue pages.
 
 import { api } from '../api.js';
-import { el, duration } from '../dom.js';
+import { creditsText, el, duration } from '../dom.js';
 import { refreshJobs } from '../store.js';
 
 const STATUS = { queued: 'Waiting', running: 'Running', done: 'Done', failed: 'Failed', cancelled: 'Cancelled' };
@@ -18,7 +18,7 @@ export function jobList(jobs, { limit } = {}) {
     } else if (job.status === 'queued') {
       detail = [`Position ${job.position} in the queue`, job.est_seconds && `estimated ${duration(job.est_seconds)}`].filter(Boolean).join(' · ');
     } else if (job.status === 'done') {
-      detail = `Finished in ${duration(job.finished - job.started)}` + (job.cost ? ` · ${job.cost} cr` : '');
+      detail = `Finished in ${duration(job.finished - job.started)}` + (job.cost ? ` · ${creditsText(job.cost)}` : '');
     }
     const remove = () => api('/api/jobs/' + job.id, { method: 'DELETE' }).then(refreshJobs).catch((e) => alert(e.message));
     return el('div', { class: 'job' },

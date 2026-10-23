@@ -7,12 +7,12 @@ import threading
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
-from .. import audit
+from .. import audit, staff
 from ..security import (DUMMY_HASH, MAX_PASSWORD, check_totp, client_address, hash_password, is_https, needs_rehash,
                         new_recovery_codes, new_token, new_totp_secret, recovery_hash, token_hash, totp_uri, verify_password)
-from .deps import COOKIE, current_user, limited, may_use_agent
+from .deps import CONSOLE_COOKIE, COOKIE, current_user, limited, may_use_agent
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -53,16 +53,29 @@ def on_this_machine(request):
     return host in ("127.0.0.1", "::1", "localhost") and "cf-connecting-ip" not in request.headers
 
 
-def start_session(request, response, user_id):
+def shown(state, user):
+    """The signed-in user as the studio's page gets it. An admin also gets where the admin console is, a site of its
+    own (api/console.py), for the studio's link to it: its address, or its port on the host the studio was opened at."""
+    if user["role"] in staff.ROLES and state.settings.console_port:
+        return dict(user, console={"url": state.settings.console_url, "port": state.settings.console_port})
+    return user
+
+
+def start_session(request, response, user_id, console=False, view_as=None):
+    """Sign a user in to the studio, or to the admin console (`console`): a session of that site and its cookie.
+    `view_as`: an admin viewing the studio as this user, read only, for an hour."""
     state = request.app.state
     token = new_token()
-    lifetime = state.settings.session_days * 86400
+    lifetime = VIEW_SECONDS if view_as else state.settings.console_hours * 3600 if console else state.settings.session_days * 86400
     state.db.run("DELETE FROM sessions WHERE expires < ?", (time.time(),))
-    state.db.run("INSERT INTO sessions (token_hash, user_id, created, expires) VALUES (?, ?, ?, ?)",
-                 (token_hash(token), user_id, time.time(), time.time() + lifetime))
-    # Over https the cookie is marked Secure, so the browser never sends it over plain http.
-    response.set_cookie(COOKIE, token, max_age=lifetime, httponly=True, samesite="lax",
-                        secure=state.settings.secure_cookies or is_https(request))
+    state.db.run("INSERT INTO sessions (token_hash, user_id, created, expires, console, ip, agent, seen, view_as) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (token_hash(token), user_id, time.time(), time.time() + lifetime, int(console), client_address(request),
+                  request.headers.get("user-agent", "")[:200], time.time(), view_as))
+    # Over https the cookie is marked Secure, so the browser never sends it over plain http. The console's is sent
+    # only by its own pages: no link from elsewhere arrives signed in.
+    response.set_cookie(CONSOLE_COOKIE if console else COOKIE, token, max_age=lifetime, httponly=True,
+                        samesite="strict" if console else "lax", secure=state.settings.secure_cookies or is_https(request))
 
 
 @router.get("/state")
@@ -108,7 +121,7 @@ async def register(body: dict, request: Request, response: Response):
     user = state.db.one("SELECT id, email, name, role, credits, agent FROM users WHERE id = ?", (user_id,))
     user["agent"] = may_use_agent(user)
     audit.record(request, user, "Created account", email)
-    return user
+    return shown(state, user)
 
 
 def _second_step(db, user, code):
@@ -127,8 +140,10 @@ def _second_step(db, user, code):
     return False
 
 
-@router.post("/login", dependencies=[limited("login", 20, 300, by="address")])
-async def login(body: dict, request: Request, response: Response):
+async def check_sign_in(request, body, failed="Failed sign-in"):
+    """The account whose email and password (and second step, when it is on) are in `body`. Raises when they are
+    wrong; returns (None, the answer to send) when the second step's code is missing or wrong. A wrong one goes into
+    the audit log as `failed`."""
     state = request.app.state
     email = str(body.get("email", "")).strip().lower()[:254]
     key = "{}|{}".format(email, client_address(request))
@@ -140,7 +155,7 @@ async def login(body: dict, request: Request, response: Response):
     right = await check_password(password, user["password_hash"] if user else DUMMY_HASH)
     if user is None or not right:
         state.throttle.fail(key)
-        audit.record(request, None, "Failed sign-in", email)
+        audit.record(request, None, failed, email)
         raise HTTPException(401, "Wrong email or password.")
     state.throttle.clear(key)
     if user["disabled"]:
@@ -148,21 +163,50 @@ async def login(body: dict, request: Request, response: Response):
     if user["mfa_enabled"]:
         code = str(body.get("code") or "").strip()
         if not code:
-            return JSONResponse({"detail": "Enter the 6-digit code from your authenticator app.", "mfa_required": True}, status_code=401)
+            return None, JSONResponse({"detail": "Enter the 6-digit code from your authenticator app.", "mfa_required": True}, status_code=401)
         # Five wrong codes lock the account's second step for a minute, from wherever they come.
         second = "mfa|{}".format(user["id"])
         if state.throttle.blocked(second):
             raise HTTPException(429, "Too many wrong codes. Wait a minute and try again.")
         if not _second_step(state.db, user, code):
             state.throttle.fail(second)
-            audit.record(request, None, "Failed sign-in", email, "wrong code")
-            return JSONResponse({"detail": "That code is not right. Try the newest one.", "mfa_required": True}, status_code=401)
+            audit.record(request, None, failed, email, "wrong code")
+            return None, JSONResponse({"detail": "That code is not right. Try the newest one.", "mfa_required": True}, status_code=401)
         state.throttle.clear(second)
     if needs_rehash(user["password_hash"]):   # hashed with the older, weaker settings
         state.db.run("UPDATE users SET password_hash = ? WHERE id = ?", (await new_hash(password), user["id"]))
+    return user, None
+
+
+@router.post("/login", dependencies=[limited("login", 20, 300, by="address")])
+async def login(body: dict, request: Request, response: Response):
+    user, answer = await check_sign_in(request, body)
+    if answer:
+        return answer
     start_session(request, response, user["id"])
-    audit.record(request, user, "Signed in", email)
-    return {**{k: user[k] for k in ("id", "email", "name", "role", "credits")}, "agent": may_use_agent(user)}
+    audit.record(request, user, "Signed in", user["email"])
+    return shown(request.app.state, {**{k: user[k] for k in ("id", "email", "name", "role", "credits")}, "agent": may_use_agent(user)})
+
+
+VIEW_SECONDS = 3600
+
+
+@router.get("/view/{code}")
+async def view_as(code: str, request: Request):
+    """Open the studio as a user, read only, with the one-time code an admin was given in the console
+    (api/admin.start_view). The code works once, within two minutes."""
+    state = request.app.state
+    found = state.view_codes.pop(token_hash(code), None)
+    if not found or found["expires"] < time.time():
+        return RedirectResponse("/signin", status_code=303)
+    target = state.db.one("SELECT * FROM users WHERE id = ? AND disabled = 0", (found["user_id"],))
+    admin = state.db.one("SELECT * FROM users WHERE id = ?", (found["admin_id"],))
+    if not target or not admin:
+        return RedirectResponse("/signin", status_code=303)
+    response = RedirectResponse("/projects", status_code=303)
+    start_session(request, response, target["id"], view_as=admin["id"])
+    audit.record(request, admin, "Viewed the studio as a user", target["email"], "read only, for an hour")
+    return response
 
 
 @router.post("/logout")
@@ -175,8 +219,8 @@ async def logout(request: Request, response: Response):
 
 
 @router.get("/me")
-async def me(user: dict = Depends(current_user)):
-    return user
+async def me(request: Request, user: dict = Depends(current_user)):
+    return shown(request.app.state, user)
 
 
 async def _confirm_password(request, user, password):
