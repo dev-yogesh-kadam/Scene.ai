@@ -33,6 +33,11 @@ export async function refreshStatus() {
 
 let socket = null;
 let timers = [];
+let heard = 0;   // when the live connection last said anything
+// A connection can die without closing (the computer slept, the network changed): the page would keep showing jobs as
+// they were. So it pings every PING ms, and one that has said nothing for SILENT ms is replaced, the jobs fetched anew.
+const PING = 20000;
+const SILENT = 50000;
 // Which page this tab shows, for the admin's list of who is online.
 const sayPage = () => { if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ page: here() })); };
 
@@ -40,8 +45,10 @@ export function startLive() {
   stopLive();
   const connect = () => {
     socket = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/events');
+    heard = Date.now();
     socket.onopen = sayPage;
     socket.onmessage = (e) => {
+      heard = Date.now();
       const message = JSON.parse(e.data);
       store.jobs = message.jobs;
       emit('jobs');
@@ -57,6 +64,18 @@ export function startLive() {
   window.addEventListener('scene:route', sayPage);
   refreshStatus();
   timers.push(setInterval(refreshStatus, 15000));
+  timers.push(setInterval(() => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - heard > SILENT) {   // gone quiet: the jobs fetched now, and a new connection at once
+      refreshJobs().catch(() => {});
+      const dead = socket;
+      dead.onclose = null;   // closing a dead connection may take long to say so: the new one does not wait for it
+      dead.close();
+      connect();
+      return;
+    }
+    socket.send(JSON.stringify({ ping: 1 }));
+  }, PING));
   // Fallback if the live connection is down.
   timers.push(setInterval(() => { if (!socket || socket.readyState !== WebSocket.OPEN) refreshJobs().catch(() => {}); }, 4000));
 }

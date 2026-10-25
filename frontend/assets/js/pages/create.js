@@ -281,6 +281,12 @@ export function render(view) {
     if (value instanceof File) form.refs[slot.id] = { file: value, name: value.name, url: URL.createObjectURL(value) };
     else if (value) form.refs[slot.id] = value;
     else delete form.refs[slot.id];
+    if (!value && slot.order) {   // in a list of references the ones after a removed one move up
+      const listed = form.wf.refs.filter((r) => r.order);
+      const kept = listed.map((r) => form.refs[r.id]).filter(Boolean);
+      for (const r of listed) delete form.refs[r.id];
+      kept.forEach((ref, i) => { form.refs[listed[i].id] = ref; });
+    }
     drawRefs();
   }
 
@@ -296,7 +302,9 @@ export function render(view) {
 
   function drawRefs() {
     const wf = form.wf;
-    const shown = wf.refs.filter(inUse);
+    // A list of references shows the filled boxes and one empty one, up to its maximum.
+    const filled = wf.refs.filter((r) => r.order && form.refs[r.id]).length;
+    const shown = wf.refs.filter((r) => inUse(r) && (!r.order || r.order <= filled + 1));
     if (!shown.length) { refsBlock.className = ''; return refsBlock.replaceChildren(); }
     refsBlock.className = 'form-section';
     refsBlock.replaceChildren(
@@ -326,6 +334,7 @@ export function render(view) {
           ondrop: (e) => { e.preventDefault(); e.currentTarget.classList.remove('over'); if (e.dataTransfer.files[0]) setRef(slot, e.dataTransfer.files[0]); },
         },
           el('div', { class: 'ref-label' }, slot.label + (slot.optional ? '' : ' *')),
+          slot.tag && el('div', { class: 'slot-tag', title: `The prompt calls this reference ${slot.tag}` }, 'In the prompt: ' + slot.tag),
           el('div', { class: 'ref-body' }, content),
           current && el('div', { class: 'ref-name' }, current.name),
           el('div', { class: 'ref-actions' },

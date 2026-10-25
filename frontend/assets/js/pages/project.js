@@ -6,7 +6,12 @@ import { api } from '../api.js';
 import { ask, el, icon, still, ago, initials, spill } from '../dom.js';
 import { store, subscribe } from '../store.js';
 import { projectDialog } from '../components/projects.js';
+import { shareDialog } from '../components/share.js';
 import { go } from '../nav.js';
+
+// What the user's role in the project lets them do (the server checks it too: sharing.py).
+const RANK = { viewer: 1, creator: 2, manager: 3, owner: 4 };
+const may = (role, need) => RANK[role || 'owner'] >= RANK[need];
 
 // A module with nothing in it yet gets a colour of its own, from its number, instead of an empty frame.
 const TINTS = [['#ef6b8a', '#d12f7c'], ['#6b8bef', '#3f4fd1'], ['#3fbf9a', '#14876a'], ['#f0a25a', '#d0612b'], ['#a77bef', '#6a3fd1'], ['#4fb8e8', '#1f78b8']];
@@ -23,7 +28,7 @@ export function render(view) {
   view.replaceChildren(light.node, el('div', { class: 'proj-page' }, side, el('div', { class: 'proj-main' },
     el('section', { class: 'proj-section' },
       el('div', { class: 'section-head' }, el('h2', {}, 'Modules'), el('span', { style: 'flex:1' }), search,
-        el('button', { class: 'btn primary', onclick: addModule }, icon('plus'), 'Add module')),
+        el('button', { class: 'btn primary add-module', onclick: addModule }, icon('plus'), 'Add module')),
       grid))));
 
   // A module opens on its canvas; the project's own canvas is "Main".
@@ -44,7 +49,7 @@ export function render(view) {
     el('div', { class: 'pcard-info' },
       el('b', { title: m.name }, m.name),
       el('span', { class: 'muted small' }, `${m.items === 1 ? '1 item' : `${m.items} items`} · ${ago(m.updated || m.created)}`)),
-    el('div', { class: 'pcard-actions' },
+    may(data.project.role, 'manager') && el('div', { class: 'pcard-actions' },
       el('button', { class: 'icon-btn', title: 'Rename', 'aria-label': 'Rename ' + m.name,
         onclick: act(async () => { if (await projectDialog({ project: m, module: true, canvas: m.main })) load(); }) }, icon('pencil')),
       !m.main && el('button', { class: 'icon-btn', title: 'Delete', 'aria-label': 'Delete ' + m.name, onclick: act(async () => {
@@ -56,6 +61,7 @@ export function render(view) {
 
   function drawSide() {
     const p = data.project;
+    view.querySelector('.add-module').classList.toggle('hidden', !may(p.role, 'creator'));   // a viewer only looks
     const fact = (label, value) => el('div', { class: 'proj-fact' }, el('span', {}, label), el('b', {}, value));
     const modules = data.modules.length - 1;   // the first is the project's own canvas
     side.replaceChildren(
@@ -70,22 +76,31 @@ export function render(view) {
         fact('Last updated', p.updated ? ago(p.updated) : 'Nothing made yet'),
         fact('Modules', String(modules)),
         fact('Items', String(p.items))),
-      el('div', { class: 'proj-owner' }, el('span', { class: 'muted small' }, 'Owner'),
-        el('div', { class: 'proj-person' }, el('span', { class: 'avatar' }, (store.user.name[0] || '?').toUpperCase()),
-          el('span', { class: 'grow' }, el('b', {}, store.user.name), el('span', { class: 'muted small' }, store.user.email)),
-          el('span', { class: 'owner-tag' }, 'Owner'))),
+      // Who is in the project: its owner first, then the people it is shared with, and Add for a manager or the owner.
+      el('div', { class: 'proj-owner' },
+        el('div', { class: 'row proj-members-head' }, el('span', { class: 'muted small grow' }, `Members · ${p.members.length}`),
+          el('button', { class: 'btn small quiet', onclick: share, title: may(p.role, 'manager') ? 'Add people to this project' : 'See who is in this project' },
+            icon('people'), may(p.role, 'manager') ? 'Add' : 'View')),
+        ...p.members.slice(0, 6).map((m) => el('div', { class: 'proj-person' }, el('span', { class: 'avatar' }, initials(m.name || m.email)),
+          el('span', { class: 'grow' }, el('b', {}, m.name + (m.user_id === store.user.id ? ' (you)' : '')), el('span', { class: 'muted small' }, m.email)),
+          el('span', { class: 'owner-tag' + (m.role === 'owner' ? '' : ' member') }, m.role[0].toUpperCase() + m.role.slice(1)))),
+        p.members.length > 6 && el('button', { class: 'btn small quiet', onclick: share }, `and ${p.members.length - 6} more`)),
       el('div', { class: 'proj-side-actions' },
-        el('button', { class: 'btn block', onclick: async () => { if (await projectDialog({ project: p })) load(); } }, icon('pencil'), 'Edit details'),
-        el('button', { class: 'btn block', onclick: async (e) => {
+        may(p.role, 'manager') && el('button', { class: 'btn block', onclick: async () => { if (await projectDialog({ project: p })) load(); } }, icon('pencil'), 'Edit details'),
+        may(p.role, 'owner') && el('button', { class: 'btn block', onclick: async (e) => {
           e.currentTarget.disabled = true;
           try { const copy = await api(`/api/projects/${p.id}/duplicate`, { method: 'POST' }); go('/project?id=' + copy.id); } catch (err) { alert(err.message); }
         } }, icon('frame'), 'Duplicate project'),
-        el('button', { class: 'btn block quiet danger', onclick: async () => {
+        may(p.role, 'owner') && el('button', { class: 'btn block quiet danger', onclick: async () => {
           if (await ask({ title: `Delete "${p.name}"?`, danger: true, confirm: 'Delete project',
             message: `Its ${modules} ${modules === 1 ? 'module' : 'modules'}, its ${p.items} items and its NeuralCore are deleted with it, for good. This can't be undone.` })) {
             api('/api/projects/' + p.id, { method: 'DELETE' }).then(() => go('/projects')).catch((e) => alert(e.message));
           }
         } }, icon('trash'), 'Delete project')));
+  }
+
+  async function share() {
+    if (await shareDialog({ projectId: data.project.id, projectName: data.project.name })) load();
   }
 
   function drawModules() {

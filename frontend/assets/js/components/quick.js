@@ -144,14 +144,24 @@ promptField, texts, keep.node, note),
 
   async function selectWorkflow(id) {
     const wf = await api('/api/workflows/' + id);
-    const text = prompt.value;
+    let text = prompt.value;
     // The picture references the user gave, in order, go with them to the new model, as many as it takes.
     const carried = form.wf && form.kind === 'image' ? refSlots().map((s) => form.refs[s.id]).filter((r) => r && !r.cast) : [];
+    const said = form.wf ? form.wf.ref_naming || {} : {};
     const before = form.refs;
     form.wf = wf;
     form.refs = {};
     const room = refSlots();
     carried.slice(0, room.length).forEach((ref, i) => { form.refs[room[i].id] = ref; });
+    // Each model names its references its own way ("image 1", <ref_image_0>, <image1>): the prompt is rewritten in the
+    // new one's words, and a reference it has no room for is [removed].
+    const saying = wf.ref_naming || {};
+    if (carried.length && said.unique && (said.tokens || []).length && saying.unique && (saying.tokens || []).length) {
+      const marks = carried.map((_, i) => `\u0000${i}\u0000`);
+      carried.forEach((_, i) => { if (said.tokens[i]) text = text.replace(tokenRe(said.tokens[i]), marks[i]); });
+      marks.forEach((mark, i) => { text = text.split(mark).join(i < room.length && saying.tokens[i] ? saying.tokens[i] : REMOVED); });
+      if (text !== prompt.value) prompt.value = text;
+    }
     const kept = new Set(Object.values(form.refs));
     for (const ref of Object.values(before)) if (ref.file && !kept.has(ref)) URL.revokeObjectURL(ref.url);
     const dropped = carried.length - Math.min(carried.length, room.length);
@@ -330,8 +340,8 @@ promptField, texts, keep.node, note),
   // The picture reference slots of the model, in order (REF 1 first), when the action makes pictures; else [].
   function refSlots() {
     if (form.kind !== 'image' || !form.wf) return [];
-    return form.wf.refs.filter((r) => r.kind === 'image' && inUse(r))
-      .sort((a, b) => (Number.parseFloat(a.node) || 0) - (Number.parseFloat(b.node) || 0));
+    const place = (r) => (r.order ? 1e9 + r.order : Number.parseFloat(r.node) || 0);   // a list of references (ref_1, ref_2 ...) in its order
+    return form.wf.refs.filter((r) => r.kind === 'image' && inUse(r)).sort((a, b) => place(a) - place(b));
   }
   const filledRefs = () => refSlots().filter((s) => form.refs[s.id]);
   // "REF 1 (the base image)" when a required reference is missing, else ''.
@@ -388,18 +398,6 @@ promptField, texts, keep.node, note),
     prompt.selectionStart = prompt.selectionEnd = at + pad.length + token.length;
   }
 
-  // A model that makes pictures from words only: offer every one that takes references, the two best known first.
-  const SUGGESTED = { 'image/image_t2i_flux2_klein_4b': 'fast', 'image/image_ref_edit': 'best face consistency' };
-  function offerRefModels(anchor) {
-    const shownName = (w) => w.title.replace(/^Text to Image:\s*/i, '');
-    const rank = (w) => { const at = Object.keys(SUGGESTED).indexOf(w.id); return at < 0 ? 99 : at; };
-    const takers = form.catalog.filter((w) => w.picture_refs > 0)
-      .sort((a, b) => rank(a) - rank(b) || shownName(a).localeCompare(shownName(b)));
-    if (!takers.length) return showError(new Error('No picture model here takes references.'));
-    addMenu(anchor, takers.map((w) => ({ icon: 'image', label: `Switch to ${shownName(w)}`,
-      hint: [SUGGESTED[w.id], `up to ${w.picture_refs} reference${w.picture_refs === 1 ? '' : 's'}`].filter(Boolean).join(', '),
-      run: () => selectWorkflow(w.id).catch(showError) })));
-  }
 
   function refBox(slot, index) {
     const current = form.refs[slot.id];
@@ -428,6 +426,8 @@ promptField, texts, keep.node, note),
         }, preview),
         current && el('button', { type: 'button', class: 'slot-clear', title: 'Remove', 'aria-label': `Remove REF ${index + 1}`,
           onclick: () => removeRef(index) }, '×')),
+      // how the prompt names it, for a model that names each one
+      slot.tag && el('div', { class: 'slot-tag' + (current ? '' : ' muted'), title: `The prompt calls this reference ${slot.tag}` }, slot.tag),
       file);
   }
 
@@ -441,9 +441,9 @@ promptField, texts, keep.node, note),
     const naming = form.wf.ref_naming || {};
     source.classList.remove('hidden');
     const said = form.refNote && el('p', { class: 'small muted ref-note' }, form.refNote);
-    if (!slots.length) {   // words only: no boxes, but a way to a model that takes references
-      source.replaceChildren(...[said, el('button', { type: 'button', class: 'btn small quiet ref-offer', onclick: (e) => offerRefModels(e.currentTarget) },
-        icon('plus'), 'Add a reference image…')].filter(Boolean));
+    if (!slots.length) {   // words only: no references; only the note that some were removed, if they were
+      source.replaceChildren(...[said].filter(Boolean));
+      source.classList.toggle('hidden', !said);
       refHint.classList.add('hidden');
       return;
     }

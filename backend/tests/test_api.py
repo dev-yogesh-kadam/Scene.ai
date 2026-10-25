@@ -921,7 +921,7 @@ def test_prices_follow_what_was_asked_for_at_the_rate_of_each_kind(client):
     if not definitions.is_file():
         pytest.skip("no saved node definitions on this machine")
     client.app.state.catalog.saved = json.loads(definitions.read_text(encoding="utf-8"))
-    assert quote(workflow="image/image_sdxl_simple") == 40                                             # a flat price for an image
+    assert quote(workflow="image/image_t2i_hunyuan_image_21") == 40                                            # a flat price for an image
     assert quote(workflow="audio/audio_minimax_music_3") == 300                                        # 60 s at 5 a second
     assert quote(workflow="audio/audio_minimax_music_3", values={"37:13:max_duration": 30}) == 150
     assert quote(workflow="upscaler/utility_seedvr2_3b_int8_upscale_video") == 100                     # no video named: 5 s is assumed
@@ -1247,7 +1247,7 @@ def test_a_step_can_be_changed_on_its_approval_card(client, monkeypatch):
     other = client.post("/api/agent/step", json={"step": edited, "change": {"workflow": "video/comfy_plus_codex"}}).json()
     assert other["settings"]["workflow"] == "video/comfy_plus_codex" and other["prompt"] == "He runs up a dry street."
     # what can't be: another kind of workflow, an empty prompt, a workflow that needs files the step doesn't have
-    assert client.post("/api/agent/step", json={"step": step, "change": {"workflow": "image/image_sdxl_simple"}}).status_code == 400
+    assert client.post("/api/agent/step", json={"step": step, "change": {"workflow": "image/image_t2i_hunyuan_image_21"}}).status_code == 400
     assert client.post("/api/agent/step", json={"step": step, "change": {"prompt": "  "}}).status_code == 400
     assert client.post("/api/agent/step", json={"step": step, "change": {"workflow": "video/video_minimax_h3_r2v"}}).status_code == 400
     assert client.get("/api/jobs").json()["jobs"] == []   # nothing is queued or charged
@@ -1311,7 +1311,7 @@ def test_a_project_holds_modules_that_share_its_kit(client):
     listed = {p["id"]: p for p in client.get("/api/projects").json()["projects"]}
     assert listed[film]["modules"] == 1 and listed[film]["items"] == 2 and listed[one["id"]]["parent_name"] == "Pocket"
     page = client.get("/api/projects/%d" % film).json()
-    assert [(m["name"], m["main"], m["items"]) for m in page["modules"]] == [("Main canvas", True, 1), ("Episode 1", False, 1)]   # the project's own canvas, by its own name
+    assert [(m["name"], m["main"], m["items"]) for m in page["modules"]] == [("Module 1", True, 1), ("Episode 1", False, 1)]   # the project's own canvas, by its own name
     assert client.get("/api/projects/%d" % one["id"]).json()["project"]["id"] == film   # a module's page is its project's
     assert len(client.get("/api/library?project=%d" % film).json()["items"]) == 1
     assert len(client.get("/api/library?project=%d&modules=1" % film).json()["items"]) == 2

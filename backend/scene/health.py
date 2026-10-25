@@ -43,14 +43,50 @@ def minutes(seconds):
     return "{} min".format(max(1, round(seconds / 60))) if seconds < 5400 else "{:.1f} h".format(seconds / 3600)
 
 
+# What each server check last found, so a page of the console does not wait on a server that does not answer (a wait
+# of seconds): a check younger than FRESH is used as it is, an older one is shown at once while it is made again behind.
+FRESH = 15
+_checked = {}    # (app, what) -> (when, found)
+_checking = {}   # (app, what) -> the check being made again now
+
+
+async def remembered(state, what, check, fresh=False):
+    """`check()`'s answer, from the last FRESH seconds or made now; `fresh` asks it now whatever was found before."""
+    key, now = (id(state), what), time.time()
+    hit = _checked.get(key)
+    if hit and not fresh:
+        if now - hit[0] >= FRESH and key not in _checking:
+            _checking[key] = asyncio.ensure_future(_check(key, check))
+        return hit[1]
+    return await _check(key, check)
+
+
+async def _check(key, check):
+    try:
+        found = await check()
+        _checked[key] = (time.time(), found)
+        return found
+    finally:
+        _checking.pop(key, None)
+
+
+def forget(state, what):
+    """Drop what a check found, so the next one is made now (after its server was changed)."""
+    _checked.pop((id(state), what), None)
+
+
 def _mark(seen, online):
     """Note whether a server answered, and since when that has been so."""
     if seen["online"] is not online:
         seen.update(online=online, since=time.time())
 
 
-async def render_server(state):
+async def render_server(state, fresh=False):
     """The render server (ComfyUI): whether it answers, since when as far as this app has seen, and what it reports."""
+    return dict(await remembered(state, "render:" + state.comfy.url, lambda: _render_server(state), fresh))
+
+
+async def _render_server(state):
     try:
         stats = await state.comfy.stats()
         state.saw_server(True)
@@ -62,9 +98,13 @@ async def render_server(state):
     return found
 
 
-async def model_server(state):
+async def model_server(state, fresh=False):
     """The agent's model server (Ollama): whether it answers, its version, and the models it holds in memory now.
     `online` is None when the studio has none (an empty ollama_url)."""
+    return dict(await remembered(state, "model:" + state.agent.url, lambda: _model_server(state), fresh))
+
+
+async def _model_server(state):
     agent = state.agent
     if not agent.url:
         return {"online": None, "url": "", "loaded": []}
@@ -192,7 +232,8 @@ class Watcher:
         try:
             while True:
                 try:
-                    found = await problems(self.state)
+                    found = await problems(self.state, await render_server(self.state, fresh=True),   # asked now: alerts
+                                           await model_server(self.state, fresh=True))
                     await self.step(found)
                     await self.workflows(found)
                 except Exception as error:   # a check that fails must not stop the next one

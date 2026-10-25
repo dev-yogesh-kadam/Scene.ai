@@ -261,42 +261,6 @@
    "title": "Load VAE"
   }
  },
- "200": {
-  "class_type": "LoadImage",
-  "inputs": {
-   "image": "sa_sheet_elena.png"
-  },
-  "_meta": {
-   "title": "REFERENCE 1 (character, product, outfit, style or location) - optional"
-  }
- },
- "201": {
-  "class_type": "LoadImage",
-  "inputs": {
-   "image": "sa_sheet_elena.png"
-  },
-  "_meta": {
-   "title": "REFERENCE 2 (character, product, outfit, style or location) - optional"
-  }
- },
- "202": {
-  "class_type": "LoadImage",
-  "inputs": {
-   "image": "sa_sheet_elena.png"
-  },
-  "_meta": {
-   "title": "REFERENCE 3 (character, product, outfit, style or location) - optional"
-  }
- },
- "203": {
-  "class_type": "LoadImage",
-  "inputs": {
-   "image": "sa_sheet_elena.png"
-  },
-  "_meta": {
-   "title": "REFERENCE 4 (character, product, outfit, style or location) - optional"
-  }
- },
  "210": {
   "class_type": "ReferenceMultiLatent",
   "inputs": {
@@ -312,22 +276,6 @@
    "resolution.megapixels": 1.0,
    "negative": [
     "504",
-    0
-   ],
-   "images.image0": [
-    "200",
-    0
-   ],
-   "images.image1": [
-    "201",
-    0
-   ],
-   "images.image2": [
-    "202",
-    0
-   ],
-   "images.image3": [
-    "203",
     0
    ]
   },
@@ -399,8 +347,8 @@
     0
    ],
    "seed": [
-    "106",
-    0
+    "107",
+    1
    ],
    "resolution": [
     "37",
@@ -466,6 +414,19 @@
   },
   "_meta": {
    "title": "Save Image"
+  }
+ },
+ "107": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "a % 4294967296",
+   "values.a": [
+    "106",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "upscaler seed (SEED limited to 0..4294967295)"
   }
  }
 }

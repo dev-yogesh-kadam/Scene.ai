@@ -12,12 +12,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import backup, gpu, health, kit, media, motion, roles, sequence, traces, versions
+from . import backup, endpoints, gpu, health, kit, media, motion, roles, sequence, staff, traces, versions
 from .agent import Agent, AgentError, service
-from .api import admin, assets, auth, console as console_api, film, kit as kit_api, library, runs, studio, workspace
+from .api import admin, assets, auth, bulk, console as console_api, film, kit as kit_api, library, runs, studio, workspace
 from .catalog import Catalog
 from .comfy import workflows
-from .comfy.client import Comfy, ComfyError
+from .comfy.client import ComfyError
 from .config import load_settings
 from .credits import Credits
 from .db import as_everyone, open_database
@@ -121,7 +121,10 @@ def create_app(settings=None):
     settings = settings or load_settings()
     storage = settings.path("storage_dir")
     db = open_database(settings, storage)
-    comfy = Comfy(lambda: db.setting("comfy_url", settings.comfy_url))
+    endpoints.seed(db, settings)   # the servers and APIs of the console's Servers section
+    comfy_pool = endpoints.ComfyPool(db, settings.comfy_url)
+    comfy = comfy_pool.main
+    staff.configure(db)   # the console's roles as an admin last saved them
     catalog = Catalog(settings.path("workflows_dir"), comfy, storage / "cache" / "node_definitions.json")
     credits = Credits(db, settings)
     agent = Agent(settings.ollama_url, settings.agent_model, local=settings.ollama_models, options={
@@ -132,6 +135,7 @@ def create_app(settings=None):
         service("gemini", "Gemini", settings.gemini_url, settings.gemini_key, settings.gemini_models,
                 only=r"^gemini-[\d.]+-(pro|flash)(-lite)?(-preview)?$"),
     ])
+    endpoints.apply(db, agent, settings)
     def renders_waiting():
         """Whether renders wait to start, anyone's (the queue not paused): a polite call (a review) waits for them."""
         if db.setting("queue_paused", "0") == "1":
@@ -168,6 +172,7 @@ def create_app(settings=None):
         app.state.jobs = JobManager(db, comfy, catalog, credits, app.state.outputs, notify, storage / "tmp", settings.node_path,
                                     storage / "assets")
         app.state.jobs.gpu = turns
+        app.state.jobs.pool = comfy_pool
         app.state.jobs.hold_offline = settings.hold_queue_offline
         app.state.jobs.agent = agent   # writes the captions some image models need, just before they render
         workers = [asyncio.create_task(app.state.jobs.run_forever()), asyncio.create_task(app.state.jobs.run_forever(local=True)),
@@ -179,7 +184,7 @@ def create_app(settings=None):
         yield
         for worker in workers:
             worker.cancel()
-        await comfy.http.aclose()
+        await comfy_pool.close()
         await agent.http.aclose()
         db.close()
 
@@ -188,6 +193,7 @@ def create_app(settings=None):
     app.state.settings = settings
     app.state.db = db
     app.state.comfy = comfy
+    app.state.comfy_pool = comfy_pool
     app.state.gpu = turns
     app.state.catalog = catalog
     app.state.hub = hub
@@ -237,7 +243,7 @@ def create_app(settings=None):
     _answer_errors(app)
     _guard(app)   # after the one above, so its answers get the headers too
     # The admin routes are not here: they are the admin console's, a site of its own (create_console).
-    for module in (auth, studio, library, workspace, film, runs, kit_api, assets):
+    for module in (auth, studio, library, workspace, film, runs, kit_api, assets, bulk):
         app.include_router(module.router)
 
     frontend = settings.path("frontend_dir").resolve()

@@ -4,7 +4,7 @@ Scene.ai is a web studio for creating videos, images and music with AI. People s
 they want in a form or to an agent, and get the result in their library. The rendering is done by a
 [ComfyUI](https://github.com/comfyanonymous/ComfyUI) server, which users never see.
 
-Workflows are included for video (MiniMax H3), images (Z-Image Turbo, SDXL, Ideogram 4) and music
+Workflows are included for video (MiniMax H3), images (FLUX.2, FLUX 3 Klein, Qwen Image 2.1, Krea 2 Turbo, HunyuanImage 2.1) and music
 (MiniMax Music 3), and for upscaling a video (SeedVR2). Any other ComfyUI workflow only needs its
 file to be added.
 

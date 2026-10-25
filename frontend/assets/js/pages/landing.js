@@ -10,7 +10,7 @@ import * as scenes from './landing-scenes.js';
 // What can be made, with the models that make it. Kept in step with workflows/ (see docs/HANDOVER.md, Workflows).
 const KIT = [
   ['Video', 'Clips with sound', 'MiniMax H3', 'Clips of 5 to 15 seconds from a prompt and up to eight references: a character, an outfit, a place, a motion to copy, a voice. Chain clips into longer scenes that pick up where the last one ended.'],
-  ['Images', 'Stills and posters', 'Z-Image Turbo · SDXL · Ideogram 4', 'Stills in a few seconds, and posters with lettering that reads right.'],
+  ['Images', 'Stills and posters', 'FLUX.2 · FLUX 3 Klein · Qwen Image 2.1', 'Stills from a prompt and up to four reference pictures, so a character looks the same in every one.'],
   ['Music', 'Songs and scores', 'MiniMax Music 3', 'From 30 seconds to 5 minutes, with your lyrics or without.'],
   ['Titles', 'Motion graphics', 'Drawn in the studio', 'Title cards, lower thirds and whole videos of animated words, written from a sentence and editable scene by scene.'],
   ['Finish', 'Upscale', 'SeedVR2', 'A finished video made larger and sharper, up to four times its size.'],

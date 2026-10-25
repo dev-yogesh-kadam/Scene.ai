@@ -12,7 +12,7 @@ from scene.comfy import workflows
 from test_agent_shots import hosted
 from test_api import register
 
-NEW = ["image/image_ref_edit", "image/image_location_rebuild", "video/h3_chunk", "video/video_lipsync",
+NEW = ["video/h3_chunk", "video/video_lipsync",
        "audio/audio_separate_voice", "audio/audio_transcribe", "audio/audio_transcribe_video"]
 
 
@@ -34,7 +34,6 @@ def test_the_new_workflows_load_and_build(client):
     assert [o["id"] for o in chunk["options"]] == ["quality"]   # the size follows the studio's resolution and shape
     assert next(r for r in chunk["refs"] if r["id"] == "205:image")["optional"] is False
     assert {c["id"] for c in schema_of(client, "audio/audio_transcribe")["controls"]} >= {"10:value", "12:language"}
-    assert schema_of(client, "image/image_location_rebuild")["prompt_optional"] is True
 
 
 def test_the_agent_is_offered_the_tools_without_a_prompt_when_given_a_file(client):
@@ -68,9 +67,6 @@ def test_a_step_on_them_takes_decimals_switches_and_words(client):
                                                                                         {"setting": "10:value", "value": "EXT. ROOFTOP — DUSK"}]},
                               [], 0, filled={"1:audio"})[0]
     assert made["values"]["12:language"] == "hi" and made["values"]["10:value"] == "EXT. ROOFTOP — DUSK"
-    rebuild = agent.settings_for(schema_of(client, "image/image_location_rebuild"), {"name": "Suite", "prompt": ""}, [], 0, filled={"20:image"})
-    assert rebuild is not None                                        # its prompt is only notes
-    assert agent.settings_for(schema_of(client, "image/image_ref_edit"), {"name": "x", "prompt": ""}, [], 0, filled={"20:image"}) is None
 
 
 def test_several_outputs_of_one_run_are_told_apart():
@@ -156,7 +152,7 @@ def test_a_long_skill_run_is_reminded_once_to_save_its_work(client, monkeypatch)
     plan =client.post("/api/agent/plan", json={"instruction": "go", "run": "pm-2"}).json()
     assert plan["reply"] == "Pick the models." and len(seen) == 2
     assert any(agent.SAVE_FIRST in m["content"] for m in seen[-1] if m["role"] == "user")
-    runs.write(db, me["id"], "pm-2", "/motion/models", {"image": "image/image_ref_edit"}, "agent")
+    runs.write(db, me["id"], "pm-2", "/motion/models", {"image": "image/image_t2i_flux2_klein_9b"}, "agent")
     assert runs.saved_any(db, me["id"], "pm-2")
 
 

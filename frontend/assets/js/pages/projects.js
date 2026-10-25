@@ -41,14 +41,18 @@ export function render(view) {
 
   const card = (p) => el('div', { class: 'pcard', role: 'button', tabindex: '0', 'aria-label': 'Open ' + p.name,
     onclick: () => open(p.id), onkeydown: (e) => { if (e.key === 'Enter' && e.target === e.currentTarget) open(p.id); } },
-    el('div', { class: 'pcard-cover' }, cover(p)),
+    el('div', { class: 'pcard-cover' }, cover(p),
+      p.owner_name ? el('span', { class: 'proj-badge shared', title: `${p.owner_name}'s project, shared with you as ${p.role}` }, icon('people'), 'Shared')
+        : p.members ? el('span', { class: 'proj-badge shared', title: `Shared with ${p.members} ${p.members === 1 ? 'person' : 'people'}` }, icon('people'), String(p.members + 1)) : null),
     el('div', { class: 'pcard-info' },
       el('b', { title: p.name }, p.name),
+      p.owner_name && el('span', { class: 'muted small' }, `${p.owner_name}'s · ${p.role[0].toUpperCase() + p.role.slice(1)}`),
       el('span', {}, [p.modules ? `${p.modules + 1} modules` : '', p.items === 1 ? '1 item' : `${p.items} items`].filter(Boolean).join(' · ')),
       el('span', { class: 'muted small' }, ago(p.updated || p.created))),
-    el('div', { class: 'pcard-actions' },
+    // Rename for its owner or a manager; Delete for its owner only (the server says the same: sharing.py).
+    (p.role === 'owner' || p.role === 'manager') && el('div', { class: 'pcard-actions' },
       el('button', { class: 'icon-btn', title: 'Rename', 'aria-label': 'Rename ' + p.name, onclick: act(() => rename(p)) }, icon('pencil')),
-      el('button', { class: 'icon-btn', title: 'Delete', 'aria-label': 'Delete ' + p.name, onclick: act(() => remove(p)) }, icon('trash'))));
+      p.role === 'owner' && el('button', { class: 'icon-btn', title: 'Delete', 'aria-label': 'Delete ' + p.name, onclick: act(() => remove(p)) }, icon('trash'))));
 
   function draw() {
     tools.classList.toggle('hidden', !projects.length);

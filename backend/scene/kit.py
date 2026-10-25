@@ -17,11 +17,13 @@ A kit belongs to one project (its modules share it): nothing is kept outside a p
 projects. The assets saved before kits existed, with no project, are not used at all.
 """
 
+import contextlib
 import hashlib
 import json
 import re
 import shutil
 import time
+from .db import as_everyone
 from pathlib import Path
 
 from .references import safe_name
@@ -77,14 +79,23 @@ def _where(project):
 
 def entries(db, user_id, project):
     """The kit of a project, in order: the always-on entries first, then the rest. Each a row of assets with "type".
-    Outside a project there is none."""
+    Outside a project there is none. In a project shared with the user it is the owner's kit (sharing.py)."""
     project = root(db, project)
     if not project:
         return []
+    keeper = keeper_of(db, user_id, project)
     where, params = _where(project)
-    rows = db.all("SELECT id, name, tag, kind, filename, size, about, use_note, origin, made_from, always, position, named, created "
-                  "FROM assets WHERE user_id = ? AND " + where + " ORDER BY always DESC, position, created", (user_id, *params))
+    with as_everyone() if keeper != user_id else contextlib.nullcontext():
+        rows = db.all("SELECT id, name, tag, kind, filename, size, about, use_note, origin, made_from, always, position, named, created "
+                      "FROM assets WHERE user_id = ? AND " + where + " ORDER BY always DESC, position, created", (keeper, *params))
     return [dict(row, type=TYPES.get(row["tag"], "other")) for row in rows]
+
+
+def keeper_of(db, user_id, project):
+    """Whose kit a project's is for this user: their own, or the owner's of a project shared with them."""
+    from . import sharing
+    role, _, top = sharing.role_in(db, user_id, project)
+    return top["user_id"] if role and role != "owner" else user_id
 
 
 def entry(db, user_id, asset_id):

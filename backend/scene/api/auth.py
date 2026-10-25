@@ -56,7 +56,7 @@ def on_this_machine(request):
 def shown(state, user):
     """The signed-in user as the studio's page gets it. An admin also gets where the admin console is, a site of its
     own (api/console.py), for the studio's link to it: its address, or its port on the host the studio was opened at."""
-    if user["role"] in staff.ROLES and state.settings.console_port:
+    if user["role"] in staff.roles() and state.settings.console_port:
         return dict(user, console={"url": state.settings.console_url, "port": state.settings.console_port})
     return user
 

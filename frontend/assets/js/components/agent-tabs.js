@@ -19,7 +19,8 @@ function age(time) {
 }
 
 // onFocus(itemId): show an item on the canvas. locate(itemId): where the canvas has it, {shot, take}, or null.
-export function agentTabs({ projectId = () => 0, onJobs = () => {}, onMemory = null, onFocus = () => {}, locate = () => null, selection = () => [], items = () => [], pickCanvas = null, onUploaded = () => {} } = {}) {
+// onFull(on): the conversation was made to fill the screen (on) or put back in the panel; without it there is no button.
+export function agentTabs({ projectId = () => 0, onJobs = () => {}, onMemory = null, onFocus = () => {}, locate = () => null, selection = () => [], items = () => [], pickCanvas = null, onUploaded = () => {}, onFull = null } = {}) {
   let index = { tabs: [], open: [], active: null };   // what the "agent" board keeps for this project
   const panels = new Map();   // tab id -> its agentPanel, made when the tab is first shown
   const jobsOf = new Map();   // tab id -> the jobs its plans started
@@ -30,9 +31,23 @@ export function agentTabs({ projectId = () => 0, onJobs = () => {}, onMemory = n
   const strip = el('div', { class: 'agent-tab-list', role: 'tablist', 'aria-label': 'Agent conversations' });
   const addButton = el('button', { type: 'button', class: 'icon-btn agent-tab-add', title: 'New conversation', 'aria-label': 'New conversation',
     onclick: () => addTab() }, icon('plus'));
+  // Full screen: the conversation over the whole canvas, read in a centred column; the same button puts it back.
+  // (Not Escape: in the conversation it already stops a reply or turns down a plan.)
+  let full = false;
+  const fullButton = el('button', { type: 'button', class: 'icon-btn agent-full-btn' });
+  const setFull = (on) => {
+    full = on;
+    node.classList.toggle('full', on);
+    fullButton.replaceChildren(icon(on ? 'shrink' : 'expand'));
+    fullButton.title = on ? 'Exit full screen' : 'Full screen';
+    fullButton.setAttribute('aria-label', fullButton.title);
+    fullButton.setAttribute('aria-pressed', String(on));
+    if (onFull) onFull(on);
+  };
+  fullButton.addEventListener('click', () => { setFull(!full); if (active()) active().focus(); });
   const body = el('div', { class: 'agent-tabs-body' });
-  const node = el('div', { class: 'agent-tabs' }, el('div', { class: 'agent-tabs-bar' }, historyButton, strip, addButton), body);
-
+  const node = el('div', { class: 'agent-tabs' }, el('div', { class: 'agent-tabs-bar' }, historyButton, strip, addButton,
+    ...(onFull ? [el('span', { class: 'agent-tabs-gap' }), fullButton] : [])), body);
   const tab = (id) => index.tabs.find((t) => t.id === id);
   const saveIndex = () => api('/api/boards/agent', { method: 'PUT', json: { project: projectId() || null, data: index } }).catch(() => {});
   let indexTimer = null;
@@ -194,10 +209,12 @@ export function agentTabs({ projectId = () => 0, onJobs = () => {}, onMemory = n
     await run;
   }
 
-  load();
   const active = () => panels.get(index.active);
+  setFull(false);
+  load();
   return {
     node,
+    setFull: (on) => { if (on !== full) setFull(on); },
     attach: (item) => active() && active().attach(item),
     selectionChanged: () => active() && active().selectionChanged(),
     reload: () => load(),

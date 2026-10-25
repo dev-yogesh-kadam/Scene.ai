@@ -81,7 +81,7 @@ async def admin_user(request: Request):
     if problem:
         raise HTTPException(403, problem)
     if "/api/admin/" in request.url.path and not staff.may(user["role"], request.url.path, request.method):
-        raise HTTPException(403, "Your role ({}) can't do this. Ask an admin.".format(staff.LABELS[user["role"]]))
+        raise HTTPException(403, "Your role ({}) can't do this. Ask an admin.".format(staff.label(user["role"])))
     act_for_everyone()
     return user
 

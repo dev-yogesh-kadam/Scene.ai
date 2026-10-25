@@ -1,5 +1,11 @@
 # Text-to-image workflows (2026-10-21)
 
+**Removed 2026-10-25** (deleted from ComfyUI and the studio, outputs not good enough): FLUX.2 Klein 4B, MOSS-Image,
+FLUX.1 Krea dev, FLUX.1 schnell, Lumina 2, CogView4. Then Qwen-Image 2512, Z-Image, Z-Image Turbo, HiDream-O1,
+SD 3.5 Large, Chroma and SDXL, with Ideogram 4, SDXL (simple), Z-Image Turbo (simple) and Location Rebuild. Kept:
+FLUX.2 dev, FLUX.2 Klein 9B, FLUX 3 Klein, Qwen Image 2.1, Krea 2 Turbo and HunyuanImage 2.1 (Reference Image Edit left the studio too, still in ComfyUI).
+Their rows below are kept as the record of the test.
+
 19 workflows, all in ComfyUI's workflow list as `image_t2i_<model>` and in
 `C:\ComfyUi\ComfyUI_windows_portable\scene_ai_workflows\image\` (UI `.json`, `_api.json`, `.studio.json` sidecar).
 Same controls in every one: PROMPT, NEGATIVE PROMPT (where the model uses one), SEED, aspect ratio
