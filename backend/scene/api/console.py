@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/console", tags=["console"])
 def _shown(state, user):
     """The admin as the console's page gets them, with the studio's port for its link back to the studio."""
     return {**{k: user[k] for k in ("id", "email", "name", "role")}, "studio": {"port": state.settings.port},
-            "role_label": staff.LABELS.get(user["role"], user["role"]), "sections": staff.sections(user["role"])}
+            "role_label": staff.label(user["role"]), "sections": staff.sections(user["role"])}
 
 
 @router.post("/login", dependencies=[limited("console-login", 20, 300, by="address")])

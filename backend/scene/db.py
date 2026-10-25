@@ -74,6 +74,15 @@ CREATE TABLE IF NOT EXISTS projects (
     name TEXT NOT NULL,
     created REAL NOT NULL
 );
+-- People a project is shared with (sharing.py): its owner is in projects.user_id, its members here, each with a role.
+CREATE TABLE IF NOT EXISTS project_members (
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    added_by INTEGER,
+    created REAL NOT NULL,
+    PRIMARY KEY (project_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS boards (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     project_id INTEGER NOT NULL DEFAULT 0,
@@ -214,6 +223,17 @@ CREATE TABLE IF NOT EXISTS servers (
     life_months REAL,
     salvage_value_inr REAL,
     productive_hours REAL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created REAL NOT NULL
+);
+-- The ComfyUI servers, Ollama servers and hosted APIs the studio uses (endpoints.py), set in the console's Servers section.
+CREATE TABLE IF NOT EXISTS endpoints (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    api_key TEXT NOT NULL DEFAULT '',
+    models TEXT NOT NULL DEFAULT '',
     active INTEGER NOT NULL DEFAULT 1,
     created REAL NOT NULL
 );

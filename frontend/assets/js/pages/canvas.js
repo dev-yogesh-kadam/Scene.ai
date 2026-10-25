@@ -4,9 +4,11 @@
 // dragged between rows, and the rows are remembered per project. Work in progress shows as a frame the Gate runs around.
 
 import { api } from '../api.js';
-import { creditMark, el, icon, phaseOf, reel, runningGate, segmented, still, tabTitle } from '../dom.js';
-import { store, subscribe } from '../store.js';
+import { clapper, creditMark, el, flight, icon, reel, runningGate, segmented, still, tabTitle } from '../dom.js';
+import { refreshJobs, store, subscribe } from '../store.js';
 import { openViewer, reuseSeed, seedOf } from '../components/media.js';
+import { shareDialog } from '../components/share.js';
+import { bulkPanel } from '../components/bulk.js';
 import { quickActions } from '../components/quick.js';
 import { agentTabs } from '../components/agent-tabs.js';
 import { KIT, addToKitDialog, kitPanel } from '../components/kit.js';
@@ -27,7 +29,7 @@ const PANEL = 380;      // the width the panel starts with; its left edge can be
 const PANEL_MIN = 320;
 const PANEL_MAX = 960;
 const TABS = [{ id: 'quick', label: 'Quick actions', icon: 'bolt' }, { id: 'agent', label: 'Agent', icon: 'chat' },
-  { id: 'kit', label: KIT, icon: 'memory' }];
+  { id: 'kit', label: KIT, icon: 'memory' }, { id: 'bulk', label: 'Bulk generation', icon: 'grid', admin: true }];
 
 // The asset boards: the project's kit to the left of the shots, one board per type.
 const ASSET_TYPES = [
@@ -102,7 +104,7 @@ export function render(view) {
     el('div', { class: 'soon-box' }, icon('chat'), el('span', { class: 'soon-tag' }, 'Coming soon'), el('b', {}, 'The agent'),
       el('p', { class: 'muted small' }, 'Describe what you want and have it planned for you. It is not open on your account yet.'),
       el('button', { class: 'btn small', onclick: () => showPanel(true, 'quick') }, 'Use Quick actions'))),
-    attach: () => {}, selectionChanged: () => {}, reload: () => {}, redraw: () => {}, focus: () => {}, destroy: () => {} });
+    attach: () => {}, selectionChanged: () => {}, reload: () => {}, redraw: () => {}, focus: () => {}, setFull: () => {}, destroy: () => {} });
   const agent = !store.user.agent ? comingSoon() : agentTabs({
     projectId: () => project,
     // What is selected on the canvas: offered to the message as one suggestion, and read when a message says "this".
@@ -114,6 +116,7 @@ export function render(view) {
     onMemory: () => showPanel(true, 'kit'),
     onFocus: (id) => focusItem(id),   // a result in the conversation shows that clip on the canvas
     locate: (id) => locate(id),
+    onFull: (on) => view.classList.toggle('agent-full', on),   // the agent over the whole canvas
   });
   // The kit: everything the project is made from, by name; its always-on entries go into every shot (what the cast was).
   const shared = kitPanel({
@@ -123,7 +126,11 @@ export function render(view) {
   });
   // The panel is open every time the canvas is entered, and remembers which of its two tabs was showing.
   const savedTab = localStorage.getItem('scene.panel.tab');   // Quick actions unless the agent or the memory was chosen
-  let tab = savedTab === 'agent' && store.user.agent ? 'agent' : savedTab === 'kit' || savedTab === 'memory' ? 'kit' : 'quick';
+  let tab = savedTab === 'agent' && store.user.agent ? 'agent' : savedTab === 'kit' || savedTab === 'memory' ? 'kit'
+    : savedTab === 'bulk' && store.user.role === 'admin' ? 'bulk' : 'quick';
+  const tabsShown = () => TABS.filter((t) => !t.admin || store.user.role === 'admin');   // Bulk generation is an admin's tool
+  const bulk = bulkPanel({ projectId: () => project, onQueued: () => refreshJobs().catch(() => {}) });
+  bulk.node.classList.add('hidden');
   const title = el('b', { class: 'panel-title' });
   const tabs = el('div');
   const quick = el('div', { class: 'panel-quick' }, dock.node);
@@ -146,27 +153,34 @@ export function render(view) {
   const panel = el('aside', { class: 'side-panel', 'aria-label': 'Make something' }, grip,
     el('div', { class: 'panel-head' }, title, el('span', { style: 'flex:1' }), tabs,
       el('button', { class: 'icon-btn', title: 'Close (Ctrl or ⌘ + J)', 'aria-label': 'Close the panel', onclick: () => showPanel(false) }, '×')),
-    quick, agent.node, shared.node);
+    quick, agent.node, shared.node, bulk.node);
   const isOpen = () => view.classList.contains('with-panel');
   const panelButton = el('button', { class: 'btn small quiet', title: 'Show or hide Quick action and the Agent (Ctrl or ⌘ + J)', onclick: () => showPanel(!isOpen()) }, 'Panel');
   function showPanel(open, which = tab) {
     tab = which;
+    if (!open || tab !== 'agent') agent.setFull(false);   // full screen is the agent's; closing or leaving it ends it
     view.classList.toggle('with-panel', open);
     panelButton.setAttribute('aria-pressed', String(open));
     localStorage.setItem('scene.panel.tab', tab);
     title.textContent = TABS.find((t) => t.id === tab).label;
     title.classList.toggle('agent-name', tab === 'agent');
-    tabs.replaceChildren(segmented(TABS.map((t) => ({ id: t.id, label: icon(t.icon), hint: t.label })), tab, (id) => showPanel(true, id)));
+    tabs.replaceChildren(segmented(tabsShown().map((t) => ({ id: t.id, label: icon(t.icon), hint: t.label })), tab, (id) => showPanel(true, id)));
     quick.classList.toggle('hidden', tab !== 'quick');
     agent.node.classList.toggle('hidden', tab !== 'agent');
     shared.node.classList.toggle('hidden', tab !== 'kit');
+    bulk.node.classList.toggle('hidden', tab !== 'bulk');
+    if (open && tab === 'bulk') bulk.draw();
     if (open && tab === 'kit') shared.load();   // what the agent has just made or kept shows at once
-    if (open) (tab === 'agent' ? agent : tab === 'kit' ? shared : dock).focus();
+    if (open) (tab === 'agent' ? agent : tab === 'kit' ? shared : tab === 'bulk' ? bulk : dock).focus();
     if (ready) fit();
   }
 
   // ------------------------------------------------------------ asset boards
 
+  // People in the project: add them by email with a role, from the canvas as from the project's page.
+  const shareButton = el('button', { class: 'btn small quiet hidden', title: 'People in this project', 'aria-label': 'People in this project',
+    onclick: () => { const here = projects.find((p) => p.id === project); if (here) shareDialog({ projectId: here.parent_id || here.id, projectName: here.parent_name || here.name }); } },
+    icon('people'), 'Share');
   const assetsButton = el('button', { class: 'btn small quiet', title: `Show or hide the project's ${KIT} beside the shots`,
     'aria-pressed': String(showAssets), onclick: async () => {
       showAssets = !showAssets;
@@ -329,7 +343,7 @@ export function render(view) {
     libraryButton, filePicker);
 
   view.replaceChildren(stage,
-    el('div', { class: 'float canvas-bar' }, picker, count, el('a', { class: 'btn small quiet', href: '/timeline', title: 'Put this project\'s videos in order' }, 'Timeline')),
+    el('div', { class: 'float canvas-bar' }, picker, count, shareButton, el('a', { class: 'btn small quiet', href: '/timeline', title: 'Put this project\'s videos in order' }, 'Timeline')),
     tools, drawer, toolNote,
     context,
     el('div', { class: 'float canvas-view' },
@@ -467,7 +481,9 @@ export function render(view) {
       const spot = spots.get('job:' + job.id);
       if (!spot) continue;   // its result is already on the canvas
       let frame = jobFrames.get(job.id);
-      if (frame && frame.failed !== (job.status === 'failed')) {   // it was running and has just failed: drawn anew
+      // It was running and has just failed: drawn anew. Only then: a running frame is kept between updates, so what moves
+      // on it is never restarted by a progress message.
+      if (frame && !frame.failed && job.status === 'failed') {
         frame.node.remove();
         jobFrames.delete(job.id);
         frame = null;
@@ -482,11 +498,14 @@ export function render(view) {
       if (!frame) {
         const clock = el('span');
         const fact = el('span');
-        const shot = el('div', { class: 'shot', style: `height:${spot.h}px` }, clock);
-        const film = reel(20);
+        // Under the clock, a paper plane or a clapperboard, looping on its own (it does not follow the job's steps), one or
+        // the other at random. The pick comes from the job's id, so a frame keeps its own while it is redrawn.
+        const film = [...job.id].reduce((n, c) => n + c.charCodeAt(0), 0) % 2 ? clapper() : flight();
+        const progress = reel(32);   // under the frame, as wide as it: a reel of film that fills in with the job's steps
+        const shot = el('div', { class: 'shot', style: `height:${spot.h}px` }, el('div', { class: 'shot-wait' }, clock, film.node));
         const node = el('div', { class: 'frame developing' + (agentJobs.has(job.id) ? ' by-agent' : ''), title: job.name },
-          shot, el('div', { class: 'slate' }, el('b', {}, job.workflow.split('/')[0]), film.node, fact));
-        frame = { node, shot, clock, fact, film, gate: null };
+          shot, progress.node, el('div', { class: 'slate' }, el('b', {}, job.workflow.split('/')[0]), fact));
+        frame = { node, shot, clock, fact, film, progress, gate: null };
         jobFrames.set(job.id, frame);
         jobLayer.append(node);
         boxes.set('job:' + job.id, { key: 'job:' + job.id, ...spot, node });
@@ -496,12 +515,11 @@ export function render(view) {
       // The frame develops like a print in a tray: the grain clears as the steps go by.
       const done = job.steps ? (Math.max(job.clip, 1) - 1 + job.step / job.steps) / Math.max(job.clips, 1) : 0;
       frame.shot.style.setProperty('--developed', done.toFixed(3));
+      frame.progress.set(done);
       frame.node.classList.toggle('waiting', waiting);
       frame.clock.textContent = waiting ? 'queued' : elapsed(job);   // how long it has been at it; no percentage
-      frame.film.set(done);   // a reel that fills, and what the job is at in words, in place of a step count
-      // before its steps start, what the worker says it is at ("Writing the caption…", "Waiting for the GPU…")
-      frame.fact.textContent = waiting ? (job.waiting_for_server ? 'waiting for the render server' : `position ${job.position}`)
-        : job.steps ? phaseOf(done) : job.node || 'Setting up the shot';
+      // Words only while it waits (its place in the queue); while it runs, the clock and the animation are enough.
+      frame.fact.textContent = waiting ? (job.waiting_for_server ? 'waiting for the render server' : `position ${job.position}`) : '';
     }
     hint.classList.toggle('hidden', boxes.size > 0);
   }
@@ -872,7 +890,8 @@ export function render(view) {
         picker.textContent = here ? (here.parent_name ? `${here.parent_name} › ${here.name}` : here.canvas_name ? `${here.name} › ${here.canvas_name}` : here.name) : 'All work';
         picker.onclick = here ? () => go('/project?id=' + (here.parent_id || here.id)) : null;
         picker.classList.toggle('linked', !!here);
-        assetsButton.classList.toggle('hidden', !project);   // a NeuralCore belongs to a project: none for all work
+        assetsButton.classList.toggle('hidden', !project);
+        shareButton.classList.toggle('hidden', !project);   // a NeuralCore belongs to a project: none for all work
         picker.title = here ? 'Open the project: its kit and its modules' : 'Everything you have made';
       }
       tabTitle((projects.find((p) => p.id === project) || { name: 'Canvas' }).name);
@@ -920,7 +939,7 @@ export function render(view) {
     lazy.disconnect();
     window.removeEventListener('keydown', onKey);
     leaveBalance();
-    view.classList.remove('full', 'with-panel', 'resizing');
+    view.classList.remove('full', 'with-panel', 'resizing', 'agent-full');
     view.style.removeProperty('--panel-w');
   };
 }

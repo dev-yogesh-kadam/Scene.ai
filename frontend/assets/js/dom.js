@@ -31,6 +31,7 @@ const ICONS = {
   trash: '<path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l.8 13h9.4l.8-13"/>',
   chat: '<path d="M4 5h16v11H10l-5 4v-4H4z"/>',
   memory: '<path d="M12 3.5 3.5 8 12 12.5 20.5 8z"/><path d="M3.5 12 12 16.5 20.5 12"/><path d="M3.5 16 12 20.5 20.5 16"/>',
+  server: '<path d="M4 4.5h16v6H4zM4 13.5h16v6H4z"/><path d="M7.5 7.5h.01M7.5 16.5h.01"/>',
   bolt: '<path d="M13 3 5 13.5h6L10 21l9-11h-6z"/>',
   back: '<path d="M14.5 6 8.5 12l6 6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -48,12 +49,14 @@ const ICONS = {
   gem: '<path d="M7 4.5h10l3.5 5L12 20 3.5 9.5z"/><path d="M3.5 9.5h17M9.5 4.5 8 9.5l4 10.5 4-10.5-1.5-5"/>',
   bars: '<path d="M5 20V10M9.5 20V6M14 20v-8M18.5 20V4"/>',
   expand: '<path d="M14 4h6v6M20 4l-6 6M10 20H4v-6M4 20l6-6"/>',
+  shrink: '<path d="M20 10h-6V4M14 10l6-6M4 14h6v6M10 14l-6 6"/>',
   arrowup: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   // the agent's conversation: its work, its thoughts and what it made
   bulb: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1.1 1.3 1.1 2.2h5c0-.9.5-1.7 1.1-2.2A6 6 0 0 0 12 3z"/>',
   wrench: '<path d="M15 4.5a4.5 4.5 0 0 0-4.3 5.8L4.6 16.4a1.9 1.9 0 0 0 2.7 2.7l6.1-6.1A4.5 4.5 0 0 0 19.5 9l-2.6 2.6-2.4-.6-.6-2.4L16.5 6A4.5 4.5 0 0 0 15 4.5z"/>',
   book: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5"/>',
   eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
+  people: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19.5c.6-3.4 3-5.3 6-5.3s5.4 1.9 6 5.3"/><path d="M15.5 5.2a3 3 0 0 1 0 5.6M17.5 14.6c2 .7 3.2 2.4 3.6 4.9"/>',
   skill: '<path d="M4.5 4.5h15v15h-15z"/><path d="M9 15l6-6"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.3-4.3"/>',
   skip: '<circle cx="12" cy="12" r="8.5"/><path d="M8 12h8"/>',
@@ -108,6 +111,60 @@ export function reel(count = 24) {
   };
   set(0);
   return { node, set };
+}
+
+// The animations inside a developing frame, under its clock: they loop on their own and say nothing about how far the
+// job is (the clock says how long it has been at it). One timer moves them all; one whose frame is gone is dropped.
+const looping = new Set();   // function(ms) -> false once its node has left the page
+let ticking = 0;
+function loop(step) {
+  looping.add(step);
+  if (!ticking) ticking = requestAnimationFrame(function tick(now) {
+    for (const s of looping) if (s(now) === false) looping.delete(s);
+    ticking = looping.size ? requestAnimationFrame(tick) : 0;
+  });
+}
+const alive = (node) => { let seen = false; return () => (node.isConnected ? (seen = true) : !seen); };   // true until it leaves
+
+// A paper plane flying a route over and over: up from the bottom left, a loop-the-loop, then a glide up and away to
+// the right, a short tail of smoke behind it.
+const ROUTE = 'M8 116 C55 116 98 100 128 76 C150 58 156 32 146 18 C136 4 116 8 116 27 C116 46 150 60 190 72 C228 82 262 78 292 54';
+const SVG = 'http://www.w3.org/2000/svg';
+const TAIL = 55;      // how much of the route the smoke covers behind the plane
+const FLIGHT = 6000;  // ms for one flight
+export function flight() {
+  const make = (tag, attrs) => { const n = document.createElementNS(SVG, tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); return n; };
+  const trail = make('path', { d: ROUTE, class: 'flight-trail' });
+  const plane = make('g', { class: 'flight-plane' });
+  const body = make('g', { class: 'flight-bob' });
+  body.append(make('path', { d: 'M-11 -7 L13 0 L-11 7 L-6 0 Z M-6 0 L13 0' }));
+  plane.append(body);
+  const node = make('svg', { viewBox: '0 0 300 125', class: 'flight', 'aria-hidden': 'true' });
+  node.append(trail, plane);
+  const on = alive(node);
+  const offset = Math.random() * FLIGHT;   // frames side by side are not in step
+  loop((now) => {
+    if (!on()) return false;
+    const len = trail.getTotalLength();
+    if (!len) return true;
+    const t = ((now + offset) % FLIGHT) / FLIGHT;
+    const at = Math.max(0.5, (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2) * (len + TAIL));   // eased; the smoke clears at the end
+    const a = trail.getPointAtLength(Math.min(at, len)), b = trail.getPointAtLength(Math.max(0, Math.min(at, len) - 1.5));
+    plane.setAttribute('transform', `translate(${a.x} ${a.y}) rotate(${Math.atan2(a.y - b.y, a.x - b.x) * 180 / Math.PI})`);
+    plane.style.opacity = at > len ? '0' : '1';   // gone off the end, until the next flight
+    trail.style.strokeDasharray = `${Math.min(TAIL, at)} ${len * 2}`;
+    trail.style.strokeDashoffset = String(-Math.max(0, at - TAIL));
+    return true;
+  });
+  return { node };
+}
+
+// A sketched clapperboard that snaps shut every couple of seconds.
+export function clapper() {
+  const node = el('div', { class: 'clapper', 'aria-hidden': 'true' });
+  node.innerHTML = '<svg viewBox="0 0 60 50"><g class="clapper-arm"><path d="M6 22 L52 12 L54 19 L8 29 Z"/>'
+    + '<path d="M16 20 L22 27 M28 17 L34 24 M40 15 L46 22"/></g><rect x="6" y="28" width="48" height="20" rx="2"/></svg>';
+  return { node };
 }
 
 // What a running job is doing, in words of a film set, from how far it is.

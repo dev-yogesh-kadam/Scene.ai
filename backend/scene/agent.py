@@ -5,6 +5,7 @@ nothing is queued until the user approves the plan in the browser.
 """
 
 import asyncio
+import contextlib
 import json
 import math
 import re
@@ -559,16 +560,27 @@ def _unfenced(text):
     return fenced.group(1) if fenced else text
 
 
+def _embedding(model):
+    """An Ollama model that only turns text into numbers for search (nomic-embed-text, a BERT family): it can't plan
+    or write, so it is never offered to the agent."""
+    family = str((model.get("details") or {}).get("family") or "").lower()
+    return "embed" in model["name"].lower() or family.endswith("bert")
+
+
 class Agent:
     """The language model behind the agent. Models come from an Ollama server (local, free) and from any hosted
     services that have a key set, such as Kimi and Gemini. A hosted model is named "<service id>/<model>",
     for example "gemini/gemini-3.8-flash"; the user picks one by name."""
 
     def __init__(self, url, model="", services=(), local="", options=None):
-        self.url = url.rstrip("/")
+        self.url = url.rstrip("/")   # the main Ollama server (the one that may share a GPU with the renders)
+        self.servers = [self.url] if self.url else []   # every Ollama server; the console's Servers section sets them
+        self.where = {}   # local model -> the servers that have it
+        self.calls = {}   # server -> calls it is answering now
         self.model = model
         # The local models to offer, when not every model Ollama has (it may also hold models for other uses).
         self.local = [m.strip() for m in str(local or "").split(",") if m.strip()]
+        self.config_services = list(services)   # config.json's services; the console's are added to them (set_services)
         self.services = {s["id"]: s for s in services if s["url"] and s["key"]}   # without a key a service is not offered
         # How local models are run (config.json: ollama_context, ollama_timeout, ollama_keep_alive, ollama_vision_model,
         # ollama_fast_model, ollama_think, local_tools).
@@ -583,6 +595,31 @@ class Agent:
         self.http = httpx.AsyncClient(timeout=httpx.Timeout(max(60, int(options.get("timeout") or 600)), connect=5))
         self.gpu = gpu.Gate(lambda: False)   # the GPU it may share with the renders (main.py sets the real one)
         self.recorder = None   # writes down each call (traces.Recorder; main.py sets it)
+
+    def set_servers(self, urls):
+        """The Ollama servers to use, the main one first (endpoints.apply)."""
+        self.servers = [u.rstrip("/") for u in urls if u]
+        self.url = self.servers[0] if self.servers else ""
+        self.where = {}
+
+    def set_services(self, extra):
+        """config.json's hosted services and the console's (endpoints.apply); one of the console's wins on the same id."""
+        self.services = {s["id"]: s for s in [*self.config_services, *extra] if s["url"] and s["key"]}
+
+    def server_for(self, model):
+        """The Ollama server a call to `model` goes to: of those that have it, the one answering the fewest calls now."""
+        having = [u for u in self.servers if u in self.where.get(model, ())] or self.servers or [self.url]
+        return min(having, key=lambda u: self.calls.get(u, 0))
+
+    async def _tags(self):
+        """{server: [its models]} of every Ollama server that answers."""
+        async def one(url):
+            try:
+                listed = (await asyncio.wait_for(self.http.get(url + "/api/tags"), 8)).json().get("models") or []
+                return url, [m for m in listed if isinstance(m, dict) and m.get("name")]
+            except (httpx.HTTPError, ValueError, AttributeError, asyncio.TimeoutError):
+                return url, None
+        return {u: found for u, found in await asyncio.gather(*(one(u) for u in self.servers)) if found is not None}
 
     def is_local(self, model):
         return self._service_of(model or self.model)[0] is None
@@ -617,7 +654,7 @@ class Agent:
         """What a local model can do, as Ollama says ({"vision", "tools", "thinking", ...}); remembered."""
         if name not in self.seen:
             try:
-                shown = (await self.http.post(self.url + "/api/show", json={"model": name})).json()
+                shown = (await self.http.post(self.server_for(name) + "/api/show", json={"model": name})).json()
                 found = set(shown.get("capabilities") or [])
                 if not found and "clip" in ((shown.get("details") or {}).get("families") or []):
                     found = {"completion", "vision"}   # an older Ollama: a model with an image encoder can see
@@ -633,10 +670,7 @@ class Agent:
             return model
         if self.vision and "vision" in await self.abilities(self.vision):   # the one set, while Ollama still has it
             return self.vision
-        try:
-            every = [m["name"] for m in (await self.http.get(self.url + "/api/tags")).json().get("models") or [] if m.get("name")]
-        except (httpx.HTTPError, ValueError, AttributeError):
-            every = []
+        every = list(dict.fromkeys(m["name"] for found in (await self._tags()).values() for m in found))
         offered = [m for m in every if not self.local or m in self.local]
         for name in offered + [m for m in every if m not in offered]:
             if "vision" in await self.abilities(name):
@@ -653,12 +687,15 @@ class Agent:
         return (self.services[sid], name) if name and sid in self.services else (None, model)
 
     async def _local_models(self):
-        try:
-            found = (await self.http.get(self.url + "/api/tags")).json().get("models") or []
-        except (httpx.HTTPError, ValueError):
-            return None   # the Ollama server is not answering
-        self.sizes = {m["name"]: m.get("size") or 0 for m in found if isinstance(m, dict) and m.get("name")
-                      and (not self.local or m["name"] in self.local)}
+        tags = await self._tags()
+        if not tags:
+            return None   # no Ollama server is answering
+        self.where, self.sizes = {}, {}
+        for url, found in tags.items():
+            for m in found:
+                if (not self.local or m["name"] in self.local) and not _embedding(m):
+                    self.where.setdefault(m["name"], []).append(url)
+                    self.sizes.setdefault(m["name"], m.get("size") or 0)
         return list(self.sizes)
 
     async def _hosted_models(self):
@@ -767,7 +804,8 @@ class Agent:
         think = bool(think) and "thinking" in await self.abilities(model)
         payload = {"model": model, "stream": False, "think": think, "format": answer_format, "keep_alive": self.keep_alive,
                    "options": {"temperature": 0.4, "num_ctx": size}, "messages": messages}
-        async with self.gpu.use("llm"):
+        # Only the main server may share its GPU with the renders: a call to another one does not wait for them.
+        async with (self.gpu.use("llm") if self.server_for(model) == self.url else contextlib.nullcontext()):
             body = await self._post_local(model, payload)
         if body.get("error"):
             raise AgentError("The agent's model failed: {}".format(str(body["error"])[:200]))
@@ -776,15 +814,23 @@ class Agent:
 
     async def _post_local(self, model, payload):
         """Send one chat to Ollama, trying again while it starts or loads the model."""
+        url = self.server_for(model)
+        self.calls[url] = self.calls.get(url, 0) + 1
+        try:
+            return await self._post_to(url, model, payload)
+        finally:
+            self.calls[url] -= 1
+
+    async def _post_to(self, url, model, payload):
         for wait in (*LOAD_RETRIES, None):
             try:
-                body = (await self.http.post(self.url + "/api/chat", json=payload)).json()
+                body = (await self.http.post(url + "/api/chat", json=payload)).json()
             except httpx.TimeoutException:
                 raise AgentError("{} took longer than {:.0f} s to answer. Raise ollama_timeout in config.json, or use a quicker "
                                  "model.".format(model, self.http.timeout.read or 0))
             except (httpx.HTTPError, ValueError):
                 if wait is None:
-                    raise AgentError("The agent's model server (Ollama) can't be reached at {}.".format(self.url))
+                    raise AgentError("The agent's model server (Ollama) can't be reached at {}.".format(url))
                 await asyncio.sleep(wait)   # it may be starting
                 continue
             problem = str(body.get("error") or "")
@@ -1068,7 +1114,13 @@ def offer(schema, attached=True):
     if schema.get("hints"):   # how this model likes its prompts written
         info["prompt_tips"] = [str(tip)[:220] for tip in schema["hints"][:6]]
     slots = [{"slot": r["id"], "for": r["label"], "takes": r["kind"], **({} if r["optional"] else {"required": True})}
-             for r in schema["refs"]]
+             for r in schema["refs"] if not r.get("order")]
+    listed = [r for r in schema["refs"] if r.get("order")]   # a list of references: said once, not slot by slot
+    if listed:
+        slots.append({"slots": "{} to {}, filled in order from {} with no gaps".format(listed[0]["id"], listed[-1]["id"], listed[0]["id"]),
+                      "for": re.sub(r"\s+1\b", "", listed[0]["label"], count=1), "takes": listed[0]["kind"],
+                      **({"named_in_prompt": "{}, {} ...: say what to keep from each (face, outfit, product, style, place)".format(
+                          listed[0]["tag"], listed[1]["tag"] if len(listed) > 1 else "")} if listed[0].get("tag") else {})})
     if slots:
         info["references"] = slots
     if required:

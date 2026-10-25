@@ -23,7 +23,7 @@ def test_a_projects_spend_by_kind_and_module(client):
     assert len(found["days"]) == 1 and found["daily"][0]["video"] == 200
     rows = {r["name"]: r for r in found["modules"]}
     assert rows["Episode 1"]["credits"] == 103 and rows["Episode 1"]["asset_types"] == 2 and rows["Episode 1"]["first"]
-    assert rows["Main canvas"]["credits"] == 100 and found["modules"][0]["name"] == "Episode 1"   # the most spent first
+    assert rows["Module 1"]["credits"] == 100 and found["modules"][0]["name"] == "Episode 1"   # the most spent first
     assert len(client.get("/api/projects/{}/analytics?period=30".format(film)).json()["days"]) == 30
     csv = client.get("/api/projects/{}/analytics.csv?period=today".format(film))
     assert csv.headers["content-type"].startswith("text/csv") and "Episode 1" in csv.text

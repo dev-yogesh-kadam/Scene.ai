@@ -15,7 +15,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
-from .. import __version__, audit, backup, edits, errors, health, kit, media, moderation, phone, roles, skills, staff, versions
+from .. import __version__, audit, backup, edits, endpoints, errors, health, kit, media, moderation, phone, roles, skills, staff, versions
 from ..agent import AgentError
 from ..catalog import KINDS
 from ..comfy import workflows
@@ -351,8 +351,8 @@ async def update_user(user_id: int, body: dict, request: Request, user: dict = D
     if ("role" in body or "disabled" in body) and user_id == user["id"]:
         raise HTTPException(400, "You can't change your own role or disable yourself.")
     if "role" in body:
-        if body["role"] not in (*staff.ROLES, "user"):
-            raise HTTPException(400, "The role must be one of: {}.".format(", ".join((*staff.ROLES, "user"))))
+        if body["role"] not in (*staff.roles(), "user"):
+            raise HTTPException(400, "The role must be one of: {}.".format(", ".join((*staff.roles(), "user"))))
         state.db.run("UPDATE users SET role = ? WHERE id = ?", (body["role"], user_id))
         audit.record(request, user, "Changed role", email, "now " + body["role"])
     if "agent" in body:
@@ -483,7 +483,7 @@ async def pause_queue(body: dict, request: Request, user: dict = Depends(admin_u
 
 @router.post("/server/check")
 async def check_server(request: Request, user: dict = Depends(admin_user)):
-    found = await health.render_server(request.app.state)
+    found = await health.render_server(request.app.state, fresh=True)
     return {"online": found["online"], "since": found["since"], "url": found["url"]}
 
 
@@ -855,6 +855,67 @@ async def audit_log(request: Request, q: str = "", user: dict = Depends(admin_us
     return {"entries": request.app.state.db.all(sql + " ORDER BY id DESC LIMIT 300", params)}
 
 
+# ---------------------------------------------------------------- servers and APIs
+
+@router.get("/endpoints")
+async def list_endpoints(request: Request, fresh: bool = False, user: dict = Depends(admin_user)):
+    """The ComfyUI servers, Ollama servers and hosted APIs, each with whether it answers (endpoints.py): as found in the
+    last few seconds, or now (`fresh`, the section's Check again)."""
+    state = request.app.state
+    found = await health.remembered(state, "endpoints", lambda: endpoints.status(state), fresh)
+    return {"kinds": endpoints.KINDS, "endpoints": found}
+
+
+def _endpoints_changed(state, main_before):
+    endpoints.apply(state.db, state.agent, state.settings)
+    health.forget(state, "endpoints")   # the section shows the change at once
+    if state.comfy.url != main_before:   # another main server: its nodes are read again
+        state.catalog.forget_nodes()
+    state.jobs.wake.set()   # a new free server takes the waiting renders
+
+
+@router.post("/endpoints")
+async def add_endpoint(body: dict, request: Request, user: dict = Depends(admin_user)):
+    state, main = request.app.state, request.app.state.comfy.url
+    row = endpoints.clean(body)
+    state.db.run("INSERT INTO endpoints (kind, name, url, api_key, models, active, created) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (row["kind"], row["name"], row["url"], row["api_key"], row["models"], row["active"], time.time()))
+    _endpoints_changed(state, main)
+    audit.record(request, user, "Added a server", row["name"], "{} at {}".format(endpoints.KINDS[row["kind"]], row["url"]))
+    return {}
+
+
+@router.put("/endpoints/{endpoint_id}")
+async def change_endpoint(endpoint_id: int, body: dict, request: Request, user: dict = Depends(admin_user)):
+    state, main = request.app.state, request.app.state.comfy.url
+    before = state.db.one("SELECT * FROM endpoints WHERE id = ?", (endpoint_id,))
+    if before is None:
+        raise HTTPException(404, "There is no such server.")
+    if not str(body.get("api_key") or "").strip():
+        body = {k: v for k, v in body.items() if k != "api_key"}   # left empty: the key it has is kept
+    row = endpoints.clean(body, before)
+    state.db.run("UPDATE endpoints SET kind = ?, name = ?, url = ?, api_key = ?, models = ?, active = ? WHERE id = ?",
+                 (row["kind"], row["name"], row["url"], row["api_key"], row["models"], row["active"], endpoint_id))
+    _endpoints_changed(state, main)
+    audit.record(request, user, "Changed a server", row["name"], "{} at {}{}".format(
+        endpoints.KINDS[row["kind"]], row["url"], "" if row["active"] else ", off"))
+    return {}
+
+
+@router.delete("/endpoints/{endpoint_id}")
+async def remove_endpoint(endpoint_id: int, request: Request, user: dict = Depends(admin_user)):
+    state, main = request.app.state, request.app.state.comfy.url
+    before = state.db.one("SELECT * FROM endpoints WHERE id = ?", (endpoint_id,))
+    if before is None:
+        raise HTTPException(404, "There is no such server.")
+    if before["url"] in state.comfy_pool.busy:
+        raise HTTPException(400, "A render is running there. Switch it off, and remove it once the render is done.")
+    state.db.run("DELETE FROM endpoints WHERE id = ?", (endpoint_id,))
+    _endpoints_changed(state, main)
+    audit.record(request, user, "Removed a server", before["name"], before["url"])
+    return {}
+
+
 # ---------------------------------------------------------------- settings
 
 @router.get("/settings")
@@ -866,12 +927,6 @@ async def get_settings(request: Request, user: dict = Depends(admin_user)):
 async def put_settings(body: dict, request: Request, user: dict = Depends(admin_user)):
     state = request.app.state
     before = _settings(state)
-    if "comfy_url" in body:
-        url = str(body["comfy_url"]).strip().rstrip("/")
-        if not re.match(r"^https?://[^\s/]+", url):
-            raise HTTPException(400, "The address must look like http://192.168.1.20:8188")
-        state.db.set_setting("comfy_url", url)
-        state.catalog.forget_nodes()
     if "allow_signup" in body:
         state.db.set_setting("allow_signup", "1" if body["allow_signup"] else "0")
     if "signup_credits" in body:
@@ -895,7 +950,7 @@ async def put_settings(body: dict, request: Request, user: dict = Depends(admin_
 async def admins_without_mfa(request: Request, user: dict = Depends(admin_user)):
     """The admins, and whether each has two-step sign-in: who would be locked out if it were required."""
     return {"admins": request.app.state.db.all("SELECT id, name, email, role, mfa_enabled FROM users WHERE role != 'user' AND disabled = 0 ORDER BY id"),
-            "roles": [{"id": r, "label": staff.LABELS[r], "about": staff.ABOUT[r]} for r in staff.ROLES]}
+            "roles": [{"id": r, "label": staff.label(r), "about": staff.about(r)} for r in staff.roles()]}
 
 
 # ---------------------------------------------------------------- projects
@@ -1683,3 +1738,40 @@ async def admin_delete_skill(skill_id: str, request: Request, user: dict = Depen
         raise HTTPException(404, "No such skill.")
     audit.record(request, user, "Deleted skill", skill_id)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- roles of the staff (staff.py)
+
+@router.get("/roles")
+async def list_roles(request: Request, user: dict = Depends(admin_user)):
+    """The staff roles, what each may see and change, how many people have each, and the areas there are to give."""
+    db = request.app.state.db
+    counts = {r["role"]: r["n"] for r in db.all("SELECT role, COUNT(*) AS n FROM users GROUP BY role")}
+    return {"roles": [dict(r, people=counts.get(r["id"], 0)) for r in staff.described()],
+            "areas": [{"id": a, "label": label} for a, label in staff.AREAS.items()]}
+
+
+@router.put("/roles/{role_id}")
+async def save_role(role_id: str, body: dict, request: Request, user: dict = Depends(admin_user)):
+    """Make a role (role_id "new") or change one: {"label", "about", "read": [area], "write": [area]}."""
+    try:
+        saved = staff.save(request.app.state.db, None if role_id == "new" else role_id, body)
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+    audit.record(request, user, "Saved a role", saved, "sees {}; changes {}".format(", ".join(body.get("read") or []) or "nothing",
+                                                                                ", ".join(body.get("write") or []) or "nothing"))
+    return {"id": saved, "roles": staff.described()}
+
+
+@router.delete("/roles/{role_id}")
+async def delete_role(role_id: str, request: Request, user: dict = Depends(admin_user)):
+    """Delete a role no one has. A built-in one can be deleted too; it comes back only by making it again."""
+    db = request.app.state.db
+    if role_id not in staff.roles() or role_id == "admin":
+        raise HTTPException(404, "No such role.")
+    if db.one("SELECT 1 FROM users WHERE role = ?", (role_id,)):
+        raise HTTPException(400, "Some people have this role. Give them another one first.")
+    staff.delete(db, role_id)
+    audit.record(request, user, "Deleted a role", role_id)
+    return {"roles": staff.described()}
+

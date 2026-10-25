@@ -1,5 +1,6 @@
 """The library: each user's finished images and videos, organised in projects."""
 
+import contextlib
 import csv
 import io
 import json
@@ -10,9 +11,12 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
-from .. import fetch, media, kit
+from .. import audit, fetch, media, kit, sharing
+from ..db import as_everyone
 from ..catalog import KINDS
 from ..outputs import MAIN_CANVAS
+
+FIRST_MODULE = "Module 1"
 from ..references import media_kind, read_text_upload, read_upload, safe_name, text_kind, upload_reference
 from .deps import current_user
 
@@ -23,18 +27,24 @@ def _path(request, row):
     return request.app.state.outputs.folder(row["user_id"]) / row["filename"]
 
 
-def _own(request, user, item_id):
-    row = request.app.state.db.one("SELECT * FROM generations WHERE id = ? AND user_id = ?", (item_id, user["id"]))
+def _own(request, user, item_id, need=None):
+    """An item of the user's, or, with `need`, one made in a project shared with them where their role allows that."""
+    db = request.app.state.db
+    row = db.one("SELECT * FROM generations WHERE id = ? AND user_id = ?", (item_id, user["id"]))
+    if row is None and need:
+        with as_everyone():
+            other = db.one("SELECT * FROM generations WHERE id = ?", (item_id,))
+        if other and other["project_id"] and sharing.role_in(db, user["id"], other["project_id"])[0]:
+            sharing.require(db, user, other["project_id"], need)
+            row = other
     if row is None:
         raise HTTPException(404, "No such item.")
     return row
 
 
-def _own_project(request, user, project_id):
-    row = request.app.state.db.one("SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user["id"]))
-    if row is None:
-        raise HTTPException(404, "No such project.")
-    return row
+def _own_project(request, user, project_id, need="owner"):
+    """A project or module the user may act on: theirs, or one shared with them where their role allows `need`."""
+    return sharing.require(request.app.state.db, user, project_id, need)
 
 
 # ---------------------------------------------------------------- items
@@ -46,10 +56,13 @@ async def list_items(request: Request, kind: str = "", q: str = "", project: str
     modules count as part of it. `run`: the working files of that run (slices, trims, references of a long skill), which
     are otherwise left out."""
     # Each item comes with what its details panel shows: the job's cost and the project's name.
-    sql = ("SELECT g.*, j.cost, p.name AS project_name FROM generations g LEFT JOIN jobs j ON j.id = g.job_id "
-           "LEFT JOIN projects p ON p.id = g.project_id WHERE g.user_id = ?")
+    # In a project: what everyone in it made (a shared project's members too), read once the user is found to be in it.
+    # Anywhere else: the user's own items.
+    shared = project.isdigit() and int(project) > 0 and bool(_own_project(request, user, int(project), "viewer"))
+    sql = ("SELECT g.*, j.cost, p.name AS project_name, u.name AS made_by FROM generations g LEFT JOIN jobs j ON j.id = g.job_id "
+           "LEFT JOIN projects p ON p.id = g.project_id LEFT JOIN users u ON u.id = g.user_id WHERE " + ("1 = 1" if shared else "g.user_id = ?"))
     sql += " AND g.run = ?"
-    params = [user["id"], run[:64]]
+    params = ([] if shared else [user["id"]]) + [run[:64]]
     if kind in (*KINDS, "text"):
         sql, params = sql + " AND g.kind = ?", params + [kind]
     if project == "none":
@@ -62,11 +75,14 @@ async def list_items(request: Request, kind: str = "", q: str = "", project: str
         like = "%{}%".format(word.replace("%", r"\%").replace("_", r"\_"))
         sql += " AND (g.name LIKE ? ESCAPE '\\' OR g.workflow LIKE ? ESCAPE '\\' OR g.summary LIKE ? ESCAPE '\\' OR g.settings LIKE ? ESCAPE '\\')"
         params += [like] * 4
-    items = request.app.state.db.all(sql + " ORDER BY g.created DESC LIMIT 500", params)
+    with as_everyone() if shared else contextlib.nullcontext():
+        items = request.app.state.db.all(sql + " ORDER BY g.created DESC LIMIT 500", params)
     for item in items:
         item["settings"] = json.loads(item["settings"])
         item["context"] = json.loads(item["context"])
-        del item["user_id"]
+        item["mine"] = item.pop("user_id") == user["id"]
+        if item["mine"]:
+            del item["made_by"]
     return {"items": items}
 
 
@@ -89,7 +105,7 @@ async def upload_item(request: Request, user: dict = Depends(current_user)):
         data = await read_upload(upload)   # refuses what is too large or is not the image, video or sound it says it is
         kind = media_kind(upload.filename)
     project = str(form.get("project_id") or "")
-    project_id = _own_project(request, user, int(project))["id"] if project.isdigit() and int(project) else None
+    project_id = _own_project(request, user, int(project), "creator")["id"] if project.isdigit() and int(project) else None
     return await _file_in(request, user, data, filename, kind, project_id, "Uploaded")
 
 
@@ -103,7 +119,7 @@ async def import_link(body: dict, request: Request, user: dict = Depends(current
     url = str(body.get("url") or "").strip()
     if not url or len(url) > 2000:
         raise HTTPException(400, "Give the link to bring in.")
-    project_id = _own_project(request, user, body["project_id"])["id"] if isinstance(body.get("project_id"), int) and body["project_id"] else None
+    project_id = _own_project(request, user, body["project_id"], "creator")["id"] if isinstance(body.get("project_id"), int) and body["project_id"] else None
     try:
         data, kind, final = await fetch.fetch(url)
     except fetch.FetchError as error:
@@ -148,7 +164,7 @@ async def _file_in(request, user, data, filename, kind, project_id, summary, wor
 
 @router.get("/library/{item_id}/file")
 async def get_file(item_id: int, request: Request, download: bool = False, user: dict = Depends(current_user)):
-    row = _own(request, user, item_id)
+    row = _own(request, user, item_id, "viewer")
     path = _path(request, row)
     if not path.is_file():
         raise HTTPException(404, "The file is missing from storage.")
@@ -171,14 +187,14 @@ async def poster_response(request, path):
 
 @router.get("/library/{item_id}/poster")
 async def get_poster(item_id: int, request: Request, user: dict = Depends(current_user)):
-    return await poster_response(request, _path(request, _own(request, user, item_id)))
+    return await poster_response(request, _path(request, _own(request, user, item_id, "viewer")))
 
 
 @router.get("/library/{item_id}/frame")
 async def get_frame(item_id: int, request: Request, at: float = 0.0, user: dict = Depends(current_user)):
     """The frame of a video at `at` seconds, for the keyframes the agent shows under a result. Made once and kept,
     per tenth of a second, next to the video's poster."""
-    row = _own(request, user, item_id)
+    row = _own(request, user, item_id, "viewer")
     if row["kind"] != "video":
         raise HTTPException(400, "Only a video has frames.")
     path = _path(request, row)
@@ -206,7 +222,7 @@ async def update_item(item_id: int, body: dict, request: Request, user: dict = D
         db.run("UPDATE generations SET rating = ? WHERE id = ?", (body["rating"], item_id))
     if "project_id" in body:
         if body["project_id"] is not None:
-            _own_project(request, user, body["project_id"])
+            _own_project(request, user, body["project_id"], "creator")
         db.run("UPDATE generations SET project_id = ? WHERE id = ?", (body["project_id"], item_id))
         request.app.state.outputs.refile(user["id"], item_id, body["project_id"])   # its file follows it to that project's folder
     return {"ok": True}
@@ -224,7 +240,7 @@ async def delete_item(item_id: int, request: Request, user: dict = Depends(curre
 async def as_reference(item_id: int, request: Request, kind: str = "image", user: dict = Depends(current_user)):
     """Make a library item usable as a reference in a new job. kind is what the slot takes: an image slot gets an
     image as it is or a video's last frame; a video slot a video; an audio slot a sound, or a video for its sound."""
-    row = _own(request, user, item_id)
+    row = _own(request, user, item_id, "creator")   # a picture someone else made in the project, used to make the next
     path = _path(request, row)
     if not path.is_file():
         raise HTTPException(404, "The file is missing from storage.")
@@ -250,17 +266,30 @@ _IN_PROJECT = "g.project_id IN (SELECT q.id FROM projects q WHERE q.id = p.id OR
 
 @router.get("/projects")
 async def list_projects(request: Request, user: dict = Depends(current_user)):
-    """Every project and module of the user. A module has "parent_id" and "parent_name"; a project has "modules", the
-    number of its modules, and counts (items, cover, updated) over itself and its modules together."""
-    return {"projects": request.app.state.db.all(
-        "SELECT p.id, p.name, p.canvas_name, p.created, p.parent_id, pp.name AS parent_name, "
+    """Every project and module of the user, and those shared with them. A module has "parent_id" and "parent_name"; a
+    project has "modules", the number of its modules, and counts (items, cover, updated) over itself and its modules
+    together. "role" is the user's in it ("owner" in their own), and a shared one says whose it is ("owner_name")."""
+    db = request.app.state.db
+    shared = sharing.shared_ids(db, user["id"])
+    where = "p.user_id = ?" + (" OR p.id IN ({})".format(", ".join("?" * len(shared))) if shared else "")
+    with as_everyone() if shared else contextlib.nullcontext():
+        rows = db.all(
+        "SELECT p.id, p.name, p.canvas_name, p.created, p.parent_id, p.user_id, pp.name AS parent_name, ow.name AS owner_name, "
+        "(SELECT COUNT(*) FROM project_members pm WHERE pm.project_id = COALESCE(p.parent_id, p.id)) AS members, "
         "(SELECT COUNT(*) FROM projects m WHERE m.parent_id = p.id) AS modules, "
         "(SELECT COUNT(*) FROM generations g WHERE " + _IN_PROJECT + " AND g.run = '') AS items, "
         # The newest item of a project is its cover on the Home page, and tells when it was last worked on.
         "(SELECT g.id FROM generations g WHERE " + _IN_PROJECT + " AND g.run = '' ORDER BY g.created DESC LIMIT 1) AS cover_id, "
         "(SELECT g.kind FROM generations g WHERE " + _IN_PROJECT + " AND g.run = '' ORDER BY g.created DESC LIMIT 1) AS cover_kind, "
         "(SELECT MAX(g.created) FROM generations g WHERE " + _IN_PROJECT + ") AS updated "
-        "FROM projects p LEFT JOIN projects pp ON pp.id = p.parent_id WHERE p.user_id = ? ORDER BY lower(p.name)", (user["id"],))}
+        "FROM projects p LEFT JOIN projects pp ON pp.id = p.parent_id JOIN users ow ON ow.id = p.user_id "
+        "WHERE " + where + " ORDER BY lower(p.name)", (user["id"], *shared))
+    for row in rows:
+        mine = row.pop("user_id") == user["id"]
+        row["role"] = "owner" if mine else sharing.role_in(db, user["id"], row["id"])[0]
+        if mine:
+            row.pop("owner_name")
+    return {"projects": rows}
 
 
 @router.get("/projects/{project_id}")
@@ -268,8 +297,8 @@ async def get_project(project_id: int, request: Request, user: dict = Depends(cu
     """A project's page: the project, its own canvas as the first module ("main"), then its modules, each with its items,
     cover and last change. For a module, the project it is in."""
     db = request.app.state.db
-    here = _own_project(request, user, project_id)
-    top = _own_project(request, user, here["parent_id"]) if here["parent_id"] else here
+    here = _own_project(request, user, project_id, "viewer")
+    top = _own_project(request, user, here["top_id"], "viewer")
 
     def counted(row, main=False):
         stats = db.one("SELECT COUNT(*) AS items, MAX(created) AS updated FROM generations WHERE project_id = ? AND run = ''", (row["id"],))
@@ -277,9 +306,9 @@ async def get_project(project_id: int, request: Request, user: dict = Depends(cu
         name = (row["canvas_name"] or MAIN_CANVAS) if main else row["name"]   # the project's own canvas goes by its own name
         return {"id": row["id"], "name": name, "created": row["created"], "main": main, "items": stats["items"],
                 "updated": stats["updated"], "cover_id": cover and cover["id"], "cover_kind": cover and cover["kind"]}
-    modules = [counted(top, True)] + [counted(m) for m in db.all(
-        "SELECT * FROM projects WHERE parent_id = ? AND user_id = ? ORDER BY created", (top["id"], user["id"]))]
-    return {"project": {"id": top["id"], "name": top["name"], "created": top["created"],
+    with as_everyone():   # what everyone in the project made, now that the user is found to be in it
+        modules = [counted(top, True)] + [counted(m) for m in db.all("SELECT * FROM projects WHERE parent_id = ? ORDER BY created", (top["id"],))]
+    return {"project": {"id": top["id"], "name": top["name"], "created": top["created"], "role": top["role"], "members": sharing.members(db, top["id"]),
                         "items": sum(m["items"] for m in modules), "updated": max((m["updated"] or 0 for m in modules), default=0) or None,
                         **next(({"cover_id": m["cover_id"], "cover_kind": m["cover_kind"]} for m in sorted(modules, key=lambda m: -(m["updated"] or 0))
                                 if m["cover_id"]), {"cover_id": None, "cover_kind": None})},
@@ -313,9 +342,13 @@ def _period(period, now=None):
 
 
 def project_analytics_data(db, user, project_id, period):
-    row = db.one("SELECT * FROM projects WHERE id = ? AND user_id = ?", (project_id, user["id"]))
-    if row is None:
-        raise HTTPException(404, "No such project.")
+    sharing.require(db, user, project_id, "viewer")
+    with as_everyone():   # the spend and the work of everyone in the project
+        return _project_analytics(db, user, project_id, period)
+
+
+def _project_analytics(db, user, project_id, period):
+    row = db.one("SELECT * FROM projects WHERE id = ?", (project_id,))
     root = row["parent_id"] or project_id
     project = db.one("SELECT * FROM projects WHERE id = ?", (root,))
     modules = [dict(project, main=True)] + [dict(m, main=False) for m in db.all(
@@ -406,7 +439,8 @@ async def duplicate_project(project_id: int, request: Request, user: dict = Depe
     state, db = request.app.state, request.app.state.db
     row = _own_project(request, user, project_id)
     root = db.one("SELECT * FROM projects WHERE id = ?", (row["parent_id"] or project_id,))
-    copy = db.run("INSERT INTO projects (user_id, name, created) VALUES (?, ?, ?)", (user["id"], (root["name"] + " copy")[:60], time.time()))
+    copy = db.run("INSERT INTO projects (user_id, name, created, canvas_name) VALUES (?, ?, ?, ?)",
+                  (user["id"], (root["name"] + " copy")[:60], time.time(), root["canvas_name"]))
     for m in db.all("SELECT name FROM projects WHERE parent_id = ? ORDER BY id", (root["id"],)):
         db.run("INSERT INTO projects (user_id, name, created, parent_id) VALUES (?, ?, ?, ?)", (user["id"], m["name"], time.time(), copy))
     kit.copy_entries(db, user["id"], root["id"], copy)
@@ -421,17 +455,21 @@ async def create_project(body: dict, request: Request, user: dict = Depends(curr
         raise HTTPException(400, "Give the project a name.")
     parent = None
     if body.get("parent_id"):
-        parent = _own_project(request, user, body["parent_id"]) if isinstance(body["parent_id"], int) else None
+        parent = _own_project(request, user, body["parent_id"], "creator") if isinstance(body["parent_id"], int) else None
         if parent is None or parent["parent_id"]:
             raise HTTPException(400, "A module goes inside a project, not inside another module.")
-    project_id = request.app.state.db.run("INSERT INTO projects (user_id, name, created, parent_id) VALUES (?, ?, ?, ?)",
-                                          (user["id"], name, time.time(), parent and parent["id"]))
+    # A new project's own canvas is its first module, "Module 1"; the modules added to it go on from "Module 2".
+    # A module of a shared project is the project owner's, like the project: everyone in it works there.
+    with as_everyone():
+        project_id = request.app.state.db.run("INSERT INTO projects (user_id, name, created, parent_id, canvas_name) VALUES (?, ?, ?, ?, ?)",
+                                              (parent["owner_id"] if parent else user["id"], name, time.time(), parent and parent["id"],
+                                               "" if parent else FIRST_MODULE))
     return {"id": project_id, "name": name, "parent_id": parent and parent["id"]}
 
 
 @router.put("/projects/{project_id}")
 async def rename_project(project_id: int, body: dict, request: Request, user: dict = Depends(current_user)):
-    _own_project(request, user, project_id)
+    _own_project(request, user, project_id, "manager")
     name = str(body.get("name", "")).strip()[:60]
     if not name:
         raise HTTPException(400, "Give the project a name.")
@@ -445,7 +483,7 @@ async def rename_project(project_id: int, body: dict, request: Request, user: di
 @router.put("/projects/{project_id}/canvas")
 async def rename_canvas(project_id: int, body: dict, request: Request, user: dict = Depends(current_user)):
     """Rename a project's own canvas (shown as "Main canvas" until it is named). Its folder of results takes the name."""
-    here = _own_project(request, user, project_id)
+    here = _own_project(request, user, project_id, "manager")
     if here["parent_id"]:
         raise HTTPException(400, "A module is renamed as a module.")
     name = str(body.get("name", "")).strip()[:60]
@@ -464,26 +502,75 @@ async def delete_project(project_id: int, request: Request, user: dict = Depends
     was made in it (the files, their posters and keyframes), its jobs still waiting or running (their credits given
     back), and its canvases, timelines and agent tabs. A project takes its modules and its NeuralCore with it. The jobs'
     records stay, in no project, for the credit history."""
-    here = _own_project(request, user, project_id)
+    probe = _own_project(request, user, project_id, "viewer")
+    here = _own_project(request, user, project_id, "manager" if probe["parent_id"] else "owner")   # a module: a manager; a project: its owner
     state, db = request.app.state, request.app.state.db
-    gone = [project_id] if here["parent_id"] else [m["id"] for m in db.all("SELECT id FROM projects WHERE parent_id = ?", (project_id,))] + [project_id]
-    its_folder = state.outputs.folder_of(project_id)   # a project's folder holds its modules' folders: all of it
-    marks = ", ".join("?" * len(gone))
-    for job in db.all("SELECT id FROM jobs WHERE user_id = ? AND status IN ('queued', 'running') AND project_id IN ({})".format(marks), (user["id"], *gone)):
-        state.jobs.remove(user["id"], job["id"])   # a running one stops at its next check; its result is not kept (jobs._record)
-    folder = state.outputs.folder(user["id"])
-    removed = db.all("SELECT id, filename FROM generations WHERE user_id = ? AND project_id IN ({})".format(marks), (user["id"], *gone))
-    for row in removed:
-        media.remove_result(folder / row["filename"])
-    db.run("DELETE FROM generations WHERE user_id = ? AND project_id IN ({})".format(marks), (user["id"], *gone))
-    for one in gone:
-        db.run("UPDATE jobs SET project_id = NULL WHERE project_id = ?", (one,))
-        # Its canvas, timeline and agent tabs go with it: a project made later must not open with them.
-        db.run("DELETE FROM boards WHERE project_id = ? AND user_id = ?", (one, user["id"]))
-        if not here["parent_id"]:   # the NeuralCore is the project's: its modules share it, so it goes only with the project
-            for row in db.all("SELECT id FROM assets WHERE project_id = ? AND user_id = ?", (one, user["id"])):
-                kit.remove(db, state.assets_dir / str(user["id"]), user["id"], row["id"])   # files too
-        db.run("DELETE FROM projects WHERE id = ?", (one,))
-    state.outputs.remove_folder(user["id"], its_folder)   # whatever is left in its folder; never the backup's copy
-    state.notify(user["id"], library_changed=True)
+    people = sharing.people_of(db, project_id)   # whose work is in it: the owner's and every member's
+    owner = here["owner_id"]
+    with as_everyone():
+        gone = [project_id] if here["parent_id"] else [m["id"] for m in db.all("SELECT id FROM projects WHERE parent_id = ?", (project_id,))] + [project_id]
+        its_folder = state.outputs.folder_of(project_id)   # a project's folder holds its modules' folders: all of it
+        marks = ", ".join("?" * len(gone))
+        for job in db.all("SELECT id, user_id FROM jobs WHERE status IN ('queued', 'running') AND project_id IN ({})".format(marks), gone):
+            state.jobs.remove(job["user_id"], job["id"])   # a running one stops at its next check; its result is not kept (jobs._record)
+        removed = db.all("SELECT id, user_id, filename FROM generations WHERE project_id IN ({})".format(marks), gone)
+        for row in removed:
+            media.remove_result(state.outputs.folder(row["user_id"]) / row["filename"])
+        db.run("DELETE FROM generations WHERE project_id IN ({})".format(marks), gone)
+        for one in gone:
+            db.run("UPDATE jobs SET project_id = NULL WHERE project_id = ?", (one,))
+            # Its canvas, timeline and agent tabs go with it: a project made later must not open with them.
+            db.run("DELETE FROM boards WHERE project_id = ?", (one,))
+            if not here["parent_id"]:   # the NeuralCore is the project's: its modules share it, so it goes only with the project
+                for row in db.all("SELECT id FROM assets WHERE project_id = ? AND user_id = ?", (one, owner)):
+                    kit.remove(db, state.assets_dir / str(owner), owner, row["id"])   # files too
+            db.run("DELETE FROM projects WHERE id = ?", (one,))
+    for person in people:
+        state.outputs.remove_folder(person, its_folder)   # whatever is left in their folder of it; never the backup's copy
+        state.notify(person, library_changed=True)
     return {"ok": True, "items_deleted": len(removed)}
+
+
+# ---------------------------------------------------------------- people in a project
+
+@router.get("/projects/{project_id}/members")
+async def project_members(project_id: int, request: Request, user: dict = Depends(current_user)):
+    """Everyone in a project and their roles, the user's own role, and the roles there are to give."""
+    here = _own_project(request, user, project_id, "viewer")
+    return {"members": sharing.members(request.app.state.db, here["top_id"]), "role": here["role"],
+            "roles": [{"id": r, "label": sharing.LABELS[r], "about": sharing.ABOUT[r]} for r in sharing.ROLES]}
+
+
+@router.post("/projects/{project_id}/members")
+async def add_members(project_id: int, body: dict, request: Request, user: dict = Depends(current_user)):
+    """{"people": [{"email", "role"}]}: add people to the whole project (all its modules). Someone already in it gets
+    the role given. Each email that could not be added comes back with why."""
+    here = _own_project(request, user, project_id, "manager")
+    people = body.get("people") if isinstance(body.get("people"), list) else []
+    if not people or len(people) > 50:
+        raise HTTPException(400, "Add between 1 and 50 people at a time.")
+    db = request.app.state.db
+    added, problems = sharing.add(db, here, user, people)
+    if added:
+        audit.record(request, user, "Shared a project", "project {}".format(here["top_id"]), ", ".join("{} as {}".format(a["email"], a["role"]) for a in added))
+    for person in added:
+        request.app.state.notify(person["user_id"], library_changed=True)   # the project appears in their list
+    return {"added": added, "problems": problems, "members": sharing.members(db, here["top_id"])}
+
+
+@router.put("/projects/{project_id}/members/{member_id}")
+async def change_member(project_id: int, member_id: int, body: dict, request: Request, user: dict = Depends(current_user)):
+    here = _own_project(request, user, project_id, "manager")
+    sharing.change(request.app.state.db, here, member_id, str(body.get("role") or ""))
+    return {"members": sharing.members(request.app.state.db, here["top_id"])}
+
+
+@router.delete("/projects/{project_id}/members/{member_id}")
+async def remove_member(project_id: int, member_id: int, request: Request, user: dict = Depends(current_user)):
+    """Take someone out of a project, or, for their own id, leave it. What they made there stays in it."""
+    here = _own_project(request, user, project_id, "viewer" if member_id == user["id"] else "manager")
+    if member_id == user["id"] and here["role"] == "owner":
+        raise HTTPException(400, "The owner can't leave their own project. Delete it instead.")
+    sharing.change(request.app.state.db, dict(here, role="owner") if member_id == user["id"] else here, member_id, None)
+    request.app.state.notify(member_id, library_changed=True)
+    return {"members": sharing.members(request.app.state.db, here["top_id"])}

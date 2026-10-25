@@ -1,4 +1,5 @@
-"""The generation queue: one job at a time on the GPU, shared by all users, with live progress. Edits and motion
+"""The generation queue, shared by all users, with live progress: one render at a time on each ComfyUI server, each
+waiting render going to the first server that is free (endpoints.py). Edits and motion
 graphics, which are made on this machine, are jobs too and have a lane of their own (see edits.py).
 
 A job is either one render, or a chain: several clips where each one starts on the last frame of the
@@ -19,7 +20,7 @@ import httpx
 import websockets
 from fastapi import HTTPException
 
-from . import edits, errors, gpu, health, media, memory, moderation, motion, sequence
+from . import edits, errors, gpu, health, media, memory, moderation, motion, sequence, sharing
 from .comfy import workflows
 from .agent import AgentError
 from .comfy.client import ComfyError
@@ -31,7 +32,8 @@ AUDIO_TYPES = {".mp3", ".flac", ".wav", ".opus", ".ogg", ".m4a"}
 TEXT_TYPES = {".json", ".srt", ".txt"}   # a transcript, a list of times: filed as "text"
 CLIP_BREAK = re.compile(r"^\s*-{3,}\s*$", re.M)  # a line of dashes separates per-clip prompts
 RESUMES = 3          # times a render cut off by the render server going away goes back in the queue before it fails
-OFFLINE_CHECK = 10   # seconds between asking whether the render server answers again, while renders wait for it
+JUST_FINISHED = 300  # seconds a finished job stays in its owner's list whatever came after it (the canvas waits for its result)
+OFFLINE_CHECK = 10  # seconds between asking whether the render server answers again, while renders wait for it
 
 
 class Cancelled(Exception):
@@ -51,7 +53,9 @@ class JobManager:
         self.db = db
         self.assets_dir = Path(assets_dir) if assets_dir else None   # where a result kept for reuse is copied as an asset
         self.node_path = node_path      # the Node.js program that renders motion graphics
-        self.comfy = comfy
+        self.comfy = comfy        # the main ComfyUI server, where uploaded files are put
+        self.pool = None          # every ComfyUI server a render may go to (endpoints.ComfyPool; main.py sets it)
+        self.working = set()      # the renders running now, each on its own server
         self.catalog = catalog
         self.credits = credits
         self.outputs = outputs          # where each user's finished work goes
@@ -75,22 +79,28 @@ class JobManager:
         now = time.time()
         # A job waits only behind the jobs of its own lane: renders behind renders, edits behind edits.
         waiting, busy = {True: [], False: []}, {True: 0, False: 0}
+        servers = max(1, len(self.pool.servers())) if self.pool else 1
         with as_everyone():   # where the user's jobs stand in the queue depends on everyone's
             queue = self.db.all("SELECT id, workflow, status FROM jobs WHERE status IN ('queued', 'running') ORDER BY priority DESC, created")
         for r in queue:
             if r["status"] == "running":
-                busy[edits.is_edit(r["workflow"])] = 1
+                busy[edits.is_edit(r["workflow"])] += 1
             else:
                 waiting[edits.is_edit(r["workflow"])].append(r["id"])
         jobs = []
+        # The latest 40, and however many more are waiting, running or just finished: the canvas holds each one's place
+        # until what it made comes in, so a job left off this list would see its result land at the bottom instead.
         for row in self.db.all(
-                "SELECT * FROM jobs WHERE user_id = ? AND hidden = 0 ORDER BY created DESC LIMIT 40", (user_id,)):
+                "SELECT * FROM jobs WHERE user_id = ? AND hidden = 0 AND (status IN ('queued', 'running') OR finished > ? "
+                "OR id IN (SELECT id FROM jobs WHERE user_id = ? AND hidden = 0 ORDER BY created DESC LIMIT 40)) "
+                "ORDER BY created DESC", (user_id, now - JUST_FINISHED, user_id)):
             live = self.live.get(row["id"], {})
             row["settings"] = json.loads(row["settings"])
             lane = edits.is_edit(row["workflow"])
             row.update(step=live.get("step", 0), steps=live.get("steps", 0), node=live.get("node", ""),
                        clip=live.get("clip", 0), clips=live.get("clips", 0), eta_seconds=self._eta(row, live, now),
-                       position=waiting[lane].index(row["id"]) + 1 + busy[lane] if row["id"] in waiting[lane] else None)
+                       position=(waiting[lane].index(row["id"]) + busy[lane]) // (1 if lane else servers) + 1
+                       if row["id"] in waiting[lane] else None)
             if row["status"] == "queued" and self.server_down and not edits.is_edit(row["workflow"]):
                 row["waiting_for_server"] = True   # the render server is off: it waits for it, and says so
             if row["status"] == "failed":   # why, in words its owner reads (the canvas shows a failed job)
@@ -141,8 +151,8 @@ class JobManager:
         return True
 
     async def run_forever(self, local=False):
-        """Take the waiting jobs of one lane, oldest first, one at a time. There are two lanes, each with its own
-        worker: renders on the GPU of the render server, and edits (`local`), which are made on this machine and
+        """Take the waiting jobs of one lane, oldest first. There are two lanes, each with its own worker: renders,
+        one at a time on each ComfyUI server, and edits (`local`), one at a time, which are made on this machine and
         so never wait behind a render."""
         mine = "workflow LIKE 'edit/%'" if local else "workflow NOT LIKE 'edit/%'"
         while True:
@@ -159,56 +169,107 @@ class JobManager:
                 self.wake.clear()
                 await self.wake.wait()
                 continue
-            # The render server is off (turned off, restarting, its network gone): the renders wait for it, and their
-            # owners are told so, instead of each one failing in turn. It is asked again every few seconds.
-            if not local and self.hold_offline:
-                up = await self._render_server_up()
-                if up == self.server_down:
-                    self.server_down = not up
+            # Each render goes to a ComfyUI server that is free. When none is (all are busy), it waits for one to finish.
+            # When none answers (turned off, restarting, its network gone), the renders wait for one, and their owners
+            # are told so, instead of each one failing in turn. They are asked again every few seconds.
+            server = None
+            if not local:
+                server, alive = await self._free_server()
+                down = server is None and not alive
+                if down != self.server_down:
+                    self.server_down = down
                     self._notify_all_waiting(None)
-                if not up:
-                    await asyncio.sleep(OFFLINE_CHECK)
+                if server is None:
+                    self.wake.clear()
+                    try:
+                        await asyncio.wait_for(self.wake.wait(), OFFLINE_CHECK)
+                    except asyncio.TimeoutError:
+                        pass
                     continue
             job["settings"] = json.loads(job["settings"])
             job["started"] = time.time()
             self.live[job["id"]] = {"step": 0, "steps": 0, "titles": {}}
-            server = self.db.one("SELECT name FROM servers WHERE renders = ? AND active = 1 ORDER BY id LIMIT 1", (0 if local else 1,))
-            self.db.run("UPDATE jobs SET status = 'running', started = ?, server = ? WHERE id = ?",
-                        (job["started"], server["name"] if server else "", job["id"]))
-            self._notify_all_waiting(job["user_id"])
-            status, error = "done", None
-            try:
-                if not local and isinstance(job["settings"].get("caption"), dict):
-                    await self._captions(job)
-                await self._run(job)
-            except Cancelled:
-                status = "cancelled"
-            except (ComfyError, workflows.WorkflowError, media.MediaError, motion.MotionError, sequence.SequenceError) as e:
-                status, error = "failed", str(e)
-            except httpx.HTTPError as e:
-                status, error = "failed", "Lost the connection to ComfyUI ({}).".format(e or type(e).__name__)
-                # The render server went away while it ran: back to the front of the queue, its credits still held, to
-                # run again when the server answers. After RESUMES times it fails, as anything else would.
-                if not local and self.hold_offline and (job.get("resumes") or 0) < RESUMES:
-                    status = "resumed"
-            except Exception as e:  # keep the queue alive whatever one job does
-                status, error = "failed", "{}: {}".format(type(e).__name__, e)
-            self.live.pop(job["id"], None)
-            if status == "resumed":
-                self.db.run("UPDATE jobs SET status = 'queued', started = NULL, error = '', resumes = resumes + 1, "
-                            "priority = CASE WHEN priority < 50 THEN 50 ELSE priority END WHERE id = ?", (job["id"],))
-                self.notify(job["user_id"])
-                self._notify_all_waiting(None)
-                continue
-            self.db.run("UPDATE jobs SET status = ?, error = ?, finished = ? WHERE id = ?",
-                        (status, error, time.time(), job["id"]))
-            if status == "done":
-                self.db.run("UPDATE jobs SET credits_reserved = 0, credits_consumed = cost, output_size = "
-                            "(SELECT SUM(size) FROM generations WHERE job_id = jobs.id) WHERE id = ?", (job["id"],))
+            # The machine it runs on, as the Pricing section names it (what it draws is costed by that name): the main
+            # render server is the machine that renders, another server is named as its row in Servers & APIs.
+            main = server is None or server["url"] == self.comfy.url
+            if main:
+                found = self.db.one("SELECT name FROM servers WHERE renders = ? AND active = 1 ORDER BY id LIMIT 1", (0 if local else 1,))
+                name = found["name"] if found else ""
             else:
-                self._refund(job)
-            self.notify(job["user_id"], library_changed=status == "done")
+                name = server["name"]
+            if server is not None:
+                self.live[job["id"]]["comfy"] = self.pool.client(server["url"]) if self.pool else self.comfy
+            self.db.run("UPDATE jobs SET status = 'running', started = ?, server = ? WHERE id = ?",
+                        (job["started"], name, job["id"]))
+            self._notify_all_waiting(job["user_id"])
+            if local:
+                await self._work(job, local)
+                continue
+            # The render runs on its own while the next waiting one looks for another free server.
+            if self.pool:
+                self.pool.busy[server["url"]] = job["id"]
+            task = asyncio.ensure_future(self._work(job, local, server["url"]))
+            self.working.add(task)
+            task.add_done_callback(self.working.discard)
+
+    async def _free_server(self):
+        """(a free ComfyUI server {"name", "url"} or None, whether any answers or runs a render)."""
+        if self.pool is None:   # one server: free when nothing of the studio runs on it
+            if self.working:
+                return None, True
+            up = not self.hold_offline or await self._render_server_up()
+            return ({"name": "", "url": self.comfy.url} if up else None), up
+        async def answers(url):   # the main server is asked as it always was
+            return await (self._render_server_up() if url == self.comfy.url else self.pool.answers(url))
+        return await self.pool.free(answers if self.hold_offline else None)
+
+    async def _work(self, job, local, url=None):
+        """Run one job that was taken from the queue, and record how it ended."""
+        try:
+            await self._finish(job, local)
+        finally:
+            if url is not None and self.pool:
+                self.pool.busy.pop(url, None)
+            self.wake.set()   # its server is free again
+
+    async def _finish(self, job, local):
+        status, error = "done", None
+        try:
+            if not local and isinstance(job["settings"].get("caption"), dict):
+                await self._captions(job)
+            await self._run(job)
+        except Cancelled:
+            status = "cancelled"
+        except (ComfyError, workflows.WorkflowError, media.MediaError, motion.MotionError, sequence.SequenceError) as e:
+            status, error = "failed", str(e)
+        except httpx.HTTPError as e:
+            status, error = "failed", "Lost the connection to ComfyUI ({}).".format(e or type(e).__name__)
+            # The render server went away while it ran: back to the front of the queue, its credits still held, to
+            # run again when a server answers. After RESUMES times it fails, as anything else would.
+            if not local and self.hold_offline and (job.get("resumes") or 0) < RESUMES:
+                status = "resumed"
+        except Exception as e:  # keep the queue alive whatever one job does
+            status, error = "failed", "{}: {}".format(type(e).__name__, e)
+        self.live.pop(job["id"], None)
+        if status == "resumed":
+            self.db.run("UPDATE jobs SET status = 'queued', started = NULL, error = '', resumes = resumes + 1, "
+                        "priority = CASE WHEN priority < 50 THEN 50 ELSE priority END WHERE id = ?", (job["id"],))
+            self.notify(job["user_id"])
             self._notify_all_waiting(None)
+            return
+        self.db.run("UPDATE jobs SET status = ?, error = ?, finished = ? WHERE id = ?",
+                    (status, error, time.time(), job["id"]))
+        if status == "done":
+            self.db.run("UPDATE jobs SET credits_reserved = 0, credits_consumed = cost, output_size = "
+                        "(SELECT SUM(size) FROM generations WHERE job_id = jobs.id) WHERE id = ?", (job["id"],))
+        else:
+            self._refund(job)
+        self.notify(job["user_id"], library_changed=status == "done")
+        if status == "done" and job.get("project_id"):   # the others in a shared project see it on their canvas too
+            for person in sharing.people_of(self.db, job["project_id"]):
+                if person != job["user_id"]:
+                    self.notify(person, library_changed=True)
+        self._notify_all_waiting(None)
 
     async def _render_server_up(self):
         try:
@@ -298,12 +359,43 @@ class JobManager:
         def waiting():
             live["node"] = "Waiting for the GPU: the agent is thinking"
             self.notify(job["user_id"])
+        live.setdefault("comfy", self.comfy)
+        if live["comfy"] is not self.comfy:   # another server: no GPU shared with the agent there, but the files to send
+            live["node"] = "Sending the files it needs"
+            self.notify(job["user_id"])
+            await self._send_inputs(job["settings"], live["comfy"])
+            live["node"] = ""
+            return await self._render_job(job, live)
         try:
             async with self.gpu.use("render", waiting, stop=lambda: live.get("cancel")):
                 live["node"] = ""
                 await self._render_job(job, live)
         except gpu.Stopped:
             raise Cancelled()
+
+    async def _send_inputs(self, settings, comfy):
+        """Copy the uploaded files a render uses from the main server to the one it runs on, under the same names."""
+        names = set()
+        def walk(value):
+            if isinstance(value, dict):
+                if isinstance(value.get("comfy_name"), str):
+                    names.add(value["comfy_name"])
+                for v in value.values():
+                    walk(v)
+            elif isinstance(value, list):
+                for v in value:
+                    walk(v)
+        walk(settings)
+        for name in sorted(names):
+            folder, _, base = name.rpartition("/")
+            response = await self.comfy.view(base, folder, "input")
+            try:
+                if response.status_code >= 400:
+                    raise ComfyError("The file {} is not on the main render server any more.".format(name))
+                data = await response.aread()
+            finally:
+                await response.aclose()
+            await comfy.upload(base, data, response.headers.get("content-type"), subfolder=folder)
 
     async def _render_job(self, job, live):
         wf = await self.catalog.load(job["workflow"])
@@ -325,7 +417,7 @@ class JobManager:
         labels = _output_labels(wf, outputs)
         for (item, kind, suffix), label in zip(outputs, labels):
             target = folder / "{}{}{}".format(stem, "_{}".format(saved + 1) if saved else "", suffix)
-            await self._fetch(item, target)
+            await self._fetch(item, target, comfy=live["comfy"])
             # What the form did not say about the result is read from the file: the frame of a picture
             # (the canvas draws it at its true proportions) and the length of a sound.
             found = await media.probe(target)
@@ -380,7 +472,7 @@ class JobManager:
                     clip_refs.pop(slots["voice_track"], None)
                     if voice_start < voice_seconds - 0.2:
                         piece = await media.cut_audio(voice, voice_start, full_ctx["duration"] + 0.5, tmp / "voice_{}.wav".format(i))
-                        name = await self.comfy.upload("scene_chain_{}_{}.wav".format(job["id"], i), piece.read_bytes(), "audio/wav")
+                        name = await live["comfy"].upload("scene_chain_{}_{}.wav".format(job["id"], i), piece.read_bytes(), "audio/wav")
                         clip_refs[slots["voice_track"]] = {"comfy_name": name, "name": "voice part {}".format(i + 1)}
                 clip_settings["refs"] = clip_refs
 
@@ -389,13 +481,13 @@ class JobManager:
                 if video is None:
                     raise ComfyError("ComfyUI finished clip {} but saved no video.".format(i + 1))
                 part = tmp / "clip_{}{}".format(i, Path(video["filename"]).suffix)
-                await self._fetch(video, part)
+                await self._fetch(video, part, comfy=live["comfy"])
                 parts.append(part)
                 # Where the next clip's sound starts: this clip's length, minus the one frame the two clips share.
                 voice_start += (await media.probe(part))["seconds"] - (1 / media.FPS if i else 0)
                 if i < clips - 1:
                     frame = await media.last_frame(part, tmp / "frame_{}.png".format(i))
-                    previous = await self.comfy.upload("scene_chain_{}_{}.png".format(job["id"], i), frame.read_bytes(), "image/png")
+                    previous = await live["comfy"].upload("scene_chain_{}_{}.png".format(job["id"], i), frame.read_bytes(), "image/png")
 
             live.update(node="Joining the clips", step=0, steps=0)
             self.notify(job["user_id"])
@@ -408,15 +500,15 @@ class JobManager:
         """Run one graph on ComfyUI and wait for it. Returns (history entry, context)."""
         prompt, ctx = workflows.build_prompt(wf, dict(settings, clips=1))
         live["titles"] = {nid: n.get("_meta", {}).get("title") or n["class_type"] for nid, n in prompt.items()}
-        live["prompt_id"] = await self.comfy.queue(prompt, client_id)
+        live["prompt_id"] = await live["comfy"].queue(prompt, client_id)
         failures = 0
         while True:
             await asyncio.sleep(2)
             if live.get("cancel"):
-                await self.comfy.cancel(live["prompt_id"])
+                await live["comfy"].cancel(live["prompt_id"])
                 raise Cancelled()
             try:
-                found = await self.comfy.history(live["prompt_id"])
+                found = await live["comfy"].history(live["prompt_id"])
                 failures = 0
             except httpx.HTTPError:
                 failures += 1
@@ -434,7 +526,7 @@ class JobManager:
         """Follow ComfyUI's websocket for step progress. Best effort: the job works without it."""
         while True:
             try:
-                async with websockets.connect(self.comfy.ws_url(client_id), max_size=None) as ws:
+                async with websockets.connect(live.get("comfy", self.comfy).ws_url(client_id), max_size=None) as ws:
                     async for raw in ws:
                         if isinstance(raw, bytes):
                             continue  # preview images
@@ -466,8 +558,8 @@ class JobManager:
                               time.strftime("%Y%m%d_%H%M%S"))
         return folder, stem
 
-    async def _fetch(self, item, target, kind="output"):
-        response = await self.comfy.view(item["filename"], item.get("subfolder", ""), kind)
+    async def _fetch(self, item, target, kind="output", comfy=None):
+        response = await (comfy or self.comfy).view(item["filename"], item.get("subfolder", ""), kind)
         try:
             response.raise_for_status()
             with open(target, "wb") as f:

@@ -439,6 +439,7 @@ def describe(wf):
             rid = "extra:" + extra["id"]
             refs.append({"id": rid, "node": None, "input": None, "kind": extra["kind"], "label": labels.get(rid, extra["label"]),
                          "optional": True, "empty": None, "default": None, "connect": [str(extra["node"]), extra["input"]]})
+    refs.extend(dynamic_refs(profile, nodes))
 
     roles = {c["role"]: c for c in controls if c["role"]}
     if ("width" in roles) != ("height" in roles):
@@ -485,6 +486,32 @@ def describe(wf):
     }
 
 
+def dynamic_refs(profile, nodes):
+    """The slots of a presets file's "refs": {"mode": "dynamic", ...} block: a list of references, none to "max", with no
+    loader node in the workflow. Slot n (1, 2 ...) is "node_id" with {n} filled in (ref_1, ref_2 ...); when it has a file,
+    a "node_class" node with the file in "node_input" is added under that id and linked to "target_input" of
+    "target_node", with {i} = first_index + n - 1 (FLUX: images.image0, image1 ...; Qwen: images.image_1, image_2 ...).
+    "prompt_tag" is how the prompt names it ("image {n}", "<ref_image_{i}>"). The first "min" are required."""
+    spec = profile.get("refs")
+    if not isinstance(spec, dict) or spec.get("mode") != "dynamic" or str(spec.get("target_node")) not in nodes:
+        return []
+    loader = str(spec.get("node_class") or "LoadImage")
+    found = REF_CLASS.search(loader)
+    kind = found.group(1).lower() if found else "image"
+    first, low = int(spec.get("first_index", 0)), int(spec.get("min", 0))
+    out = []
+    for n in range(1, int(spec.get("max", 0)) + 1):
+        def fill(text, n=n):
+            return str(text).replace("{n}", str(n)).replace("{i}", str(first + n - 1))
+        out.append({"id": fill(spec.get("node_id") or "ref_{n}"), "node": None, "input": None, "kind": kind,
+                    "label": fill(spec.get("label") or "REFERENCE {n}"), "optional": n > low, "empty": None, "default": None,
+                    "connect": [str(spec["target_node"]), fill(spec.get("target_input") or "image{i}")],
+                    "loader": [loader, str(spec.get("node_input") or kind)], "order": n, "tag": fill(spec.get("prompt_tag") or "")})
+        if n <= low:
+            out[-1]["required"] = True
+    return out
+
+
 # The ways a model's hints say references are named in a prompt, tried in order: (what the hint says, REF n's token).
 REF_TOKENS = (
     (re.compile(r"<ref_image_0>"), lambda n: "<ref_image_{}>".format(n - 1)),
@@ -505,6 +532,8 @@ def ref_naming(profile, image_refs):
     said = " ".join(hints)
     make = next((make for pattern, make in REF_TOKENS if pattern.search(said)), None) if image_refs else None
     tokens = [make(n) for n in range(1, len(image_refs) + 1)] if make else []
+    if image_refs and all(r.get("tag") for r in image_refs):   # a list of references says how each is named
+        tokens = [r["tag"] for r in image_refs]
     money = NOT_FOR_MONEY.search(" ".join(hints + [str(profile.get("description", ""))]))
     return {"tokens": tokens, "unique": len(set(tokens)) == len(tokens),
             "hint": next((h for h in hints if REF_HINT.search(h)), "") if image_refs else "",
@@ -653,16 +682,22 @@ def build_prompt(wf, settings):
         nodes[c["node"]]["inputs"][c["input"]] = value
 
     enabled, disabled = set(), set()
-    given = settings.get("refs") or {}
+    given = dict(settings.get("refs") or {})
+    # A list of references is filled from the first with no gaps: the files given move up past an empty one.
+    listed = [r["id"] for r in schema["refs"] if r.get("order")]
+    files = [given.pop(rid) for rid in listed if given.get(rid)]
+    given.update(zip(listed, files))
     for r in schema["refs"]:
         in_use = _matches(r.get("when") or {}, ctx)
         ref = given.get(r["id"]) if in_use else None
         if r.get("connect"):
             if ref:
-                loader, loader_input = EXTRA_LOADERS[r["kind"]]
-                loader_id = "ref_" + re.sub(r"\W+", "_", r["id"])
+                loader, loader_input = r.get("loader") or EXTRA_LOADERS[r["kind"]]
+                loader_id = r["id"] if r.get("order") else "ref_" + re.sub(r"\W+", "_", r["id"])
                 nodes[loader_id] = {"class_type": loader, "inputs": {loader_input: ref["comfy_name"]}}
                 nodes[r["connect"][0]]["inputs"][r["connect"][1]] = [loader_id, 0]
+            elif r.get("required") and in_use:
+                raise WorkflowError("Add a file for \"{}\".".format(r["label"]))
         elif ref:
             nodes[r["node"]]["inputs"][r["input"]] = ref["comfy_name"]
             enabled.add(r["node"])

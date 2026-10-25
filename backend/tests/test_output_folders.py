@@ -20,7 +20,7 @@ def test_work_is_filed_by_project_and_module_and_follows_them(client):
     other = client.post("/api/projects", json={"name": "Other"}).json()["id"]
     main_item, module_item = upload(client, film), upload(client, one)
     path = lambda item: db.one("SELECT filename FROM generations WHERE id = ?", (item["id"],))["filename"]
-    assert path(main_item).startswith("Pocket_ Film ({})/Main canvas/".format(film))           # safe on every system
+    assert path(main_item).startswith("Pocket_ Film ({})/Module 1/".format(film))           # safe on every system
     assert path(module_item).startswith("Pocket_ Film ({})/Episode 1 ({})/".format(film, one))
     assert (home / path(module_item)).is_file()
     assert client.get("/api/library/{}/file".format(module_item["id"])).content == PNG
@@ -31,7 +31,7 @@ def test_work_is_filed_by_project_and_module_and_follows_them(client):
     assert client.get("/api/library/{}/file".format(module_item["id"])).content == PNG
 
     client.put("/api/library/{}".format(main_item["id"]), json={"project_id": other})          # moved to another project
-    assert path(main_item).startswith("Other ({})/Main canvas/".format(other)) and (home / path(main_item)).is_file()
+    assert path(main_item).startswith("Other ({})/Module 1/".format(other)) and (home / path(main_item)).is_file()
     client.put("/api/library/{}".format(main_item["id"]), json={"project_id": None})
     assert path(main_item).startswith("No project/")
 
@@ -63,8 +63,8 @@ def test_work_from_before_folders_is_filed_once(client):
            "VALUES (?, 'image/x', 'image', 'Loose', 'loose.png', '{}', '{}', ?)", (me["id"], time.time()))
     assert state.outputs.file_all() == 2
     names = sorted(r["filename"] for r in db.all("SELECT filename FROM generations WHERE user_id = ?", (me["id"],)))
-    assert names == ["No project/loose.png", "Old ({})/Main canvas/flat.png".format(film)]
-    assert (home / "Old ({})".format(film) / "Main canvas" / ".posters" / "flat.png.jpg").is_file()   # its poster went with it
+    assert names == ["No project/loose.png", "Old ({})/Module 1/flat.png".format(film)]
+    assert (home / "Old ({})".format(film) / "Module 1" / ".posters" / "flat.png.jpg").is_file()   # its poster went with it
     assert not (home / ".posters").exists()                                                    # nothing left behind
     assert state.outputs.file_all() == 0                                                       # nothing left to file
 
@@ -80,8 +80,8 @@ def test_work_filed_at_the_top_of_a_project_moves_into_its_main_canvas_folder(cl
     db.run("INSERT INTO generations (user_id, workflow, kind, name, filename, settings, context, created, project_id) "
            "VALUES (?, 'image/x', 'image', 'Shot', ?, '{}', '{}', ?, ?)", (me["id"], "Film ({})/shot.png".format(film), time.time(), film))
     assert state.outputs.file_all() == 1
-    assert db.one("SELECT filename FROM generations WHERE project_id = ?", (film,))["filename"] == "Film ({})/Main canvas/shot.png".format(film)
-    assert [p.name for p in (home / "Film ({})".format(film)).iterdir()] == ["Main canvas"]   # the project folder holds folders only
+    assert db.one("SELECT filename FROM generations WHERE project_id = ?", (film,))["filename"] == "Film ({})/Module 1/shot.png".format(film)
+    assert [p.name for p in (home / "Film ({})".format(film)).iterdir()] == ["Module 1"]   # the project folder holds folders only
 
 
 def test_the_main_canvas_can_be_renamed_and_its_folder_follows(client):
@@ -93,14 +93,24 @@ def test_the_main_canvas_can_be_renamed_and_its_folder_follows(client):
     one = client.post("/api/projects", json={"name": "Episode 1", "parent_id": film}).json()["id"]
     item = upload(client, film)
     path = lambda: db.one("SELECT filename FROM generations WHERE id = ?", (item["id"],))["filename"]
-    assert client.get("/api/projects/{}".format(film)).json()["modules"][0]["name"] == "Main canvas"
+    assert client.get("/api/projects/{}".format(film)).json()["modules"][0]["name"] == "Module 1"
     assert client.put("/api/projects/{}/canvas".format(film), json={"name": "Teaser: cut"}).status_code == 200
     assert client.get("/api/projects/{}".format(film)).json()["modules"][0]["name"] == "Teaser: cut"
     assert path().startswith("Film ({})/Teaser_ cut/".format(film)) and (home / path()).is_file()
-    assert not (home / "Film ({})".format(film) / "Main canvas").exists()
+    assert not (home / "Film ({})".format(film) / "Module 1").exists()
     assert client.get("/api/projects/{}/analytics".format(film)).json()["modules"][0]["name"] == "Teaser: cut"
     assert next(p for p in client.get("/api/projects").json()["projects"] if p["id"] == film)["canvas_name"] == "Teaser: cut"
-    assert client.put("/api/projects/{}/canvas".format(film), json={"name": "Main canvas"}).status_code == 200   # back to the default
+    assert client.put("/api/projects/{}/canvas".format(film), json={"name": "Main canvas"}).status_code == 200   # the name of projects from before "Module 1"
     assert path().startswith("Film ({})/Main canvas/".format(film)) and (home / path()).is_file()
     assert client.put("/api/projects/{}/canvas".format(one), json={"name": "X"}).status_code == 400            # a module is renamed as one
     assert client.put("/api/projects/{}/canvas".format(film), json={"name": " "}).status_code == 400
+
+
+def test_a_new_projects_own_canvas_is_module_1_and_a_copy_keeps_its_name(client):
+    from test_api import register
+    register(client)
+    film = client.post("/api/projects", json={"name": "Film"}).json()["id"]
+    assert client.get("/api/projects/{}".format(film)).json()["modules"][0]["name"] == "Module 1"
+    client.put("/api/projects/{}/canvas".format(film), json={"name": "Opening"})
+    copy = client.post("/api/projects/{}/duplicate".format(film)).json()["id"]
+    assert client.get("/api/projects/{}".format(copy)).json()["modules"][0]["name"] == "Opening"

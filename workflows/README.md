@@ -4,7 +4,7 @@ The ComfyUI workflows the studio offers. It reads this folder fresh on every req
 the studio without a restart.
 
 ```
-image/      24 picture workflows
+image/       6 picture workflows
 video/      20 video workflows
 audio/       4 sound workflows (music, voice split, transcripts)
 upscaler/    1 video upscaler (its own action in the studio, not on the Create page)
@@ -20,7 +20,7 @@ reports/    the ComfyUI agent's reports and model lists: never read
 | `<name>.studio.json` | Its settings for the studio: title, options (Draft/Final, size), hidden nodes, references, seed targets. |
 | `<name>.ui.json` | Only beside an API export: the normal save, to open and edit in ComfyUI. Never run. |
 
-The workflow's id in the studio is `<kind>/<name>`, for example `image/image_t2i_lumina2`. Keep the name when a
+The workflow's id in the studio is `<kind>/<name>`, for example `image/image_t2i_flux2_dev`. Keep the name when a
 workflow is updated: earlier results, saved defaults and prices all refer to it.
 
 ## Adding a handover from the ComfyUI agent

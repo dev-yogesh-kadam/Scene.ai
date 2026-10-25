@@ -2,19 +2,9 @@
   "title": "Text to Image: FLUX 3 Image Klein",
   "description": "FLUX 3 Image Klein text-to-image (FLUX Kommunity (outputs OK < $5M revenue)). Your prompt is expanded by BFL's prompt upsampler first (recommended by BFL).",
   "output_name": "9.filename_prefix",
-  "labels": {
-    "200:image": "REFERENCE 1 (character, product, outfit, style or location)",
-    "201:image": "REFERENCE 2 (character, product, outfit, style or location)",
-    "202:image": "REFERENCE 3 (character, product, outfit, style or location)",
-    "203:image": "REFERENCE 4 (character, product, outfit, style or location)"
-  },
+  "labels": {},
   "required_refs": [],
-  "optional_refs": [
-    "200:image",
-    "201:image",
-    "202:image",
-    "203:image"
-  ],
+  "optional_refs": [],
   "controls": [
     {
       "node": "37",
@@ -92,12 +82,51 @@
     "509",
     "510",
     "511",
-    "512"
+    "512",
+    "107"
   ],
   "pricing": {},
   "hints": [
     "Your prompt is expanded by BFL's prompt upsampler first (recommended by BFL).",
-    "Optional references 1-4: call them <ref_image_0>, <ref_image_1> ... in the prompt and say what to keep.",
-    "Sizes: 1:1 1536x1536, 16:9 2752x1536, 9:16 1536x2752, 4:3 2048x1536 (rendered at the model's native size, then upscaled)."
-  ]
+    "Sizes: 1:1 1536x1536, 16:9 2752x1536, 9:16 1536x2752, 4:3 2048x1536 (rendered at the model's native size, then upscaled).",
+    "References 0-16, all optional. Call them <ref_image_0>, <ref_image_1> ... in the prompt (first reference = <ref_image_0>) and say what to keep from each (face, outfit, product, style, place)."
+  ],
+  "seed": {
+    "targets": [
+      [
+        "106",
+        "value"
+      ]
+    ],
+    "mode": "random",
+    "min": 0,
+    "max": 4294967295
+  },
+  "family": {
+    "id": "flux",
+    "title": "Text to Image: FLUX",
+    "choice_label": "Speed",
+    "variant": "balanced",
+    "variant_label": "Balanced",
+    "variant_hint": "FLUX 3 Klein, about 11 s",
+    "default": true,
+    "order": [
+      "fast",
+      "balanced",
+      "best"
+    ]
+  },
+  "refs": {
+    "mode": "dynamic",
+    "min": 0,
+    "max": 16,
+    "node_class": "LoadImage",
+    "node_input": "image",
+    "node_id": "ref_{n}",
+    "target_node": "210",
+    "target_input": "images.image{i}",
+    "first_index": 0,
+    "label": "REFERENCE {n} (character, product, outfit, style or location)",
+    "prompt_tag": "<ref_image_{i}>"
+  }
 }

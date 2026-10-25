@@ -69,8 +69,9 @@ export function creditsDialog(people, after) {
 
 // ---------------------------------------------------------------- users
 
-const ROLE_WORDS = { user: 'a user (no console)', support: 'support staff (helps people)', finance: 'finance staff (credits and pricing)',
-  moderator: 'a moderator (what is made)', admin: 'an admin (everything)' };
+// The roles an admin can give, as the Roles section has them (staff.py), with User (no console) first.
+let staffRoles = [];
+const roleChoices = () => [{ id: 'user', label: 'User', about: 'no console' }, ...staffRoles];
 
 function userActions(ctx, u, after) {
   const put = (json) => api('/api/admin/users/' + u.id, { method: 'PUT', json }).then(after).catch((e) => alert(e.message));
@@ -84,8 +85,9 @@ function userActions(ctx, u, after) {
     !self && session.user.role === 'admin' && el('label', { class: 'role-pick' }, 'Role ',
       el('select', { onchange: (e) => {
         const role = e.target.value;
-        if (confirm(`Make ${u.name} ${ROLE_WORDS[role]}?`)) put({ role }); else e.target.value = u.role;
-      } }, Object.keys(ROLE_WORDS).map((r) => el('option', { value: r, selected: r === u.role }, r[0].toUpperCase() + r.slice(1))))),
+        const chosen = roleChoices().find((r) => r.id === role);
+        if (confirm(`Make ${u.name} ${chosen.label}${chosen.about ? ` (${chosen.about})` : ''}?`)) put({ role }); else e.target.value = u.role;
+      } }, roleChoices().map((r) => el('option', { value: r.id, selected: r.id === u.role, title: r.about }, r.label)))),
     !self && session.user.role === 'admin' && u.role !== 'admin' && !u.disabled && el('button', { class: 'btn small', title: 'Opens the studio as they see it, read only, for an hour', onclick: async () => {
       if (!confirm(`View the studio as ${u.name}, read only? It opens in a new tab and is written in the audit log. In this browser your own studio sign-in is replaced while you view.`)) return;
       try {
@@ -179,6 +181,7 @@ async function openUser(ctx, id) {
 export async function users(ctx) {
   const s = ctx.state.users;
   const list = (await api('/api/admin/users?' + new URLSearchParams({ q: s.q, show: s.show }))).users;
+  if (session.user.role === 'admin') staffRoles = (await api('/api/admin/roles')).roles;
   return [
     el('div', { class: 'toolbar' },
       searchBox('Search name or email', s.q, (q) => { s.q = q; ctx.draw(); }),
@@ -565,7 +568,6 @@ function announcementCard(current) {
 
 export async function settings(ctx) {
   const [current, admins, news, alerts] = await Promise.all([api('/api/admin/settings'), api('/api/admin/admins'), api('/api/admin/announcement'), api('/api/admin/alerts')]);
-  const url = el('input', { type: 'text', value: current.comfy_url });
   const signup = el('input', { type: 'checkbox', checked: current.allow_signup });
   const welcome = el('input', { type: 'number', min: 0, step: 1, value: current.signup_credits });
   const cap = el('input', { type: 'number', min: 0, step: 50, value: current.daily_cap });
@@ -574,17 +576,15 @@ export async function settings(ctx) {
   const notice = el('p', { class: 'notice' });
   const save = async () => {
     try {
-      await api('/api/admin/settings', { method: 'PUT', json: { comfy_url: url.value, allow_signup: signup.checked, signup_credits: welcome.value,
+      await api('/api/admin/settings', { method: 'PUT', json: { allow_signup: signup.checked, signup_credits: welcome.value,
         daily_cap: cap.value || 0, admin_mfa: mfa.checked } });
-      const { online } = await api('/api/admin/server/check', { method: 'POST' });
-      notice.className = 'notice ' + (online ? 'ok' : 'error');
-      notice.textContent = online ? 'Saved. The render server is online.' : 'Saved, but the render server does not answer at this address.';
+      notice.className = 'notice ok';
+      notice.textContent = 'Saved.';
     } catch (err) { notice.className = 'notice error'; notice.textContent = err.message; }
   };
   return [el('div', { class: 'card narrow' },
-    el('div', { class: 'card-head' }, el('h2', {}, 'Render server')),
-    field('ComfyUI address', url),
-    el('h3', {}, 'Accounts'),
+    el('div', { class: 'card-head' }, el('h2', {}, 'Accounts')),
+    el('p', { class: 'muted small' }, 'The render servers and the agent\'s model servers are set in Servers & APIs.'),
     el('label', { class: 'check', style: 'margin-top:0' }, signup, 'Anyone who can open this site may create an account'),
     el('label', { class: 'check' }, mfa, 'Admins must use two-step sign-in to open the admin console'),
     el('p', { class: 'muted small', style: 'margin:6px 0 0 25px' }, without.length

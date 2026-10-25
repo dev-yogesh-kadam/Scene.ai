@@ -175,7 +175,7 @@ def test_every_video_workflow_has_a_presets_file_and_only_drafts_stay_archived()
 def test_every_picture_workflow_has_a_presets_file_and_the_new_family_its_shape_and_upscale():
     image = VIDEO.parent / "image"
     flows = sorted(p.stem for p in image.glob("*.json") if not p.name.endswith((".studio.json", ".ui.json")))
-    assert len(flows) == 24
+    assert len(flows) == 6
     for name in flows:
         profile = json.loads((image / (name + ".studio.json")).read_text(encoding="utf-8"))
         assert profile["title"], name

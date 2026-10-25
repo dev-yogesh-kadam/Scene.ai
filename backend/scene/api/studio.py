@@ -1,5 +1,6 @@
 """Creating: workflows, estimates, jobs and the live event stream."""
 
+import contextlib
 import json
 import re
 import time
@@ -11,7 +12,8 @@ from fastapi.responses import StreamingResponse
 
 import httpx
 
-from .. import health, kit, media, memory, runs
+from .. import sharing, health, kit, media, memory, runs
+from ..db import as_everyone
 from ..catalog import KINDS
 from ..comfy import workflows
 from ..agent import AgentError
@@ -201,12 +203,15 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
     slots = workflows.refs_in_use(schema, settings)   # a file for a slot the chosen mode does not read is not sent on
 
     project_id = settings.get("project_id") or None
-    if project_id and not state.db.one("SELECT 1 FROM projects WHERE id = ? AND user_id = ?", (project_id, user["id"])):
-        raise HTTPException(400, "That project doesn't exist.")
+    if project_id:   # the user's own project, or one shared with them as a creator or more
+        sharing.require(state.db, user, project_id, "creator")
 
     # The library item this is made from, if any: the canvas puts the result on the same row.
     parent = settings.get("parent")
     owned = isinstance(parent, int) and state.db.one("SELECT 1 FROM generations WHERE id = ? AND user_id = ?", (parent, user["id"]))
+    if isinstance(parent, int) and not owned and project_id:   # another member's frame in the same shared project
+        with as_everyone():
+            owned = state.db.one("SELECT 1 FROM generations WHERE id = ? AND project_id = ?", (parent, project_id))
     settings["parent"] = parent if owned else None
     # A result the agent planned as something to reuse is kept in shared memory when it is done: only a type and a name.
     settings["keep"] = memory.clean_keep(settings.get("keep"), wf["id"].split("/", 1)[0])
@@ -234,8 +239,10 @@ async def create_job(request: Request, user: dict = Depends(current_user)):
         if slot not in slots or not isinstance(ref, dict):
             continue
         if ref.get("asset_id"):
-            asset = state.db.one("SELECT * FROM assets WHERE id = ? AND user_id = ?", (ref["asset_id"], user["id"]))
-            path = asset and state.assets_dir / str(user["id"]) / asset["filename"]
+            keeper = kit.keeper_of(state.db, user["id"], project_id) if project_id else user["id"]   # a shared project's kit is its owner's
+            with as_everyone() if keeper != user["id"] else contextlib.nullcontext():
+                asset = state.db.one("SELECT * FROM assets WHERE id = ? AND user_id = ?", (ref["asset_id"], keeper))
+            path = asset and state.assets_dir / str(keeper) / asset["filename"]
             if not asset or not path.is_file():
                 raise HTTPException(400, "A saved asset used here no longer exists.")
             data = path.read_bytes()
@@ -333,9 +340,14 @@ async def events(ws: WebSocket):
     try:
         await ws.send_text(state.live_message(user["id"]))
         while True:
-            # The page tells which part of the studio it shows, for the admin's list of who is online.
+            # The page tells which part of the studio it shows, for the admin's list of who is online. It also asks
+            # now and then whether the connection still works ("ping"), and is answered with where its jobs stand.
             try:
-                page = str(json.loads(await ws.receive_text()).get("page", ""))
+                said = json.loads(await ws.receive_text())
+                if said.get("ping"):
+                    await ws.send_text(state.live_message(user["id"]))
+                    continue
+                page = str(said.get("page", ""))
             except (ValueError, AttributeError):
                 continue
             if PAGE.match(page):

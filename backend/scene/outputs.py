@@ -14,6 +14,8 @@ import re
 import shutil
 from pathlib import Path
 
+from .db import as_everyone
+
 NO_PROJECT = "No project"
 MAIN_CANVAS = "Main canvas"   # the folder of a project's own canvas, beside its modules' folders
 
@@ -48,7 +50,8 @@ class Outputs:
     def folder(self, user_id):
         """The folder of one user's finished work. It is not created here."""
         if user_id not in self.names:
-            user = self.db.one("SELECT email FROM users WHERE id = ?", (user_id,))
+            with as_everyone():   # the folder of whoever made it, also when another person in a shared project asks
+                user = self.db.one("SELECT email FROM users WHERE id = ?", (user_id,))
             if user is None:
                 return self.root / str(user_id)
             name = folder_name(user["email"])
@@ -62,7 +65,8 @@ class Outputs:
     def relative(self, project_id):
         """Where the work of a project goes inside its user's folder: "<project> (n)/Main canvas" for its own canvas,
         "<project> (n)/<module> (m)" for a module, "No project" for none."""
-        row = self.db.one("SELECT id, parent_id, canvas_name FROM projects WHERE id = ?", (project_id,)) if project_id else None
+        with as_everyone():   # a shared project is its owner's row; a member files their work in it too
+            row = self.db.one("SELECT id, parent_id, canvas_name FROM projects WHERE id = ?", (project_id,)) if project_id else None
         if row is None:
             return Path(NO_PROJECT)
         return self.folder_of(project_id) if row["parent_id"] else self.folder_of(project_id) / canvas_folder(row["canvas_name"])
@@ -70,11 +74,13 @@ class Outputs:
     def folder_of(self, project_id):
         """The folder of a project (holding its Main canvas and its modules' folders), or of a module (inside its
         project's): what is renamed with it and deleted with it."""
-        row = self.db.one("SELECT id, name, parent_id FROM projects WHERE id = ?", (project_id,)) if project_id else None
+        with as_everyone():
+            row = self.db.one("SELECT id, name, parent_id FROM projects WHERE id = ?", (project_id,)) if project_id else None
         if row is None:
             return Path(NO_PROJECT)
         if row["parent_id"]:
-            parent = self.db.one("SELECT id, name FROM projects WHERE id = ?", (row["parent_id"],))
+            with as_everyone():
+                parent = self.db.one("SELECT id, name FROM projects WHERE id = ?", (row["parent_id"],))
             return Path(label(parent)) / label(row) if parent else Path(label(row))
         return Path(label(row))
 

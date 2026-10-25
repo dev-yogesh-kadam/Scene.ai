@@ -36,9 +36,9 @@ class Comfy:
         r.raise_for_status()
         return r.json()
 
-    async def upload(self, filename, data, mime):
-        """Put a file into ComfyUI's input folder and return the name ComfyUI stored it under."""
-        r = await self.http.post(self.url + "/upload/image", data={"overwrite": "true"},
+    async def upload(self, filename, data, mime, subfolder=""):
+        """Put a file into ComfyUI's input folder (or a folder in it) and return the name ComfyUI stored it under."""
+        r = await self.http.post(self.url + "/upload/image", data={"overwrite": "true", **({"subfolder": subfolder} if subfolder else {})},
                                  files={"image": (filename, data, mime or "application/octet-stream")})
         if r.status_code >= 400:
             raise ComfyError("ComfyUI refused the upload of {}: {}".format(filename, r.text[:300]))

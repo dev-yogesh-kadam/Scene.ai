@@ -130,6 +130,9 @@ class Catalog:
                 # how many reference pictures it takes, as its presets file lists them (0: it makes pictures from words only)
                 item["picture_refs"] = len([r for r in [*profile.get("required_refs", []), *profile.get("optional_refs", [])]
                                             if str(r).endswith(":image")])
+                listed = profile.get("refs")   # a list of references, none to "max"
+                if isinstance(listed, dict) and listed.get("mode") == "dynamic" and str(listed.get("node_class") or "LoadImage") == "LoadImage":
+                    item["picture_refs"] += int(listed.get("max", 0))
                 if profile.get("replaces"):   # earlier work made with one of these is run again with this workflow
                     item["replaces"] = profile["replaces"]
             except workflows.WorkflowError as e:

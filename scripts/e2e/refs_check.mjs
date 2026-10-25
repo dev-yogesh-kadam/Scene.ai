@@ -1,7 +1,7 @@
 // The browser check of picture references in Quick actions → Generate image, for every model that takes them:
 // 1) no references (the job carries none), 2) one, 3) the most the model takes, 4) REF 1 removed after two were added
 // (the rest renumbered, and so are their names in the prompt). Then: switching to a model that takes fewer keeps what
-// fits and says how many went; a required REF 1 keeps Generate off; a words-only model offers models with references.
+// fits and says how many went; a required REF 1 keeps Generate off; a words-only model shows no reference option.
 // Generate is caught in the browser: nothing is queued. Start server.py first, then: node scripts/e2e/refs_check.mjs
 import { createRequire } from 'module';
 import fs from 'fs';
@@ -16,11 +16,10 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const report = [];
 const check = (label, ok, extra = '') => report.push(`${ok ? 'PASS' : 'FAIL'}  ${label}${extra ? '  (' + extra + ')' : ''}`);
 const MODELS = [   // id, most references, a required first one, the name REF 1 and REF 2 have in a prompt
-  ['image_t2i_flux2_klein_4b', 4, false, ['image 1', 'image 2']], ['image_t2i_flux2_klein_9b', 4, false, ['image 1', 'image 2']],
-  ['image_t2i_flux2_dev', 4, false, ['image 1', 'image 2']], ['image_t2i_flux3_klein', 4, false, ['<ref_image_0>', '<ref_image_1>']],
-  ['image_t2i_hidream_o1', 4, false, ['image 1', 'image 2']], ['image_t2i_qwen_image_21', 4, false, ['<image1>', '<image2>']],
-  ['image_t2i_krea2_turbo', 1, false, ['the reference']], ['image_ref_edit', 6, true, ['Picture 1', 'Picture 2', 'Picture 2']],
-  ['image_location_rebuild', 1, true, []],
+  ['image_t2i_flux2_klein_9b', 16, false, ['image 1', 'image 2']],
+  ['image_t2i_flux2_dev', 16, false, ['image 1', 'image 2']], ['image_t2i_flux3_klein', 16, false, ['<ref_image_0>', '<ref_image_1>']],
+  ['image_t2i_qwen_image_21', 16, false, ['<image1>', '<image2>']],
+  ['image_t2i_krea2_turbo', 1, false, ['the reference']],
 ];
 const pictures = ['a', 'b', 'c', 'd', 'e', 'f'].map((n) => {   // six files, told apart by their names
   const file = path.join(OUT, `ref_${n}.png`);
@@ -62,7 +61,6 @@ const pick = async (id) => {
 const strip = () => page.evaluate(() => ({
   labels: [...document.querySelectorAll('.panel-quick .ref-slot .slot-label')].map((n) => n.textContent),
   empty: document.querySelectorAll('.panel-quick .ref-slot .slot-box:not(.filled)').length,
-  offer: !!document.querySelector('.panel-quick .ref-offer'),
   note: document.querySelector('.panel-quick .ref-note')?.textContent || '',
   chips: [...document.querySelectorAll('.panel-quick .ref-chip')].map((c) => c.textContent),
   disabled: document.querySelector('.panel-quick .btn.generate').disabled,
@@ -146,27 +144,20 @@ for (const [id, most, required, tokens] of MODELS.filter(([m]) => !only || only.
 }
 
 // switching to a model that takes fewer
-await pick('image_t2i_flux2_klein_4b');
+await pick('image_t2i_flux2_klein_9b');
 await clearAll();
 for (const f of pictures.slice(0, 3)) await add(f);
 await pick('image_t2i_krea2_turbo');
 let s = await strip();
 check('switching from 3 references to a model that takes 1 keeps the first, and says 2 went', s.labels.join() === 'REF 1' && /takes 1 reference; 2 removed/.test(s.note), s.note);
 // a model that makes pictures from words only
-await pick('image_t2i_sdxl');
+await pick('image_t2i_hunyuan_image_21');
 s = await strip();
-check('a words-only model shows no boxes, and says the reference went', s.labels.length === 0 && s.offer && /words only; 1 reference removed/.test(s.note), s.note);
-await page.evaluate(() => document.querySelector('.panel-quick .ref-offer').click());
-await wait(300);
-const offered = await page.evaluate(() => [...document.querySelectorAll('.pop .add-menu-item')].map((b) => b.textContent.trim()));
-check('it offers every model that takes references, FLUX.2 Klein 4B and Reference Image Edit first',
-  offered.length === 9 && offered[0].startsWith('Switch to FLUX.2 Klein 4B') && offered[1].startsWith('Switch to Reference Image Edit')
-    && offered.some((t) => t.startsWith('Switch to HiDream-O1') && t.endsWith('up to 4 references')) && offered.some((t) => /Krea 2 Turbo.*up to 1 reference$/.test(t)),
-  offered.join(' | '));
-await page.evaluate(() => [...document.querySelectorAll('.pop .add-menu-item')].find((b) => b.textContent.includes('FLUX.2 Klein 4B')).click());
-await wait(900);
+check('a words-only model shows no boxes and no reference option, and says the reference went',
+  s.labels.length === 0 && /words only; 1 reference removed/.test(s.note), s.note);
+await pick('image_t2i_flux2_klein_9b');
 s = await strip();
-check('choosing it shows the reference boxes', s.labels.join() === 'REFERENCE', JSON.stringify(s.labels));
+check('a model that takes references shows the reference box', s.labels.join() === 'REFERENCE', JSON.stringify(s.labels));
 await pick('image_t2i_qwen_image_21');
 const license = await page.evaluate(() => document.querySelector('.panel-quick .ref-license')?.textContent || '');
 check('Qwen Image 2.1 says it is not for monetized content', /not for monetized/.test(license), license);

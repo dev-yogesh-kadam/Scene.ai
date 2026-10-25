@@ -38,7 +38,7 @@ const PAGES = [
 const LANDING = '/projects';
 // The pages that show the menu in full down the left, as a sidebar; every other page has it in the dropdown under the
 // logo, beside where you are. A narrow screen always uses the dropdown.
-const SIDEBAR_PAGES = ['/home', '/projects'];   // where signing in, or opening the site with no page in the address, leads
+const SIDEBAR_PAGES = ['/home', '/projects', '/library'];   // pages with the full sidebar; the others have the menu in the breadcrumb
 const THEMES = [{ id: 'light', label: 'Light' }, { id: 'dark', label: 'Dark' }, { id: 'system', label: 'Auto', hint: 'Same as this computer' }];
 let leavePage = null;
 let leaveShell = null;

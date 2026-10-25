@@ -2,19 +2,9 @@
   "title": "Text to Image: Qwen Image 2.1",
   "description": "Qwen Image 2.1 text-to-image (Qwen Research License (no monetized use)). Native 2K. Research license: not for monetized content.",
   "output_name": "9.filename_prefix",
-  "labels": {
-    "200:image": "REFERENCE 1 (character, product or style)",
-    "201:image": "REFERENCE 2 (character, product or style)",
-    "202:image": "REFERENCE 3 (character, product or style)",
-    "203:image": "REFERENCE 4 (character, product or style)"
-  },
+  "labels": {},
   "required_refs": [],
-  "optional_refs": [
-    "200:image",
-    "201:image",
-    "202:image",
-    "203:image"
-  ],
+  "optional_refs": [],
   "controls": [
     {
       "node": "37",
@@ -86,12 +76,37 @@
     "504",
     "505",
     "506",
-    "507"
+    "507",
+    "107"
   ],
   "pricing": {},
   "hints": [
     "Native 2K. Research license: not for monetized content.",
-    "Optional references 1-4: call them <image1>, <image2> ... in the prompt and say what to keep.",
-    "Sizes: 1:1 1536x1536, 16:9 2752x1536, 9:16 1536x2752, 4:3 2048x1536 (rendered at the model's native size, then upscaled)."
-  ]
+    "Sizes: 1:1 1536x1536, 16:9 2752x1536, 9:16 1536x2752, 4:3 2048x1536 (rendered at the model's native size, then upscaled).",
+    "References 0-16, all optional. Call them <image1>, <image2> ... in the prompt and say what to keep from each (face, outfit, product, style, place)."
+  ],
+  "seed": {
+    "targets": [
+      [
+        "106",
+        "value"
+      ]
+    ],
+    "mode": "random",
+    "min": 0,
+    "max": 4294967295
+  },
+  "refs": {
+    "mode": "dynamic",
+    "min": 0,
+    "max": 16,
+    "node_class": "LoadImage",
+    "node_input": "image",
+    "node_id": "ref_{n}",
+    "target_node": "501",
+    "target_input": "images.image_{i}",
+    "first_index": 1,
+    "label": "REFERENCE {n} (character, product, outfit, style or location)",
+    "prompt_tag": "<image{n}>"
+  }
 }

@@ -39,8 +39,8 @@ const anchor = await call('/api/library/upload', { method: 'POST', form });
 const now = Date.now();
 const runs = [{ instruction: 'go', parts: [{ text: 'go' }], reply: 'Making the anchor.', chips: {}, activity: [], seconds: 2, total: 40,
   state: 'approved', ui: {}, at: now, continues: true,
-  steps: [{ name: 'Anchor — clearing', workflow_title: 'Reference Image Edit', kind: 'image', credits: 40, prompt: 'Five women by a bonfire.',
-    settings: { workflow: 'image/image_ref_edit', values: {} }, made: anchor.id, madeInfo: { width: 512, height: 512 },
+  steps: [{ name: 'Anchor — clearing', workflow_title: 'FLUX.2 Klein 9B (distilled)', kind: 'image', credits: 40, prompt: 'Five women by a bonfire.',
+    settings: { workflow: 'image/image_t2i_flux2_klein_9b', values: {} }, made: anchor.id, madeInfo: { width: 512, height: 512 },
     review: { passed: false, problem: 'The characters do not match the reference pictures.', checks: [] },
     retake: { credits: 40, prompt: 'Five women by a bonfire, faces as in the references.' } }] }];
 await call('/api/boards/agent', { method: 'PUT', json: { project: project.id, data: { tabs: [{ id: 't1', name: 'Agent 1', created: now, updated: now }], open: ['t1'], active: 't1' } } });

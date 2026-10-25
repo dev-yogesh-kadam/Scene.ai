@@ -10,7 +10,8 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from .. import agent, camera, credits, edits, gpu, kit, media, memory, motion, review, runs, sequence, skills
+from .. import agent, camera, credits, edits, gpu, kit, media, memory, motion, review, runs, sequence, sharing, skills
+from ..db import as_everyone
 from ..comfy import workflows
 from .deps import agent_user, current_user
 from .studio import price
@@ -61,22 +62,30 @@ STUDIO_ABILITY = (
     "clips, reviewing results, remembering assets. Not here: running other programs or scripts, other models than the workflows listed.")
 
 
-def _project_id(request, user, project):
-    """0 stands for "no project"; any other id must be one of the user's projects."""
+def _project_id(request, user, project, need="creator"):
+    """0 stands for "no project"; any other id must be a project of the user's, or one shared with them where their
+    role allows `need` (most of what is done here makes something: a creator)."""
     if not project:
         return 0
-    row = request.app.state.db.one("SELECT id FROM projects WHERE id = ? AND user_id = ?", (project, user["id"]))
-    if row is None:
-        raise HTTPException(404, "No such project.")
-    return row["id"]
+    return sharing.require(request.app.state.db, user, project, need)["id"]
+
+
+def _board_owner(request, user, project, kind, need):
+    """(project id, whose board it is). A project's canvas, timeline and cast are its owner's, which everyone in a shared
+    project opens; an agent tab is the user's own."""
+    project_id = _project_id(request, user, project, need)
+    if not project_id or AGENT_TAB.match(kind) or kind == "agent":
+        return project_id, user["id"]
+    return project_id, sharing.require(request.app.state.db, user, project_id, need)["owner_id"]
 
 
 @router.get("/boards/{kind}")
 async def get_board(kind: str, request: Request, project: int = 0, user: dict = Depends(current_user)):
     """The saved canvas layout or timeline of one project (or of the items in no project)."""
     _board_kind(kind)
-    row = request.app.state.db.one("SELECT data FROM boards WHERE user_id = ? AND project_id = ? AND kind = ?",
-                                   (user["id"], _project_id(request, user, project), kind))
+    project_id, owner = _board_owner(request, user, project, kind, "viewer")
+    with as_everyone():   # the owner's board of a shared project, now that the user is found to be in it
+        row = request.app.state.db.one("SELECT data FROM boards WHERE user_id = ? AND project_id = ? AND kind = ?", (owner, project_id, kind))
     return {"data": json.loads(row["data"]) if row else {}}
 
 
@@ -86,10 +95,12 @@ async def save_board(kind: str, body: dict, request: Request, user: dict = Depen
     data = json.dumps(body.get("data") or {})
     if len(data) > MAX_BOARD_BYTES:
         raise HTTPException(400, "This is too large to save.")
-    request.app.state.db.run(
-        "INSERT INTO boards (user_id, project_id, kind, data, updated) VALUES (?, ?, ?, ?, ?) "
-        "ON CONFLICT(user_id, project_id, kind) DO UPDATE SET data = excluded.data, updated = excluded.updated",
-        (user["id"], _project_id(request, user, body.get("project")), kind, data, time.time()))
+    project_id, owner = _board_owner(request, user, body.get("project"), kind, "creator")
+    with as_everyone():
+        request.app.state.db.run(
+            "INSERT INTO boards (user_id, project_id, kind, data, updated) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id, project_id, kind) DO UPDATE SET data = excluded.data, updated = excluded.updated",
+            (owner, project_id, kind, data, time.time()))
     return {"ok": True}
 
 
@@ -99,7 +110,7 @@ async def delete_board(kind: str, request: Request, project: int = 0, user: dict
     if not AGENT_TAB.match(kind):
         raise HTTPException(404, "No such board.")
     request.app.state.db.run("DELETE FROM boards WHERE user_id = ? AND project_id = ? AND kind = ?",
-                             (user["id"], _project_id(request, user, project), kind))
+                             (user["id"], _project_id(request, user, project, "viewer"), kind))
     return {"ok": True}
 
 
@@ -450,7 +461,7 @@ async def _agent_compact(body, request, user):
     return {"direction": text}
 
 
-STILL_WORKFLOWS = ("z_image", "sdxl")   # cheap picture workflows, in the order the storyboard prefers them
+STILL_WORKFLOWS = ("flux2_klein_9b", "krea2_turbo")   # cheap picture workflows, in the order the storyboard prefers them
 
 
 async def _still_workflow(state, user):
